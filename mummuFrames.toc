@@ -1,0 +1,11 @@
+## Interface: 120000,120001
+## Title: mummuFrames
+## Notes: Minimalistic UnitFrames addon.
+## Author: dPanta
+## Version: 0.1.0
+
+# Locales
+Locales\enUS.lua
+
+# Core
+mummuFrames.lua
