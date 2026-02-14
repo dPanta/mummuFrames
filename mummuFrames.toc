@@ -1,11 +1,26 @@
-## Interface: 120000,120001
+## Interface: 120001
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
 ## Version: 0.1.0
+## SavedVariables: mummuFramesDB
 
 # Locales
 Locales\enUS.lua
 
 # Core
+Core\Object.lua
+Core\ModuleManager.lua
+Core\EventRouter.lua
+Core\FontCatalog.lua
+Core\Style.lua
+Core\Util.lua
 mummuFrames.lua
+
+# Modules
+Modules\dataHandle.lua
+Modules\globalFrames.lua
+Modules\unitFrames.lua
+Modules\partyFrames.lua
+Modules\raidFrames.lua
+Modules\configuration.lua
