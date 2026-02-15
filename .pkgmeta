@@ -1,0 +1,10 @@
+package-as: mummuFrames
+
+ignore:
+  - .git
+  - .github
+  - .vscode
+  - mummuFrames.code-workspace
+  - scripts
+  - LICENSE
+  - README.md
