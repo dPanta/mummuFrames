@@ -15,6 +15,49 @@ local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375
 local RESTING_ICON_ASPECT = 424 / 793
 local LEADER_ICON_ASPECT = 432 / 793
 
+-- Show the default Blizzard unit tooltip for this frame.
+local function showUnitTooltip(frame)
+    if not frame then
+        return
+    end
+
+    local unit = frame.unit or frame.displayedUnit or frame.unitToken or (frame.GetAttribute and frame:GetAttribute("unit")) or nil
+    if not unit then
+        return
+    end
+
+    -- Use Blizzard's unit-frame tooltip helper when possible, but fall back safely.
+    if type(UnitFrame_OnEnter) == "function" then
+        local ok = pcall(UnitFrame_OnEnter, frame)
+        if ok then
+            return
+        end
+    end
+
+    if type(GameTooltip_SetDefaultAnchor) == "function" then
+        GameTooltip_SetDefaultAnchor(GameTooltip, frame)
+    else
+        GameTooltip:SetOwner(frame, "ANCHOR_NONE")
+        GameTooltip:SetPoint("TOPLEFT", frame, "BOTTOMRIGHT", 0, -2)
+    end
+    GameTooltip:SetUnit(unit)
+    GameTooltip:Show()
+end
+
+-- Hide tooltip on mouse leave.
+local function hideUnitTooltip(frame)
+    if not frame then
+        return
+    end
+
+    if type(UnitFrame_OnLeave) == "function" then
+        UnitFrame_OnLeave(frame)
+        return
+    end
+
+    GameTooltip:Hide()
+end
+
 -- Set up module state.
 function GlobalFrames:Constructor()
     self.addon = nil
@@ -102,6 +145,10 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame:SetAttribute("unit", unitToken)
     frame:SetAttribute("type1", "target")
     frame:SetAttribute("*type2", "togglemenu")
+    frame.unit = unitToken
+    frame.displayedUnit = unitToken
+    frame:SetScript("OnEnter", showUnitTooltip)
+    frame:SetScript("OnLeave", hideUnitTooltip)
 
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
     frame.HealthBar = self:CreateStatusBar(frame)
