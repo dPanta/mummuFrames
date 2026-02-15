@@ -5,7 +5,15 @@ local Style = ns.Style
 local Util = ns.Util
 
 local DataHandle = ns.Object:Extend()
-local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Media\\ProductSans-Bold.ttf"
+local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
+local NAME_TEXT_UNITS = {
+    player = true,
+    pet = true,
+    target = true,
+    targettarget = true,
+    focus = true,
+    focustarget = true,
+}
 
 -- Build default config values for a single unit frame.
 local function newUnitDefaults(point, relativePoint, x, y, width, height)
@@ -24,6 +32,8 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         aura = {
             enabled = true,
             buffs = {
+                enabled = true,
+                source = "all",
                 anchorPoint = "TOPLEFT",
                 relativePoint = "BOTTOMLEFT",
                 x = 0,
@@ -84,6 +94,8 @@ local DEFAULTS = {
                         aura = {
                             enabled = true,
                             buffs = {
+                                enabled = true,
+                                source = "all",
                                 anchorPoint = "TOPLEFT",
                                 relativePoint = "BOTTOMLEFT",
                                 x = 0,
@@ -118,6 +130,8 @@ local DEFAULTS = {
                         aura = {
                             enabled = true,
                             buffs = {
+                                enabled = true,
+                                source = "all",
                                 anchorPoint = "TOPLEFT",
                                 relativePoint = "BOTTOMLEFT",
                                 x = 0,
@@ -191,14 +205,7 @@ function DataHandle:OnInitialize(addonRef)
             if type(profile) == "table" then
                 profile.style = profile.style or {}
                 local fontPath = profile.style.fontPath
-                local fontUsable = false
-                if Style and type(Style.IsFontPathUsable) == "function" then
-                    fontUsable = Style:IsFontPathUsable(fontPath)
-                else
-                    fontUsable = type(fontPath) == "string" and fontPath ~= ""
-                end
-
-                if not fontUsable then
+                if type(fontPath) ~= "string" or fontPath == "" then
                     profile.style.fontPath = defaultFontPath
                 end
                 if profile.style.fontFlags == nil or profile.style.fontFlags == "" then
@@ -209,6 +216,15 @@ function DataHandle:OnInitialize(addonRef)
                 end
                 if profile.style.pixelPerfect == nil then
                     profile.style.pixelPerfect = true
+                end
+
+                if type(profile.units) == "table" then
+                    for unitToken, unitConfig in pairs(profile.units) do
+                        if NAME_TEXT_UNITS[unitToken] and type(unitConfig) == "table" and unitConfig.showNameText == false then
+                            -- Keep names visible by default; there is currently no name-visibility toggle in the UI.
+                            unitConfig.showNameText = true
+                        end
+                    end
                 end
             end
         end

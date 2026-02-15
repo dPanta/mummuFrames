@@ -24,10 +24,65 @@ local UNIT_TAB_LABELS = {
     focus = L.CONFIG_TAB_FOCUS or "Focus",
     focustarget = L.CONFIG_TAB_FOCUSTARGET or "FocusTarget",
 }
+local BUFF_POSITION_PRESETS = {
+    {
+        key = "BOTTOM_LEFT",
+        label = L.CONFIG_UNIT_BUFFS_POSITION_BOTTOM_LEFT or "Below left",
+        anchorPoint = "TOPLEFT",
+        relativePoint = "BOTTOMLEFT",
+    },
+    {
+        key = "BOTTOM_RIGHT",
+        label = L.CONFIG_UNIT_BUFFS_POSITION_BOTTOM_RIGHT or "Below right",
+        anchorPoint = "TOPRIGHT",
+        relativePoint = "BOTTOMRIGHT",
+    },
+    {
+        key = "TOP_LEFT",
+        label = L.CONFIG_UNIT_BUFFS_POSITION_TOP_LEFT or "Above left",
+        anchorPoint = "BOTTOMLEFT",
+        relativePoint = "TOPLEFT",
+    },
+    {
+        key = "TOP_RIGHT",
+        label = L.CONFIG_UNIT_BUFFS_POSITION_TOP_RIGHT or "Above right",
+        anchorPoint = "BOTTOMRIGHT",
+        relativePoint = "TOPRIGHT",
+    },
+}
+local BUFF_SOURCE_OPTIONS = {
+    { key = "all", label = L.CONFIG_UNIT_BUFFS_SOURCE_ALL or "All" },
+    { key = "self", label = L.CONFIG_UNIT_BUFFS_SOURCE_SELF or "Self only" },
+}
+local CONFIG_WINDOW_WIDTH = 860
+local CONFIG_WINDOW_HEIGHT = 700
+local CONFIG_PAGE_CONTENT_HEIGHT = 1500
+local CONFIG_PAGE_LEFT_INSET = 34
+local CONFIG_PAGE_RIGHT_INSET = 8
 
-local function getFontOptions()
+local function getBuffPositionPresetByAnchors(anchorPoint, relativePoint)
+    for i = 1, #BUFF_POSITION_PRESETS do
+        local preset = BUFF_POSITION_PRESETS[i]
+        if preset.anchorPoint == anchorPoint and preset.relativePoint == relativePoint then
+            return preset
+        end
+    end
+    return BUFF_POSITION_PRESETS[1]
+end
+
+local function getBuffSourceLabel(sourceKey)
+    local normalized = sourceKey == "self" and "self" or "all"
+    for i = 1, #BUFF_SOURCE_OPTIONS do
+        if BUFF_SOURCE_OPTIONS[i].key == normalized then
+            return BUFF_SOURCE_OPTIONS[i].label
+        end
+    end
+    return BUFF_SOURCE_OPTIONS[1].label
+end
+
+local function getFontOptions(forceRefresh)
     if Style and type(Style.GetAvailableFonts) == "function" then
-        return Style:GetAvailableFonts()
+        return Style:GetAvailableFonts(forceRefresh)
     end
     return {}
 end
@@ -141,6 +196,30 @@ local function createNumericEditBox(name, parent)
     return editBox
 end
 
+-- Create a labeled dropdown control with addon font styling.
+local function createLabeledDropdown(name, parent, labelText, anchor)
+    if type(UIDropDownMenu_Initialize) ~= "function" then
+        return nil
+    end
+
+    local label = parent:CreateFontString(nil, "ARTWORK")
+    label:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -24)
+    setFontStringTextSafe(label, labelText, 12)
+
+    local dropdown = CreateFrame("Frame", name, parent, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("TOPLEFT", label, "BOTTOMLEFT", -16, -4)
+    UIDropDownMenu_SetWidth(dropdown, 260)
+    UIDropDownMenu_JustifyText(dropdown, "LEFT")
+
+    local dropdownText = _G[dropdown:GetName() .. "Text"]
+    Style:ApplyFont(dropdownText, 12)
+
+    return {
+        label = label,
+        dropdown = dropdown,
+    }
+end
+
 -- Set up module state and widget references.
 function Configuration:Constructor()
     self.addon = nil
@@ -182,7 +261,8 @@ function Configuration:InitializeFontDropdown(dropdown)
     UIDropDownMenu_JustifyText(dropdown, "LEFT")
 
     UIDropDownMenu_Initialize(dropdown, function(_, level)
-        if level ~= 1 then
+        local menuLevel = level or 1
+        if menuLevel ~= 1 then
             return
         end
 
@@ -192,17 +272,17 @@ function Configuration:InitializeFontDropdown(dropdown)
         end
         profile.style = profile.style or {}
         local selectedPath = profile.style.fontPath
-        if not (Style and type(Style.IsFontPathUsable) == "function" and Style:IsFontPathUsable(selectedPath)) then
+        if type(selectedPath) ~= "string" or selectedPath == "" then
             selectedPath = (Style and type(Style.GetDefaultFontPath) == "function" and Style:GetDefaultFontPath()) or Style.DEFAULT_FONT
             profile.style.fontPath = selectedPath
         end
 
-        local options = getFontOptions()
+        local options = getFontOptions(true)
         if #options == 0 then
             local info = UIDropDownMenu_CreateInfo()
             info.text = L.CONFIG_NO_FONTS or "No loadable fonts found"
             info.notCheckable = true
-            UIDropDownMenu_AddButton(info, level)
+            UIDropDownMenu_AddButton(info, menuLevel)
             return
         end
 
@@ -223,7 +303,87 @@ function Configuration:InitializeFontDropdown(dropdown)
                 UIDropDownMenu_SetText(dropdown, option.label)
                 self:RequestUnitFrameRefresh()
             end
-            UIDropDownMenu_AddButton(info, level)
+            UIDropDownMenu_AddButton(info, menuLevel)
+        end
+    end)
+end
+
+-- Build dropdown items and bind selection handlers for buff position presets.
+function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
+    if not dropdown or type(UIDropDownMenu_Initialize) ~= "function" then
+        return
+    end
+
+    UIDropDownMenu_Initialize(dropdown, function(_, level)
+        local menuLevel = level or 1
+        if menuLevel ~= 1 then
+            return
+        end
+
+        local dataHandle = self.addon:GetModule("dataHandle")
+        if not dataHandle then
+            return
+        end
+
+        local unitConfig = dataHandle:GetUnitConfig(unitToken)
+        local auraConfig = unitConfig.aura or {}
+        local buffsConfig = auraConfig.buffs or {}
+        local selectedPreset = getBuffPositionPresetByAnchors(
+            buffsConfig.anchorPoint or "TOPLEFT",
+            buffsConfig.relativePoint or "BOTTOMLEFT"
+        )
+
+        for i = 1, #BUFF_POSITION_PRESETS do
+            local preset = BUFF_POSITION_PRESETS[i]
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = preset.label
+            info.value = preset.key
+            info.checked = selectedPreset.key == preset.key
+            info.func = function()
+                dataHandle:SetUnitConfig(unitToken, "aura.buffs.anchorPoint", preset.anchorPoint)
+                dataHandle:SetUnitConfig(unitToken, "aura.buffs.relativePoint", preset.relativePoint)
+                UIDropDownMenu_SetText(dropdown, preset.label)
+                self:RequestUnitFrameRefresh()
+            end
+            UIDropDownMenu_AddButton(info, menuLevel)
+        end
+    end)
+end
+
+-- Build dropdown items and bind selection handlers for buff source filtering.
+function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
+    if not dropdown or type(UIDropDownMenu_Initialize) ~= "function" then
+        return
+    end
+
+    UIDropDownMenu_Initialize(dropdown, function(_, level)
+        local menuLevel = level or 1
+        if menuLevel ~= 1 then
+            return
+        end
+
+        local dataHandle = self.addon:GetModule("dataHandle")
+        if not dataHandle then
+            return
+        end
+
+        local unitConfig = dataHandle:GetUnitConfig(unitToken)
+        local auraConfig = unitConfig.aura or {}
+        local buffsConfig = auraConfig.buffs or {}
+        local selectedSource = buffsConfig.source == "self" and "self" or "all"
+
+        for i = 1, #BUFF_SOURCE_OPTIONS do
+            local option = BUFF_SOURCE_OPTIONS[i]
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = option.label
+            info.value = option.key
+            info.checked = selectedSource == option.key
+            info.func = function()
+                dataHandle:SetUnitConfig(unitToken, "aura.buffs.source", option.key)
+                UIDropDownMenu_SetText(dropdown, option.label)
+                self:RequestUnitFrameRefresh()
+            end
+            UIDropDownMenu_AddButton(info, menuLevel)
         end
     end)
 end
@@ -277,12 +437,13 @@ function Configuration:SetSliderLabel(slider, value)
 end
 
 -- Create one slider + numeric entry pair and wire update handlers.
-function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, maxValue, step, anchor)
+function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, maxValue, step, anchor, anchorXOffset)
     local sliderName = "mummuFramesConfig" .. keyPrefix .. "Slider"
     local inputName = "mummuFramesConfig" .. keyPrefix .. "Input"
 
     local slider = createSlider(sliderName, parent, label, minValue, maxValue, step)
-    slider:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -32)
+    local resolvedXOffset = anchorXOffset or 0
+    slider:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", resolvedXOffset, -32)
 
     local input = createNumericEditBox(inputName, parent)
     input:SetPoint("LEFT", slider, "RIGHT", 18, 0)
@@ -421,7 +582,8 @@ function Configuration:BuildGlobalPage(page)
         8,
         24,
         1,
-        pixelPerfect
+        pixelPerfect,
+        20
     )
     self:BindNumericControl(globalFontSize, function(value)
         local profile = self:GetProfile()
@@ -469,6 +631,75 @@ function Configuration:BuildUnitPage(page, unitToken)
         self:RequestUnitFrameRefresh()
     end)
 
+    local buffsEnabled = self:CreateCheckbox(
+        "mummuFramesConfig" .. unitToken .. "BuffsEnabled",
+        page,
+        L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
+        enabled,
+        0,
+        -8
+    )
+    buffsEnabled:SetScript("OnClick", function(button)
+        dataHandle:SetUnitConfig(unitToken, "aura.buffs.enabled", button:GetChecked() and true or false)
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local buffsMax = self:CreateNumericControl(
+        page,
+        unitToken .. "BuffsMax",
+        L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
+        1,
+        16,
+        1,
+        buffsEnabled,
+        20
+    )
+    self:BindNumericControl(buffsMax, function(value)
+        dataHandle:SetUnitConfig(unitToken, "aura.buffs.max", math.floor((value or 0) + 0.5))
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local buffsSize = self:CreateNumericControl(
+        page,
+        unitToken .. "BuffsSize",
+        L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
+        10,
+        48,
+        1,
+        buffsMax.slider
+    )
+    self:BindNumericControl(buffsSize, function(value)
+        dataHandle:SetUnitConfig(unitToken, "aura.buffs.size", math.floor((value or 0) + 0.5))
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local layoutAnchor = buffsSize.slider
+    local layoutAnchorXOffset = 20
+
+    local buffsPositionControl = createLabeledDropdown(
+        "mummuFramesConfig" .. unitToken .. "BuffPositionDropdown",
+        page,
+        L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
+        layoutAnchor
+    )
+    if buffsPositionControl and buffsPositionControl.dropdown then
+        self:InitializeBuffPositionDropdown(buffsPositionControl.dropdown, unitToken)
+        layoutAnchor = buffsPositionControl.dropdown
+        layoutAnchorXOffset = 20
+    end
+
+    local buffsSourceControl = createLabeledDropdown(
+        "mummuFramesConfig" .. unitToken .. "BuffSourceDropdown",
+        page,
+        L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
+        layoutAnchor
+    )
+    if buffsSourceControl and buffsSourceControl.dropdown then
+        self:InitializeBuffSourceDropdown(buffsSourceControl.dropdown, unitToken)
+        layoutAnchor = buffsSourceControl.dropdown
+        layoutAnchorXOffset = 20
+    end
+
     local width = self:CreateNumericControl(
         page,
         unitToken .. "Width",
@@ -476,7 +707,8 @@ function Configuration:BuildUnitPage(page, unitToken)
         100,
         600,
         1,
-        enabled
+        layoutAnchor,
+        layoutAnchorXOffset
     )
     self:BindNumericControl(width, function(value)
         dataHandle:SetUnitConfig(unitToken, "width", math.floor((value or 0) + 0.5))
@@ -555,6 +787,11 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     local widgets = {
         enabled = enabled,
+        buffsEnabled = buffsEnabled,
+        buffsMax = buffsMax,
+        buffsSize = buffsSize,
+        buffsPositionDropdown = buffsPositionControl and buffsPositionControl.dropdown or nil,
+        buffsSourceDropdown = buffsSourceControl and buffsSourceControl.dropdown or nil,
         width = width,
         height = height,
         powerHeight = powerHeight,
@@ -574,25 +811,79 @@ function Configuration:SelectTab(tabKey)
 
     for key, page in pairs(self.tabPages) do
         if page then
-            page:SetShown(key == tabKey)
+            local selected = key == tabKey
+            page:SetShown(selected)
+            if selected and page.ScrollFrame then
+                page.ScrollFrame:SetVerticalScroll(0)
+                page.ScrollFrame:SetHorizontalScroll(0)
+            end
         end
     end
 
     for key, button in pairs(self.widgets.tabs) do
         if button then
-            button:SetEnabled(key ~= tabKey)
-            local fontString = button:GetFontString()
-            if fontString then
-                if key == tabKey then
-                    fontString:SetAlpha(1)
+            local selected = key == tabKey
+            if button._background then
+                if selected then
+                    button._background:SetColorTexture(1, 1, 1, 0.2)
                 else
-                    fontString:SetAlpha(0.75)
+                    button._background:SetColorTexture(1, 1, 1, 0.08)
                 end
+            end
+            if button._label then
+                button._label:SetAlpha(selected and 1 or 0.78)
             end
         end
     end
 
     self.currentTab = tabKey
+end
+
+-- Build one scrollable tab page so long option lists stay inside the window.
+function Configuration:CreateScrollableTabPage(parent)
+    local page = CreateFrame("Frame", nil, parent)
+    page:SetClipsChildren(true)
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -28, 2)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetHorizontalScroll(0)
+
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", CONFIG_PAGE_LEFT_INSET, 0)
+    content:SetWidth(1)
+    content:SetHeight(CONFIG_PAGE_CONTENT_HEIGHT)
+    scrollFrame:SetScrollChild(content)
+
+    local function updateContentWidth(selfFrame, width)
+        local resolvedWidth = width or selfFrame:GetWidth() or 1
+        local contentWidth = math.max(1, resolvedWidth - CONFIG_PAGE_LEFT_INSET - CONFIG_PAGE_RIGHT_INSET)
+        content:SetWidth(contentWidth)
+    end
+    updateContentWidth(scrollFrame, scrollFrame:GetWidth())
+
+    scrollFrame:SetScript("OnMouseWheel", function(selfFrame, delta)
+        local step = 52
+        local current = selfFrame:GetVerticalScroll() or 0
+        local target = current - (delta * step)
+        local maxRange = selfFrame:GetVerticalScrollRange() or 0
+        if target < 0 then
+            target = 0
+        elseif target > maxRange then
+            target = maxRange
+        end
+        selfFrame:SetVerticalScroll(target)
+        selfFrame:SetHorizontalScroll(0)
+    end)
+    scrollFrame:SetScript("OnSizeChanged", updateContentWidth)
+    scrollFrame:SetScript("OnScrollRangeChanged", function(selfFrame)
+        selfFrame:SetHorizontalScroll(0)
+    end)
+
+    page.ScrollFrame = scrollFrame
+    page.Content = content
+    return page, content
 end
 
 -- Sync UI widget values from the current profile.
@@ -632,7 +923,28 @@ function Configuration:RefreshConfigWidgets()
         local unitWidgets = self.widgets.unitPages[unitToken]
         if unitWidgets then
             local unitConfig = dataHandle:GetUnitConfig(unitToken)
+            local auraConfig = unitConfig.aura or {}
+            local buffsConfig = auraConfig.buffs or {}
             unitWidgets.enabled:SetChecked(unitConfig.enabled ~= false)
+            if unitWidgets.buffsEnabled then
+                unitWidgets.buffsEnabled:SetChecked(buffsConfig.enabled ~= false)
+            end
+            if unitWidgets.buffsMax then
+                self:SetNumericControlValue(unitWidgets.buffsMax, buffsConfig.max or 8)
+            end
+            if unitWidgets.buffsSize then
+                self:SetNumericControlValue(unitWidgets.buffsSize, buffsConfig.size or 18)
+            end
+            if unitWidgets.buffsPositionDropdown and type(UIDropDownMenu_SetText) == "function" then
+                local positionPreset = getBuffPositionPresetByAnchors(
+                    buffsConfig.anchorPoint or "TOPLEFT",
+                    buffsConfig.relativePoint or "BOTTOMLEFT"
+                )
+                UIDropDownMenu_SetText(unitWidgets.buffsPositionDropdown, positionPreset.label)
+            end
+            if unitWidgets.buffsSourceDropdown and type(UIDropDownMenu_SetText) == "function" then
+                UIDropDownMenu_SetText(unitWidgets.buffsSourceDropdown, getBuffSourceLabel(buffsConfig.source))
+            end
             self:SetNumericControlValue(unitWidgets.width, unitConfig.width or 220)
             self:SetNumericControlValue(unitWidgets.height, unitConfig.height or 44)
             self:SetNumericControlValue(unitWidgets.powerHeight, unitConfig.powerHeight or 10)
@@ -671,10 +983,18 @@ function Configuration:BuildTabs(subtitle)
 
     for i = 1, #tabs do
         local tab = tabs[i]
-        local button = CreateFrame("Button", "mummuFramesConfigTab" .. tab.key, panel, "UIPanelButtonTemplate")
+        local button = CreateFrame("Button", "mummuFramesConfigTab" .. tab.key, panel)
         button:SetSize(tabWidth, tabHeight)
-        button:SetText(tab.label)
-        Style:ApplyFont(button:GetFontString(), 11)
+
+        local background = button:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints()
+        background:SetColorTexture(1, 1, 1, 0.08)
+        button._background = background
+
+        local label = button:CreateFontString(nil, "ARTWORK")
+        label:SetPoint("CENTER", 0, 0)
+        setFontStringTextSafe(label, tab.label, 11)
+        button._label = label
 
         local indexInRow = (i - 1) % tabsPerRow
         if not firstButton then
@@ -694,20 +1014,30 @@ function Configuration:BuildTabs(subtitle)
         button:SetScript("OnClick", function()
             self:SelectTab(tab.key)
         end)
+        button:SetScript("OnEnter", function()
+            if self.currentTab ~= tab.key and button._background then
+                button._background:SetColorTexture(1, 1, 1, 0.14)
+            end
+        end)
+        button:SetScript("OnLeave", function()
+            if self.currentTab ~= tab.key and button._background then
+                button._background:SetColorTexture(1, 1, 1, 0.08)
+            end
+        end)
 
         self.widgets.tabs[tab.key] = button
         previousButton = button
 
-        local page = CreateFrame("Frame", nil, panel)
+        local page, content = self:CreateScrollableTabPage(panel)
         page:SetPoint("TOPLEFT", firstButton, "BOTTOMLEFT", 0, -14)
         page:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -16, 14)
         page:Hide()
         self.tabPages[tab.key] = page
 
         if tab.key == "global" then
-            self:BuildGlobalPage(page)
+            self:BuildGlobalPage(content)
         else
-            self:BuildUnitPage(page, tab.key)
+            self:BuildUnitPage(content, tab.key)
         end
     end
 
@@ -730,10 +1060,75 @@ function Configuration:BuildSettingsPanel()
     end
 
     local panel = self.panel
+    panel:SetClampedToScreen(true)
+    panel:SetMovable(true)
+    panel:EnableMouse(true)
+
+    -- Keep visuals minimal with simple flat fills and no Blizzard window frame.
+    panel.Background = Style:CreateBackground(panel, 0.05, 0.05, 0.06, 0.95)
+
+    local headerFill = panel:CreateTexture(nil, "ARTWORK")
+    headerFill:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
+    headerFill:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, 0)
+    headerFill:SetHeight(34)
+    headerFill:SetColorTexture(1, 1, 1, 0.04)
+    panel.HeaderFill = headerFill
+
+    local headerLine = panel:CreateTexture(nil, "ARTWORK")
+    headerLine:SetPoint("TOPLEFT", headerFill, "BOTTOMLEFT", 0, 0)
+    headerLine:SetPoint("TOPRIGHT", headerFill, "BOTTOMRIGHT", 0, 0)
+    headerLine:SetHeight(1)
+    headerLine:SetColorTexture(1, 1, 1, 0.08)
+    panel.HeaderLine = headerLine
+
+    local dragHandle = CreateFrame("Frame", nil, panel)
+    dragHandle:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -6)
+    dragHandle:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -42, -6)
+    dragHandle:SetHeight(24)
+    dragHandle:EnableMouse(true)
+    dragHandle:RegisterForDrag("LeftButton")
+    dragHandle:SetScript("OnDragStart", function()
+        panel:StartMoving()
+    end)
+    dragHandle:SetScript("OnDragStop", function()
+        panel:StopMovingOrSizing()
+    end)
+    panel.DragHandle = dragHandle
+
+    local closeButton = CreateFrame("Button", nil, panel)
+    closeButton:SetSize(22, 22)
+    closeButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -6)
+
+    local closeNormal = closeButton:CreateTexture(nil, "BACKGROUND")
+    closeNormal:SetAllPoints()
+    closeNormal:SetColorTexture(1, 1, 1, 0.06)
+    closeButton.Normal = closeNormal
+
+    local closeHover = closeButton:CreateTexture(nil, "ARTWORK")
+    closeHover:SetAllPoints()
+    closeHover:SetColorTexture(1, 1, 1, 0.14)
+    closeHover:Hide()
+    closeButton.Hover = closeHover
+
+    local closeLabel = closeButton:CreateFontString(nil, "OVERLAY")
+    closeLabel:SetPoint("CENTER", 0, 0)
+    setFontStringTextSafe(closeLabel, "x", 12, "OUTLINE")
+    closeButton.Label = closeLabel
+
+    closeButton:SetScript("OnEnter", function()
+        closeHover:Show()
+    end)
+    closeButton:SetScript("OnLeave", function()
+        closeHover:Hide()
+    end)
+    closeButton:SetScript("OnClick", function()
+        panel:Hide()
+    end)
+    panel.CloseButton = closeButton
 
     -- Header and subtitle for the settings page.
     local title = panel:CreateFontString(nil, "ARTWORK")
-    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetPoint("TOPLEFT", 16, -10)
     setFontStringTextSafe(title, L.CONFIG_TITLE, 24, nil, GameFontHighlightLarge)
 
     local subtitle = panel:CreateFontString(nil, "ARTWORK")
@@ -747,48 +1142,49 @@ function Configuration:BuildSettingsPanel()
     panel._built = true
 end
 
--- Register the settings category in modern or legacy UI.
+-- Build the standalone configuration window once.
 function Configuration:RegisterSettingsCategory()
     if self.panel then
         return
     end
 
-    self.panel = CreateFrame("Frame", "mummuFramesSettingsPanel", UIParent)
-    self.panel.name = L.CONFIG_TITLE
+    self.panel = CreateFrame("Frame", "mummuFramesConfigWindow", UIParent)
+    self.panel:SetSize(CONFIG_WINDOW_WIDTH, CONFIG_WINDOW_HEIGHT)
+    self.panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    self.panel:SetFrameStrata("DIALOG")
+    self.panel:SetFrameLevel(50)
+    self.panel:Hide()
+    if type(UISpecialFrames) == "table" then
+        local frameName = self.panel:GetName()
+        local known = false
+        for i = 1, #UISpecialFrames do
+            if UISpecialFrames[i] == frameName then
+                known = true
+                break
+            end
+        end
+        if not known then
+            table.insert(UISpecialFrames, frameName)
+        end
+    end
 
     self:BuildSettingsPanel()
     -- Sync widget state each time the panel is opened.
     self.panel:SetScript("OnShow", function()
         self:RefreshConfigWidgets()
     end)
-
-    -- Prefer the modern Settings API, then fall back to InterfaceOptions.
-    if Settings and type(Settings.RegisterCanvasLayoutCategory) == "function" then
-        local category, layout = Settings.RegisterCanvasLayoutCategory(self.panel, L.CONFIG_TITLE, L.CONFIG_TITLE)
-        Settings.RegisterAddOnCategory(category)
-        self.category = category
-        self.layout = layout
-    elseif type(InterfaceOptions_AddCategory) == "function" then
-        InterfaceOptions_AddCategory(self.panel)
-        self.category = self.panel
-    end
 end
 
--- Open this addon's config page in the active settings system.
+-- Open this addon's standalone configuration window.
 function Configuration:OpenConfig()
-    -- Use category ID when the modern Settings API is available.
-    if self.category and Settings and type(Settings.OpenToCategory) == "function" then
-        local categoryID = self.category.GetID and self.category:GetID() or self.category.ID
-        if categoryID then
-            Settings.OpenToCategory(categoryID)
-            return
-        end
+    if not self.panel then
+        self:RegisterSettingsCategory()
     end
 
-    -- Legacy InterfaceOptions may require opening the category twice.
-    if self.panel and type(InterfaceOptionsFrame_OpenToCategory) == "function" then
-        InterfaceOptionsFrame_OpenToCategory(self.panel)
-        InterfaceOptionsFrame_OpenToCategory(self.panel)
+    if self.panel then
+        self.panel:Show()
+        self.panel:Raise()
+        self:RefreshConfigWidgets()
     end
 end
 
@@ -846,6 +1242,9 @@ function Configuration:CreateMinimapLauncher()
 
     -- Open addon settings on left click.
     button:SetScript("OnClick", function()
+        if InCombatLockdown() then
+            return
+        end
         self:OpenConfig()
     end)
 

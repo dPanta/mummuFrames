@@ -5,7 +5,7 @@ local fontValidationCache = {}
 local availableFontsCache = nil
 local fontProbe = nil
 
-Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Media\\ProductSans-Bold.ttf"
+Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
 
 -- Read style settings from the active profile when available.
@@ -84,15 +84,27 @@ function Style:IsFontPathUsable(fontPath)
         return false
     end
 
-    local ok = pcall(probe.SetFont, probe, fontPath, 12, "OUTLINE")
-    local assigned = probe:GetFont()
-    local usable = ok and type(assigned) == "string" and assigned ~= ""
+    local function tryAssign(flags)
+        local ok, setResult = pcall(probe.SetFont, probe, fontPath, 12, flags)
+        if not ok or setResult == false then
+            return false
+        end
+        local assigned = probe:GetFont()
+        return type(assigned) == "string" and assigned ~= ""
+    end
+
+    -- Some custom fonts fail with outline flags but work with plain rendering.
+    local usable = tryAssign("OUTLINE") or tryAssign("")
     fontValidationCache[fontPath] = usable
     return usable
 end
 
--- Return discovered addon fonts that actually load successfully.
-function Style:GetAvailableFonts()
+-- Return discovered addon fonts from the generated catalog.
+function Style:GetAvailableFonts(forceRefresh)
+    if forceRefresh then
+        availableFontsCache = nil
+    end
+
     if availableFontsCache then
         return availableFontsCache
     end
@@ -104,7 +116,7 @@ function Style:GetAvailableFonts()
     for i = 1, #catalog do
         local entry = catalog[i]
         local path = type(entry) == "table" and entry.path or nil
-        if type(path) == "string" and path ~= "" and not seenPaths[path] and self:IsFontPathUsable(path) then
+        if type(path) == "string" and path ~= "" and not seenPaths[path] then
             available[#available + 1] = {
                 key = entry.key or path,
                 label = entry.label or path,
@@ -114,7 +126,7 @@ function Style:GetAvailableFonts()
         end
     end
 
-    if not seenPaths[self.DEFAULT_FONT] and self:IsFontPathUsable(self.DEFAULT_FONT) then
+    if not seenPaths[self.DEFAULT_FONT] and type(self.DEFAULT_FONT) == "string" and self.DEFAULT_FONT ~= "" then
         available[#available + 1] = {
             key = "default",
             label = "Default",
@@ -123,7 +135,7 @@ function Style:GetAvailableFonts()
         seenPaths[self.DEFAULT_FONT] = true
     end
 
-    if #available == 0 and self:IsFontPathUsable(STANDARD_TEXT_FONT) then
+    if #available == 0 and type(STANDARD_TEXT_FONT) == "string" and STANDARD_TEXT_FONT ~= "" then
         available[#available + 1] = {
             key = "standard",
             label = "Blizzard Default",
@@ -155,7 +167,7 @@ end
 function Style:GetFontPath()
     local style = getProfileStyle()
     local configuredPath = style and style.fontPath or nil
-    if self:IsFontPathUsable(configuredPath) then
+    if type(configuredPath) == "string" and configuredPath ~= "" then
         return configuredPath
     end
 
@@ -185,24 +197,63 @@ function Style:ApplyFont(fontString, size, flags)
         defaultFlags = style.fontFlags
     end
     local resolvedFlags = (flags == nil) and defaultFlags or flags
+
+    local function normalizePath(path)
+        if type(path) ~= "string" then
+            return nil
+        end
+        return string.lower(string.gsub(path, "/", "\\"))
+    end
+
     local function hasFontAssigned()
         local fontPath = fontString:GetFont()
         return type(fontPath) == "string" and fontPath ~= ""
     end
 
-    local function trySetFont(path)
+    local function trySetFont(path, flagsOverride)
         if type(path) ~= "string" or path == "" then
             return false
         end
-        local ok = pcall(fontString.SetFont, fontString, path, resolvedSize, resolvedFlags)
-        return ok and hasFontAssigned()
+        local flagsToUse = flagsOverride
+        if flagsToUse == nil then
+            flagsToUse = resolvedFlags
+        end
+        local beforePath = normalizePath(fontString:GetFont())
+        local ok, setResult = pcall(fontString.SetFont, fontString, path, resolvedSize, flagsToUse)
+        -- Some clients return nil on success; only explicit false means failure.
+        if not ok or setResult == false then
+            return false
+        end
+
+        local assignedPath = normalizePath(fontString:GetFont())
+        if not assignedPath or assignedPath == "" then
+            return false
+        end
+
+        local targetPath = normalizePath(path)
+        if assignedPath == targetPath then
+            return true
+        end
+
+        -- Some clients normalize/redirect path internally; accept only if it actually changed.
+        return assignedPath ~= beforePath
     end
 
-    if not trySetFont(self:GetFontPath()) then
+    local function trySetFontWithFallbackFlags(path)
+        if trySetFont(path, resolvedFlags) then
+            return true
+        end
+        if resolvedFlags ~= "" and trySetFont(path, "") then
+            return true
+        end
+        return false
+    end
+
+    if not trySetFontWithFallbackFlags(self:GetFontPath()) then
         -- Fall back to Blizzard's standard font first.
-        if not trySetFont(STANDARD_TEXT_FONT) then
+        if not trySetFontWithFallbackFlags(STANDARD_TEXT_FONT) then
             -- Final fallback uses a known built-in font path.
-            trySetFont("Fonts\\FRIZQT__.TTF")
+            trySetFontWithFallbackFlags("Fonts\\FRIZQT__.TTF")
         end
     end
 
@@ -215,6 +266,7 @@ function Style:ApplyFont(fontString, size, flags)
     end
 
     if hasFontAssigned() then
+        fontString:SetShadowColor(0, 0, 0, 0)
         fontString:SetShadowOffset(0, 0)
     end
 end

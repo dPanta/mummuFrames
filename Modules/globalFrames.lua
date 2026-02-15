@@ -5,6 +5,15 @@ local Style = ns.Style
 local Util = ns.Util
 
 local GlobalFrames = ns.Object:Extend()
+local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
+local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
+local LEADER_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\crown.png"
+local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
+-- Cropped UVs to remove large transparent padding from 1024x1024 source PNGs.
+local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
+local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
+local RESTING_ICON_ASPECT = 424 / 793
+local LEADER_ICON_ASPECT = 432 / 793
 
 -- Set up module state.
 function GlobalFrames:Constructor()
@@ -32,6 +41,54 @@ function GlobalFrames:CreateStatusBar(parent)
     return bar
 end
 
+-- Create small player-only status badges shown above the frame.
+function GlobalFrames:CreatePlayerStatusIcons(frame)
+    local container = CreateFrame("Frame", nil, frame)
+    container:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 1, 2)
+    container:SetSize(52, 14)
+    container:Hide()
+
+    local resting = CreateFrame("Frame", nil, container)
+    resting:SetSize(14, 14)
+    resting.Icon = resting:CreateTexture(nil, "ARTWORK")
+    resting.Icon:SetAllPoints()
+    resting.Icon:SetTexture(RESTING_ICON_TEXTURE)
+    resting.Icon:SetTexCoord(
+        RESTING_ICON_TEXCOORD[1],
+        RESTING_ICON_TEXCOORD[2],
+        RESTING_ICON_TEXCOORD[3],
+        RESTING_ICON_TEXCOORD[4]
+    )
+    resting:Hide()
+
+    local leader = CreateFrame("Frame", nil, container)
+    leader:SetSize(14, 14)
+    leader.Icon = leader:CreateTexture(nil, "ARTWORK")
+    leader.Icon:SetAllPoints()
+    leader.Icon:SetTexture(LEADER_ICON_TEXTURE)
+    leader.Icon:SetTexCoord(
+        LEADER_ICON_TEXCOORD[1],
+        LEADER_ICON_TEXCOORD[2],
+        LEADER_ICON_TEXCOORD[3],
+        LEADER_ICON_TEXCOORD[4]
+    )
+    leader:Hide()
+
+    local combat = CreateFrame("Frame", nil, container)
+    combat:SetSize(14, 14)
+    combat.Icon = combat:CreateTexture(nil, "ARTWORK")
+    combat.Icon:SetAllPoints()
+    combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
+    combat:Hide()
+
+    frame.StatusIconContainer = container
+    frame.StatusIcons = {
+        Resting = resting,
+        Leader = leader,
+        Combat = combat,
+    }
+end
+
 -- Create the base secure unit frame container and core widgets.
 function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height)
     -- Secure unit button template is required for click-target behavior.
@@ -44,6 +101,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame:RegisterForClicks("AnyUp")
     frame:SetAttribute("unit", unitToken)
     frame:SetAttribute("type1", "target")
+    frame:SetAttribute("*type2", "togglemenu")
 
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
     frame.HealthBar = self:CreateStatusBar(frame)
@@ -57,6 +115,26 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.HealthText:SetDrawLayer("OVERLAY", 7)
     frame.HealthText:SetJustifyH("RIGHT")
+
+    frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
+    frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+    frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
+    frame.AbsorbOverlayFrame:Hide()
+
+    frame.AbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.AbsorbOverlayFrame)
+    frame.AbsorbOverlayBar:SetAllPoints(frame.AbsorbOverlayFrame)
+    frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
+    frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.AbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.AbsorbOverlayBar:SetValue(0)
+    frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+    frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
+    frame.AbsorbOverlayBar:Hide()
+
+    if unitToken == "player" then
+        self:CreatePlayerStatusIcons(frame)
+    end
 
     self:ApplyStyle(frame, unitToken)
     return frame
@@ -111,6 +189,14 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
     Style:ApplyStatusBarTexture(frame.PowerBar)
+    if frame.AbsorbOverlayBar and frame.AbsorbOverlayFrame then
+        frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+        frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
+        frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
+        frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
+        frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+        frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
+    end
 
     local border = pixelPerfect and Style:GetPixelSize() or 1
     local textInset = pixelPerfect and Style:Snap(6) or 6
@@ -133,8 +219,8 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     frame.HealthText:ClearAllPoints()
     frame.HealthText:SetPoint("RIGHT", frame.HealthBar, "RIGHT", -textInset, 0)
 
-    Style:ApplyFont(frame.NameText, fontSize)
-    Style:ApplyFont(frame.HealthText, fontSize)
+    Style:ApplyFont(frame.NameText, fontSize, "OUTLINE")
+    Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
 
     -- Force fallback font objects if a skin removes per-string fonts.
     if not frame.NameText:GetFont() and GameFontHighlightSmall then
@@ -147,13 +233,52 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     -- Keep text readable on top of colored bars.
     frame.NameText:SetTextColor(1, 1, 1, 1)
     frame.HealthText:SetTextColor(1, 1, 1, 1)
-    frame.NameText:SetShadowColor(0, 0, 0, 1)
-    frame.HealthText:SetShadowColor(0, 0, 0, 1)
-    frame.NameText:SetShadowOffset(1, -1)
-    frame.HealthText:SetShadowOffset(1, -1)
+    frame.NameText:SetShadowColor(0, 0, 0, 0)
+    frame.HealthText:SetShadowColor(0, 0, 0, 0)
+    frame.NameText:SetShadowOffset(0, 0)
+    frame.HealthText:SetShadowOffset(0, 0)
 
-    frame.NameText:SetShown(unitConfig.showNameText ~= false)
+    frame.NameText:SetShown(true)
     frame.HealthText:SetShown(unitConfig.showHealthText ~= false)
+
+    if frame.StatusIcons and frame.StatusIconContainer then
+        local iconSize = Util:Clamp((fontSize + 1) * 5, 40, 96)
+        local combatIconSize = math.max(1, math.floor((iconSize * 0.75) + 0.5))
+        local badgeSpacing = pixelPerfect and Style:Snap(4) or 4
+        local restingWidth = math.floor((iconSize * RESTING_ICON_ASPECT) + 0.5)
+        local leaderHeight = math.max(1, math.floor((iconSize / 3) + 0.5))
+        local leaderWidth = math.max(1, math.floor((leaderHeight * LEADER_ICON_ASPECT) + 0.5))
+
+        frame.StatusIconContainer:ClearAllPoints()
+        -- Container center matches the unit frame top-left corner.
+        frame.StatusIconContainer:SetPoint("CENTER", frame, "TOPLEFT", 0, 0)
+        frame.StatusIconContainer:SetSize(restingWidth + leaderWidth + badgeSpacing, iconSize)
+        frame.StatusIconSpacing = badgeSpacing
+
+        frame.StatusIcons.Resting:SetSize(restingWidth, iconSize)
+        frame.StatusIcons.Resting.Icon:SetAllPoints()
+        frame.StatusIcons.Resting.Icon:SetTexture(RESTING_ICON_TEXTURE)
+        frame.StatusIcons.Resting.Icon:SetTexCoord(
+            RESTING_ICON_TEXCOORD[1],
+            RESTING_ICON_TEXCOORD[2],
+            RESTING_ICON_TEXCOORD[3],
+            RESTING_ICON_TEXCOORD[4]
+        )
+
+        frame.StatusIcons.Leader:SetSize(leaderWidth, leaderHeight)
+        frame.StatusIcons.Leader.Icon:SetAllPoints()
+        frame.StatusIcons.Leader.Icon:SetTexture(LEADER_ICON_TEXTURE)
+        frame.StatusIcons.Leader.Icon:SetTexCoord(
+            LEADER_ICON_TEXCOORD[1],
+            LEADER_ICON_TEXCOORD[2],
+            LEADER_ICON_TEXCOORD[3],
+            LEADER_ICON_TEXCOORD[4]
+        )
+
+        frame.StatusIcons.Combat:SetSize(combatIconSize, combatIconSize)
+        frame.StatusIcons.Combat.Icon:SetAllPoints()
+        frame.StatusIcons.Combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
+    end
 end
 
 addon:RegisterModule("globalFrames", GlobalFrames:New())
