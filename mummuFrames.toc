@@ -2,7 +2,7 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 0.3.0
+## Version: 0.4.0
 ## SavedVariables: mummuFramesDB
 
 # Locales

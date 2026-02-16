@@ -813,6 +813,7 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     -- Cast bar options (player and target only).
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
+    local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
     if unitToken == "player" or unitToken == "target" then
         castbarEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "CastbarEnabled",
@@ -895,6 +896,51 @@ function Configuration:BuildUnitPage(page, unitToken)
         end)
     end
 
+    if unitToken == "player" then
+        local secondaryAnchor = castbarHideBlizzard or yOffset.slider
+        local secondaryYOffset = castbarHideBlizzard and -10 or -16
+
+        secondaryPowerEnabled = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "SecondaryPowerEnabled",
+            page,
+            L.CONFIG_UNIT_SECONDARY_POWER_ENABLE or "Show secondary power bar",
+            secondaryAnchor,
+            0,
+            secondaryYOffset
+        )
+        secondaryPowerEnabled:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.enabled", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        secondaryPowerDetach = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "SecondaryPowerDetach",
+            page,
+            L.CONFIG_UNIT_SECONDARY_POWER_DETACH or "Detach secondary power bar",
+            secondaryPowerEnabled,
+            0,
+            -8
+        )
+        secondaryPowerDetach:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.detached", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        secondaryPowerSize = self:CreateNumericControl(
+            page,
+            unitToken .. "SecondaryPowerSize",
+            L.CONFIG_UNIT_SECONDARY_POWER_SIZE or "Secondary power size",
+            8,
+            40,
+            1,
+            secondaryPowerDetach
+        )
+        self:BindNumericControl(secondaryPowerSize, function(value)
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.size", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+    end
+
     local widgets = {
         enabled = enabled,
         hideBlizzard = hideBlizzard,
@@ -916,6 +962,9 @@ function Configuration:BuildUnitPage(page, unitToken)
         castbarHeight = castbarHeight,
         castbarShowIcon = castbarShowIcon,
         castbarHideBlizzard = castbarHideBlizzard,
+        secondaryPowerEnabled = secondaryPowerEnabled,
+        secondaryPowerDetach = secondaryPowerDetach,
+        secondaryPowerSize = secondaryPowerSize,
     }
 
     self.widgets.unitPages[unitToken] = widgets
@@ -1093,6 +1142,16 @@ function Configuration:RefreshConfigWidgets()
             end
             if unitWidgets.castbarHideBlizzard then
                 unitWidgets.castbarHideBlizzard:SetChecked(castbarConfig.hideBlizzardCastBar == true)
+            end
+            local secondaryPowerConfig = unitConfig.secondaryPower or {}
+            if unitWidgets.secondaryPowerEnabled then
+                unitWidgets.secondaryPowerEnabled:SetChecked(secondaryPowerConfig.enabled ~= false)
+            end
+            if unitWidgets.secondaryPowerDetach then
+                unitWidgets.secondaryPowerDetach:SetChecked(secondaryPowerConfig.detached == true)
+            end
+            if unitWidgets.secondaryPowerSize then
+                self:SetNumericControlValue(unitWidgets.secondaryPowerSize, secondaryPowerConfig.size or 16)
             end
         end
     end

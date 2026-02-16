@@ -9,6 +9,7 @@ local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
 local LEADER_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\crown.png"
 local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
+local SECONDARY_POWER_MAX_ICONS = 10
 -- Cropped UVs to remove large transparent padding from 1024x1024 source PNGs.
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
@@ -133,6 +134,26 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     }
 end
 
+-- Create the player-only secondary power icon row.
+function GlobalFrames:CreateSecondaryPowerBar(frame)
+    local bar = CreateFrame("Frame", nil, frame)
+    bar:SetFrameStrata("MEDIUM")
+    bar:SetFrameLevel(frame:GetFrameLevel() + 20)
+    bar:SetSize(120, 16)
+    bar:SetClampedToScreen(true)
+    bar:Hide()
+
+    bar.Icons = {}
+    for i = 1, SECONDARY_POWER_MAX_ICONS do
+        local icon = bar:CreateTexture(nil, "ARTWORK")
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        icon:Hide()
+        bar.Icons[i] = icon
+    end
+
+    frame.SecondaryPowerBar = bar
+end
+
 -- Create the cast bar widget attached to a unit frame.
 function GlobalFrames:CreateCastBar(frame)
     local container = CreateFrame("Frame", nil, UIParent)
@@ -249,6 +270,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
 
     if unitToken == "player" then
         self:CreatePlayerStatusIcons(frame)
+        self:CreateSecondaryPowerBar(frame)
     end
 
     self:ApplyStyle(frame, unitToken)
@@ -404,6 +426,40 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.StatusIcons.Combat:SetSize(combatIconSize, combatIconSize)
         frame.StatusIcons.Combat.Icon:SetAllPoints()
         frame.StatusIcons.Combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
+    end
+
+    if frame.SecondaryPowerBar then
+        local secondaryConfig = unitConfig.secondaryPower or {}
+        local spEnabled = unitToken == "player" and secondaryConfig.enabled ~= false
+        local spDetached = secondaryConfig.detached == true
+        local defaultSpSize = math.floor((fontSize * 1.35) + 0.5)
+        local spHeight = Util:Clamp(math.floor((tonumber(secondaryConfig.size) or defaultSpSize) + 0.5), 8, 40)
+        local spWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 300)
+
+        frame.SecondaryPowerBar:ClearAllPoints()
+        frame.SecondaryPowerBar:SetSize(spWidth, spHeight)
+
+        if spDetached then
+            local spX = tonumber(secondaryConfig.x) or 0
+            local spY = tonumber(secondaryConfig.y) or 0
+            if pixelPerfect then
+                spX = Style:Snap(spX)
+                spY = Style:Snap(spY)
+            else
+                spX = math.floor(spX + 0.5)
+                spY = math.floor(spY + 0.5)
+            end
+
+            if not InCombatLockdown() then
+                frame.SecondaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", spX, spY)
+            end
+        else
+            local spOffsetY = pixelPerfect and Style:Snap(8) or 8
+            frame.SecondaryPowerBar:SetPoint("BOTTOM", frame, "TOP", 0, spOffsetY)
+        end
+
+        frame.SecondaryPowerBar._enabled = spEnabled
+        frame.SecondaryPowerBar._detached = spDetached
     end
 
     -- Cast bar layout for player and target.

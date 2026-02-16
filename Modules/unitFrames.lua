@@ -61,20 +61,82 @@ local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 -- Hard stop for aura scanning to avoid unbounded loops.
 local MAX_AURA_SCAN = 40
 
--- Strip Blizzard taint from a secret number by round-tripping through a string.
-local function detaintNumber(value)
-    return tonumber(tostring(value)) or 0
-end
-
 -- Cast bar color constants.
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
+local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
+local SECONDARY_POWER_MAX_ICONS = 10
+local SECONDARY_POWER_EMPTY_ALPHA = 0.22
 
 -- Units that support cast bars.
 local CASTBAR_UNITS = {
     player = true,
     target = true,
 }
+
+local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
+    local enumValue = _G.Enum and _G.Enum.PowerType and _G.Enum.PowerType[enumKey]
+    if enumValue ~= nil then
+        return enumValue
+    end
+    local globalValue = _G[globalKey]
+    if globalValue ~= nil then
+        return globalValue
+    end
+    return fallback
+end
+
+local SECONDARY_POWER_BY_CLASS = {
+    MONK = {
+        powerType = resolvePowerTypeConstant("Chi", "SPELL_POWER_CHI", 12),
+        maxIcons = 6,
+        texture = SECONDARY_POWER_ICON_BASE .. "monk_chi.png",
+    },
+    DEATHKNIGHT = {
+        powerType = resolvePowerTypeConstant("Runes", "SPELL_POWER_RUNES", 5),
+        maxIcons = 6,
+        texture = SECONDARY_POWER_ICON_BASE .. "dk_runes.png",
+    },
+    ROGUE = {
+        powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
+        maxIcons = 8,
+        texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
+    },
+    PALADIN = {
+        powerType = resolvePowerTypeConstant("HolyPower", "SPELL_POWER_HOLY_POWER", 9),
+        maxIcons = 5,
+        texture = SECONDARY_POWER_ICON_BASE .. "paladin_holy_power.png",
+    },
+    WARLOCK = {
+        powerType = resolvePowerTypeConstant("SoulShards", "SPELL_POWER_SOUL_SHARDS", 7),
+        maxIcons = 5,
+        texture = SECONDARY_POWER_ICON_BASE .. "warlock_soul_shards.png",
+    },
+    EVOKER = {
+        powerType = resolvePowerTypeConstant("Essence", "SPELL_POWER_ESSENCE", 19),
+        maxIcons = 6,
+        texture = SECONDARY_POWER_ICON_BASE .. "evoker_essence.png",
+    },
+    MAGE = {
+        powerType = resolvePowerTypeConstant("ArcaneCharges", "SPELL_POWER_ARCANE_CHARGES", 16),
+        maxIcons = 4,
+        texture = SECONDARY_POWER_ICON_BASE .. "mage_arcane_charges.png",
+    },
+    DEMONHUNTER = {
+        powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
+        maxIcons = 5,
+        texture = SECONDARY_POWER_ICON_BASE .. "dh_soul_fragments.png",
+    },
+}
+
+-- Safely extract a boolean from a potentially tainted value.
+-- pcall absorbs the taint error; on failure we default to false.
+local function safeBool(val)
+    local ok, result = pcall(function()
+        if val then return true else return false end
+    end)
+    return ok and result or false
+end
 
 -- Resolve health bar color using class, reaction, then fallback.
 local function resolveHealthColor(unitToken, exists)
@@ -697,6 +759,16 @@ function UnitFrames:OnEditModeEnter()
                     end
                 end
             end
+            -- Show secondary power bar edit overlay (draggable only when detached).
+            if frame.SecondaryPowerBar and frame.SecondaryPowerBar._enabled then
+                if frame.SecondaryPowerBar._detached then
+                    self:EnsureSecondaryPowerBarEditModeSelection(frame)
+                    frame.SecondaryPowerBar:SetMovable(true)
+                    if frame.SecondaryPowerBar.EditModeSelection then
+                        frame.SecondaryPowerBar.EditModeSelection:Show()
+                    end
+                end
+            end
         end
     end
 
@@ -721,6 +793,14 @@ function UnitFrames:OnEditModeExit()
                 frame.CastBar._editModeMoving = false
                 if frame.CastBar.EditModeSelection then
                     frame.CastBar.EditModeSelection:Hide()
+                end
+            end
+            -- Hide secondary power bar edit overlay.
+            if frame.SecondaryPowerBar then
+                frame.SecondaryPowerBar:StopMovingOrSizing()
+                frame.SecondaryPowerBar._editModeMoving = false
+                if frame.SecondaryPowerBar.EditModeSelection then
+                    frame.SecondaryPowerBar.EditModeSelection:Hide()
                 end
             end
         end
@@ -1308,6 +1388,9 @@ function UnitFrames:HideAll()
             if frame.CastBar then
                 stopCastBarTimer(frame.CastBar)
             end
+            if frame.SecondaryPowerBar then
+                frame.SecondaryPowerBar:Hide()
+            end
         end
     end
 end
@@ -1382,43 +1465,125 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
     frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
 end
 
+local function hideSecondaryPowerBar(bar)
+    if not bar then
+        return
+    end
+
+    if bar.Icons then
+        for i = 1, #bar.Icons do
+            bar.Icons[i]:Hide()
+        end
+    end
+    bar:Hide()
+end
+
+-- Update the player-only secondary power bar for supported classes.
+function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
+    local bar = frame and frame.SecondaryPowerBar or nil
+    if not bar then
+        return
+    end
+
+    if unitToken ~= "player" or bar._enabled == false then
+        hideSecondaryPowerBar(bar)
+        return
+    end
+
+    local _, classToken = UnitClass("player")
+    local resource = classToken and SECONDARY_POWER_BY_CLASS[classToken] or nil
+    if not resource then
+        hideSecondaryPowerBar(bar)
+        return
+    end
+
+    local maxIcons = Util:Clamp(resource.maxIcons or 5, 1, SECONDARY_POWER_MAX_ICONS)
+    local current = 0
+    local maxPower = 0
+    if exists then
+        current = UnitPower("player", resource.powerType) or 0
+        maxPower = UnitPowerMax("player", resource.powerType) or 0
+    end
+
+    -- Keep the full bar visible even when the current resource is zero.
+    if maxPower <= 0 then
+        maxPower = maxIcons
+    end
+
+    if previewMode then
+        if current <= 0 then
+            current = math.min(3, maxPower)
+        end
+    end
+
+    maxPower = Util:Clamp(math.floor((maxPower or 0) + 0.0001), 0, maxIcons)
+    current = Util:Clamp(math.floor((current or 0) + 0.0001), 0, maxPower)
+
+    local availableWidth = math.max(1, bar:GetWidth() or 1)
+    local availableHeight = math.max(1, bar:GetHeight() or 1)
+    local spacing = (Style and type(Style.GetPixelSize) == "function" and Style:GetPixelSize()) or 1
+    if not Style or type(Style.IsPixelPerfectEnabled) ~= "function" or not Style:IsPixelPerfectEnabled() then
+        spacing = 2
+    end
+
+    local iconSize = math.floor(
+        math.min(availableHeight, (availableWidth - (spacing * math.max(0, maxPower - 1))) / maxPower) + 0.5
+    )
+    if iconSize < 1 then
+        iconSize = 1
+    end
+
+    local rowWidth = (iconSize * maxPower) + (spacing * math.max(0, maxPower - 1))
+    local startX = math.floor(((availableWidth - rowWidth) * 0.5) + 0.5)
+    if startX < 0 then
+        startX = 0
+    end
+
+    local texturePath = resource.texture or DEFAULT_AURA_TEXTURE
+    for i = 1, #bar.Icons do
+        local icon = bar.Icons[i]
+        if i <= maxPower then
+            icon:SetTexture(texturePath)
+            icon:SetAlpha(i <= current and 1 or SECONDARY_POWER_EMPTY_ALPHA)
+            icon:SetSize(iconSize, iconSize)
+            icon:ClearAllPoints()
+            icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
+            icon:Show()
+        else
+            icon:Hide()
+        end
+    end
+
+    bar:Show()
+end
+
 -- Start the OnUpdate timer to animate the cast bar progress.
+-- The StatusBar min/max are set to the raw (possibly tainted) startTimeMs and
+-- endTimeMs from UnitCastingInfo/UnitChannelInfo.  We feed GetTime()*1000 into
+-- SetValue each frame so that all arithmetic on tainted numbers happens inside
+-- the C widget code, never in Lua.
 local function startCastBarTimer(castBar)
     if castBar._timerActive then
         return
     end
     castBar._timerActive = true
     castBar:SetScript("OnUpdate", function(self, _)
-        if not self._castEnd or not self._castStart then
-            return
-        end
+        local nowMs = GetTime() * 1000
+        self.Bar:SetValue(nowMs)
 
-        local now = GetTime()
-        local duration = self._castEnd - self._castStart
-        if duration <= 0 then
-            return
-        end
-
-        local elapsed = now - self._castStart
-        local progress
-
-        if self._channeling then
-            progress = 1 - (elapsed / duration)
+        -- Time text: _castEndClean is the pcall-extracted end time (may be 0
+        -- if taint prevented extraction).
+        local endClean = self._castEndClean
+        if endClean and endClean > 0 then
+            local remaining = math.max(0, (endClean - nowMs) / 1000)
+            self.TimeText:SetText(string.format("%.1fs", remaining))
+            if nowMs >= endClean then
+                self:SetScript("OnUpdate", nil)
+                self._timerActive = false
+                self:Hide()
+            end
         else
-            progress = elapsed / duration
-        end
-
-        progress = math.max(0, math.min(1, progress))
-        self.Bar:SetValue(progress)
-
-        local remaining = math.max(0, self._castEnd - now)
-        local okFmt, text = pcall(string.format, "%.1fs", remaining)
-        self.TimeText:SetText(okFmt and text or "")
-
-        if now >= self._castEnd then
-            self:SetScript("OnUpdate", nil)
-            self._timerActive = false
-            self:Hide()
+            self.TimeText:SetText("")
         end
     end)
 end
@@ -1450,6 +1615,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     -- In edit mode, show a static preview bar so the user can see placement.
     if self.editModeActive then
         castBar.Bar:SetMinMaxValues(0, 1)
+        castBar.Bar:SetReverseFill(false)
         castBar.Bar:SetValue(0.6)
         castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
         castBar.SpellText:SetText(unitToken == "player" and UnitName("player") or L.UNIT_TEST_TARGET)
@@ -1468,13 +1634,18 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
 
     if spellName then
-        castBar._castStart = detaintNumber(startTimeMs) / 1000
-        castBar._castEnd = detaintNumber(endTimeMs) / 1000
-        castBar._channeling = false
+        -- Pass tainted ms values directly to the C widget; never do Lua
+        -- arithmetic on them.  The StatusBar handles progress in C.
+        castBar.Bar:SetMinMaxValues(startTimeMs, endTimeMs)
+        castBar.Bar:SetReverseFill(false)
+        -- Try to extract endTimeMs for the time-remaining text; default to 0
+        -- if taint prevents it.
+        local okEnd, cleanEnd = pcall(function() return endTimeMs + 0 end)
+        castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(spellName)
         castBar.Icon:SetTexture(iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-        if tostring(notInterruptible) == "true" then
+        if safeBool(notInterruptible) then
             castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
         else
             castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
@@ -1492,13 +1663,15 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
 
     if channelName then
-        castBar._castStart = detaintNumber(channelStartMs) / 1000
-        castBar._castEnd = detaintNumber(channelEndMs) / 1000
-        castBar._channeling = true
+        -- Channels: reverse fill so the bar drains from right to left.
+        castBar.Bar:SetMinMaxValues(channelStartMs, channelEndMs)
+        castBar.Bar:SetReverseFill(true)
+        local okEnd, cleanEnd = pcall(function() return channelEndMs + 0 end)
+        castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(channelName)
         castBar.Icon:SetTexture(channelIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-        if tostring(channelNotInterruptible) == "true" then
+        if safeBool(channelNotInterruptible) then
             castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
         else
             castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
@@ -1513,68 +1686,62 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     stopCastBarTimer(castBar)
 end
 
--- Create an Edit Mode selection overlay for a detached cast bar.
-function UnitFrames:EnsureCastBarEditModeSelection(frame)
-    local castBar = frame.CastBar
-    if not castBar or castBar.EditModeSelection then
+-- Build one edit-mode drag overlay for detached widget elements.
+function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, borderColor, onDragStop)
+    if not element or element.EditModeSelection then
         return
     end
 
-    local selection = CreateFrame("Frame", nil, castBar)
+    local selection = CreateFrame("Frame", nil, element)
     local border = selection:CreateTexture(nil, "OVERLAY")
     border:SetPoint("TOPLEFT", -2, 2)
     border:SetPoint("BOTTOMRIGHT", 2, -2)
-    border:SetColorTexture(0.98, 0.74, 0.29, 0.55)
+    border:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4] or 0.55)
     selection._fallbackBorder = border
 
     local label = selection:CreateFontString(nil, "OVERLAY")
     label:SetPoint("TOP", 0, 10)
     label:SetTextColor(1, 1, 1, 1)
     Style:ApplyFont(label, 11, "OUTLINE")
-    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Cast Bar"
-    label:SetText(labelText)
+    label:SetText(labelText or "Detached")
     selection.Label = label
 
-    selection:SetAllPoints(castBar)
+    selection:SetAllPoints(element)
     selection:EnableMouse(true)
     selection:RegisterForDrag("LeftButton")
     selection:SetClampedToScreen(true)
     selection:SetFrameStrata("DIALOG")
-    selection:SetFrameLevel(castBar:GetFrameLevel() + 30)
+    selection:SetFrameLevel(element:GetFrameLevel() + 30)
 
     selection:SetScript("OnDragStart", function()
         if not self.editModeActive or InCombatLockdown() then
             return
         end
-        castBar:SetMovable(true)
-        castBar:StartMoving()
-        castBar._editModeMoving = true
+        element:SetMovable(true)
+        element:StartMoving()
+        element._editModeMoving = true
     end)
 
     selection:SetScript("OnDragStop", function()
-        if not castBar._editModeMoving then
+        if not element._editModeMoving then
             return
         end
-        castBar:StopMovingOrSizing()
-        castBar._editModeMoving = false
-        self:SaveCastBarAnchorFromEditMode(frame)
+        element:StopMovingOrSizing()
+        element._editModeMoving = false
+        if onDragStop then
+            onDragStop()
+        end
     end)
 
-    castBar.EditModeSelection = selection
+    element.EditModeSelection = selection
     selection:Hide()
 end
 
--- Persist moved cast bar position into the addon's unit config.
-function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
-    if not frame or not frame.CastBar or not self.dataHandle or not frame.unitToken then
-        return
-    end
-
-    local castBar = frame.CastBar
-    local centerX, centerY = castBar:GetCenter()
+local function getDetachedElementOffsets(element)
+    local centerX, centerY = element:GetCenter()
     local parentX, parentY = UIParent:GetCenter()
     if not centerX or not centerY or not parentX or not parentY then
-        return
+        return nil, nil
     end
 
     local offsetX = centerX - parentX
@@ -1596,8 +1763,68 @@ function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
         offsetY = math.floor(offsetY + 0.5)
     end
 
+    return offsetX, offsetY
+end
+
+-- Create an Edit Mode selection overlay for a detached cast bar.
+function UnitFrames:EnsureCastBarEditModeSelection(frame)
+    if not frame or not frame.CastBar then
+        return
+    end
+
+    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Cast Bar"
+    self:EnsureDetachedElementEditModeSelection(
+        frame.CastBar,
+        labelText,
+        { 0.98, 0.74, 0.29, 0.55 },
+        function() self:SaveCastBarAnchorFromEditMode(frame) end
+    )
+end
+
+-- Persist moved cast bar position into the addon's unit config.
+function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
+    if not frame or not frame.CastBar or not self.dataHandle or not frame.unitToken then
+        return
+    end
+
+    local offsetX, offsetY = getDetachedElementOffsets(frame.CastBar)
+    if offsetX == nil or offsetY == nil then
+        return
+    end
+
     self.dataHandle:SetUnitConfig(frame.unitToken, "castbar.x", offsetX)
     self.dataHandle:SetUnitConfig(frame.unitToken, "castbar.y", offsetY)
+    self:RefreshFrame(frame.unitToken, true)
+end
+
+-- Create an Edit Mode selection overlay for a detached secondary power bar.
+function UnitFrames:EnsureSecondaryPowerBarEditModeSelection(frame)
+    if not frame or not frame.SecondaryPowerBar then
+        return
+    end
+
+    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Secondary Power"
+    self:EnsureDetachedElementEditModeSelection(
+        frame.SecondaryPowerBar,
+        labelText,
+        { 0.38, 0.85, 0.62, 0.55 },
+        function() self:SaveSecondaryPowerBarAnchorFromEditMode(frame) end
+    )
+end
+
+-- Persist moved secondary power bar position into the addon's unit config.
+function UnitFrames:SaveSecondaryPowerBarAnchorFromEditMode(frame)
+    if not frame or not frame.SecondaryPowerBar or not self.dataHandle or not frame.unitToken then
+        return
+    end
+
+    local offsetX, offsetY = getDetachedElementOffsets(frame.SecondaryPowerBar)
+    if offsetX == nil or offsetY == nil then
+        return
+    end
+
+    self.dataHandle:SetUnitConfig(frame.unitToken, "secondaryPower.x", offsetX)
+    self.dataHandle:SetUnitConfig(frame.unitToken, "secondaryPower.y", offsetY)
     self:RefreshFrame(frame.unitToken, true)
 end
 
@@ -1629,6 +1856,9 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout)
     -- Skip drawing for units disabled in profile settings.
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
     if unitConfig.enabled == false and not self.editModeActive then
+        if frame.SecondaryPowerBar then
+            frame.SecondaryPowerBar:Hide()
+        end
         self:SetFrameVisibility(frame, false)
         return
     end
@@ -1702,6 +1932,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout)
 
     self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
     self:RefreshPlayerStatusIcons(frame, unitToken)
+    self:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
     if CASTBAR_UNITS[unitToken] then
         self:RefreshCastBar(frame, unitToken, exists, previewMode)
     end

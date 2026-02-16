@@ -41,6 +41,13 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
+        secondaryPower = {
+            enabled = true,
+            detached = false,
+            size = 16,
+            x = 0,
+            y = 0,
+        },
         aura = {
             enabled = true,
             buffs = {
