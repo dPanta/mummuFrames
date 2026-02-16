@@ -26,9 +26,21 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         width = width,
         height = height,
         powerHeight = 10,
+        powerOnTop = false,
         fontSize = 12,
+        hideBlizzardFrame = false,
         showNameText = true,
         showHealthText = true,
+        castbar = {
+            enabled = true,
+            detached = false,
+            showIcon = true,
+            hideBlizzardCastBar = false,
+            width = width,
+            height = 20,
+            x = 0,
+            y = 0,
+        },
         aura = {
             enabled = true,
             buffs = {

@@ -2,11 +2,21 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 0.1.0
+## Version: 0.3.0
 ## SavedVariables: mummuFramesDB
 
 # Locales
 Locales\enUS.lua
+Locales\frFR.lua
+Locales\deDE.lua
+Locales\zhCN.lua
+Locales\zhTW.lua
+Locales\esES.lua
+Locales\esMX.lua
+Locales\ruRU.lua
+Locales\koKR.lua
+Locales\itIT.lua
+Locales\ptBR.lua
 
 # Core
 Core\Object.lua

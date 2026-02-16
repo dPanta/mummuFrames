@@ -631,11 +631,24 @@ function Configuration:BuildUnitPage(page, unitToken)
         self:RequestUnitFrameRefresh()
     end)
 
+    local hideBlizzard = self:CreateCheckbox(
+        "mummuFramesConfig" .. unitToken .. "HideBlizzard",
+        page,
+        L.CONFIG_UNIT_HIDE_BLIZZARD or "Hide Blizzard frame",
+        enabled,
+        0,
+        -8
+    )
+    hideBlizzard:SetScript("OnClick", function(button)
+        dataHandle:SetUnitConfig(unitToken, "hideBlizzardFrame", button:GetChecked() and true or false)
+        self:RequestUnitFrameRefresh()
+    end)
+
     local buffsEnabled = self:CreateCheckbox(
         "mummuFramesConfig" .. unitToken .. "BuffsEnabled",
         page,
         L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
-        enabled,
+        hideBlizzard,
         0,
         -8
     )
@@ -743,6 +756,19 @@ function Configuration:BuildUnitPage(page, unitToken)
         self:RequestUnitFrameRefresh()
     end)
 
+    local powerOnTop = self:CreateCheckbox(
+        "mummuFramesConfig" .. unitToken .. "PowerOnTop",
+        page,
+        L.CONFIG_UNIT_POWER_ON_TOP or "Power bar on top",
+        powerHeight.slider,
+        0,
+        -8
+    )
+    powerOnTop:SetScript("OnClick", function(button)
+        dataHandle:SetUnitConfig(unitToken, "powerOnTop", button:GetChecked() and true or false)
+        self:RequestUnitFrameRefresh()
+    end)
+
     local fontSize = self:CreateNumericControl(
         page,
         unitToken .. "FontSize",
@@ -750,7 +776,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         8,
         26,
         1,
-        powerHeight.slider
+        powerOnTop
     )
     self:BindNumericControl(fontSize, function(value)
         dataHandle:SetUnitConfig(unitToken, "fontSize", math.floor((value or 0) + 0.5))
@@ -785,8 +811,93 @@ function Configuration:BuildUnitPage(page, unitToken)
         self:RequestUnitFrameRefresh()
     end)
 
+    -- Cast bar options (player and target only).
+    local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
+    if unitToken == "player" or unitToken == "target" then
+        castbarEnabled = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "CastbarEnabled",
+            page,
+            L.CONFIG_UNIT_CASTBAR_ENABLE or "Show cast bar",
+            yOffset.slider,
+            0,
+            -16
+        )
+        castbarEnabled:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "castbar.enabled", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        castbarDetach = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "CastbarDetach",
+            page,
+            L.CONFIG_UNIT_CASTBAR_DETACH or "Detach cast bar",
+            castbarEnabled,
+            0,
+            -8
+        )
+        castbarDetach:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "castbar.detached", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        castbarWidth = self:CreateNumericControl(
+            page,
+            unitToken .. "CastbarWidth",
+            L.CONFIG_UNIT_CASTBAR_WIDTH or "Cast bar width",
+            50,
+            600,
+            1,
+            castbarDetach
+        )
+        self:BindNumericControl(castbarWidth, function(value)
+            dataHandle:SetUnitConfig(unitToken, "castbar.width", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        castbarHeight = self:CreateNumericControl(
+            page,
+            unitToken .. "CastbarHeight",
+            L.CONFIG_UNIT_CASTBAR_HEIGHT or "Cast bar height",
+            8,
+            40,
+            1,
+            castbarWidth.slider
+        )
+        self:BindNumericControl(castbarHeight, function(value)
+            dataHandle:SetUnitConfig(unitToken, "castbar.height", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        castbarShowIcon = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "CastbarShowIcon",
+            page,
+            L.CONFIG_UNIT_CASTBAR_SHOW_ICON or "Show spell icon",
+            castbarHeight.slider,
+            0,
+            -8
+        )
+        castbarShowIcon:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "castbar.showIcon", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        castbarHideBlizzard = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "CastbarHideBlizzard",
+            page,
+            L.CONFIG_UNIT_CASTBAR_HIDE_BLIZZARD or "Hide Blizzard cast bar",
+            castbarShowIcon,
+            0,
+            -8
+        )
+        castbarHideBlizzard:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "castbar.hideBlizzardCastBar", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+    end
+
     local widgets = {
         enabled = enabled,
+        hideBlizzard = hideBlizzard,
         buffsEnabled = buffsEnabled,
         buffsMax = buffsMax,
         buffsSize = buffsSize,
@@ -795,9 +906,16 @@ function Configuration:BuildUnitPage(page, unitToken)
         width = width,
         height = height,
         powerHeight = powerHeight,
+        powerOnTop = powerOnTop,
         fontSize = fontSize,
         x = xOffset,
         y = yOffset,
+        castbarEnabled = castbarEnabled,
+        castbarDetach = castbarDetach,
+        castbarWidth = castbarWidth,
+        castbarHeight = castbarHeight,
+        castbarShowIcon = castbarShowIcon,
+        castbarHideBlizzard = castbarHideBlizzard,
     }
 
     self.widgets.unitPages[unitToken] = widgets
@@ -926,6 +1044,9 @@ function Configuration:RefreshConfigWidgets()
             local auraConfig = unitConfig.aura or {}
             local buffsConfig = auraConfig.buffs or {}
             unitWidgets.enabled:SetChecked(unitConfig.enabled ~= false)
+            if unitWidgets.hideBlizzard then
+                unitWidgets.hideBlizzard:SetChecked(unitConfig.hideBlizzardFrame == true)
+            end
             if unitWidgets.buffsEnabled then
                 unitWidgets.buffsEnabled:SetChecked(buffsConfig.enabled ~= false)
             end
@@ -948,9 +1069,31 @@ function Configuration:RefreshConfigWidgets()
             self:SetNumericControlValue(unitWidgets.width, unitConfig.width or 220)
             self:SetNumericControlValue(unitWidgets.height, unitConfig.height or 44)
             self:SetNumericControlValue(unitWidgets.powerHeight, unitConfig.powerHeight or 10)
+            if unitWidgets.powerOnTop then
+                unitWidgets.powerOnTop:SetChecked(unitConfig.powerOnTop == true)
+            end
             self:SetNumericControlValue(unitWidgets.fontSize, unitConfig.fontSize or 12)
             self:SetNumericControlValue(unitWidgets.x, unitConfig.x or 0)
             self:SetNumericControlValue(unitWidgets.y, unitConfig.y or 0)
+            local castbarConfig = unitConfig.castbar or {}
+            if unitWidgets.castbarEnabled then
+                unitWidgets.castbarEnabled:SetChecked(castbarConfig.enabled ~= false)
+            end
+            if unitWidgets.castbarDetach then
+                unitWidgets.castbarDetach:SetChecked(castbarConfig.detached == true)
+            end
+            if unitWidgets.castbarWidth then
+                self:SetNumericControlValue(unitWidgets.castbarWidth, castbarConfig.width or unitConfig.width or 220)
+            end
+            if unitWidgets.castbarHeight then
+                self:SetNumericControlValue(unitWidgets.castbarHeight, castbarConfig.height or 20)
+            end
+            if unitWidgets.castbarShowIcon then
+                unitWidgets.castbarShowIcon:SetChecked(castbarConfig.showIcon ~= false)
+            end
+            if unitWidgets.castbarHideBlizzard then
+                unitWidgets.castbarHideBlizzard:SetChecked(castbarConfig.hideBlizzardCastBar == true)
+            end
         end
     end
 end

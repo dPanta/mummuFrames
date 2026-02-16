@@ -24,6 +24,15 @@ local FRAME_NAME_BY_UNIT = {
     focus = "mummuFramesFocusFrame",
     focustarget = "mummuFramesFocusTargetFrame",
 }
+-- Map unit tokens to Blizzard frame globals that can be visually hidden.
+local BLIZZARD_FRAME_NAME_BY_UNIT = {
+    player = "PlayerFrame",
+    pet = "PetFrame",
+    target = "TargetFrame",
+    targettarget = "TargetFrameToT",
+    focus = "FocusFrame",
+    focustarget = "FocusFrameToT",
+}
 -- Fast lookup table for unit events we care about.
 local SUPPORTED_UNITS = {
     player = true,
@@ -51,6 +60,21 @@ local AURA_FILTER_BY_SECTION = {
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 -- Hard stop for aura scanning to avoid unbounded loops.
 local MAX_AURA_SCAN = 40
+
+-- Strip Blizzard taint from a secret number by round-tripping through a string.
+local function detaintNumber(value)
+    return tonumber(tostring(value)) or 0
+end
+
+-- Cast bar color constants.
+local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
+local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
+
+-- Units that support cast bars.
+local CASTBAR_UNITS = {
+    player = true,
+    target = true,
+}
 
 -- Resolve health bar color using class, reaction, then fallback.
 local function resolveHealthColor(unitToken, exists)
@@ -494,6 +518,7 @@ function UnitFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
+    self:RestoreAllBlizzardUnitFrames()
     self:HideAll()
 end
 
@@ -532,24 +557,19 @@ function UnitFrames:EnsureEditModeSelection(frame)
         return
     end
 
-    local selection
-    local okTemplate, templateSelection = pcall(CreateFrame, "Frame", nil, frame, "EditModeSystemSelectionTemplate")
-    if okTemplate and templateSelection then
-        selection = templateSelection
-    else
-        selection = CreateFrame("Frame", nil, frame)
-        local border = selection:CreateTexture(nil, "OVERLAY")
-        border:SetPoint("TOPLEFT", -2, 2)
-        border:SetPoint("BOTTOMRIGHT", 2, -2)
-        border:SetColorTexture(0.29, 0.74, 0.98, 0.55)
-        selection._fallbackBorder = border
+    -- Avoid EditModeSystemSelectionTemplate here; it expects Blizzard system wiring.
+    local selection = CreateFrame("Frame", nil, frame)
+    local border = selection:CreateTexture(nil, "OVERLAY")
+    border:SetPoint("TOPLEFT", -2, 2)
+    border:SetPoint("BOTTOMRIGHT", 2, -2)
+    border:SetColorTexture(0.29, 0.74, 0.98, 0.55)
+    selection._fallbackBorder = border
 
-        local label = selection:CreateFontString(nil, "OVERLAY")
-        label:SetPoint("TOP", 0, 10)
-        label:SetTextColor(1, 1, 1, 1)
-        Style:ApplyFont(label, 11, "OUTLINE")
-        selection.Label = label
-    end
+    local label = selection:CreateFontString(nil, "OVERLAY")
+    label:SetPoint("TOP", 0, 10)
+    label:SetTextColor(1, 1, 1, 1)
+    Style:ApplyFont(label, 11, "OUTLINE")
+    selection.Label = label
 
     selection:SetAllPoints(frame)
     selection:EnableMouse(true)
@@ -667,6 +687,16 @@ function UnitFrames:OnEditModeEnter()
             if frame.EditModeSelection then
                 frame.EditModeSelection:Show()
             end
+            -- Show cast bar edit overlay (draggable only when detached).
+            if frame.CastBar and frame.CastBar._enabled then
+                if frame.CastBar._detached then
+                    self:EnsureCastBarEditModeSelection(frame)
+                    frame.CastBar:SetMovable(true)
+                    if frame.CastBar.EditModeSelection then
+                        frame.CastBar.EditModeSelection:Show()
+                    end
+                end
+            end
         end
     end
 
@@ -684,6 +714,14 @@ function UnitFrames:OnEditModeExit()
             frame:EnableMouse(true)
             if frame.EditModeSelection then
                 frame.EditModeSelection:Hide()
+            end
+            -- Hide cast bar edit overlay.
+            if frame.CastBar then
+                frame.CastBar:StopMovingOrSizing()
+                frame.CastBar._editModeMoving = false
+                if frame.CastBar.EditModeSelection then
+                    frame.CastBar.EditModeSelection:Hide()
+                end
             end
         end
     end
@@ -712,6 +750,16 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_DISPLAYPOWER", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_NAME_UPDATE", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitAura)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_START", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_STOP", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_FAILED", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_INTERRUPTED", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_DELAYED", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_START", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_STOP", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_UPDATE", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_INTERRUPTIBLE", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", self.OnUnitCastEvent)
 end
 
 -- Refresh all frames after world login/loading events.
@@ -762,6 +810,16 @@ function UnitFrames:OnUnitTarget(_, unitToken)
 
     if unitToken == "focus" then
         self:RefreshFrame("focustarget")
+    end
+end
+
+-- Handle all cast-related events for player and target.
+function UnitFrames:OnUnitCastEvent(_, unitToken)
+    if CASTBAR_UNITS[unitToken] then
+        local frame = self.frames[unitToken]
+        if frame and frame.CastBar then
+            self:RefreshCastBar(frame, unitToken, UnitExists(unitToken), false)
+        end
     end
 end
 
@@ -1109,11 +1167,147 @@ function UnitFrames:CreateFocusTargetFrame()
     return self:CreateUnitFrame("focustarget")
 end
 
+-- Return the Blizzard unit frame mapped to a unit token, if available.
+function UnitFrames:GetBlizzardUnitFrame(unitToken)
+    local frameName = BLIZZARD_FRAME_NAME_BY_UNIT[unitToken]
+    if not frameName then
+        return nil
+    end
+
+    return _G[frameName]
+end
+
+-- Apply visual hide/show state for one Blizzard unit frame.
+function UnitFrames:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
+    local frame = self:GetBlizzardUnitFrame(unitToken)
+    if not frame then
+        return
+    end
+
+    if not frame._mummuHideInit then
+        frame._mummuHideInit = true
+        frame._mummuOriginalAlpha = frame:GetAlpha()
+        if type(frame.IsMouseEnabled) == "function" then
+            frame._mummuOriginalMouseEnabled = frame:IsMouseEnabled()
+        end
+    end
+
+    if not frame._mummuHideHooked and type(frame.HookScript) == "function" then
+        frame:HookScript("OnShow", function(shownFrame)
+            if shownFrame._mummuHideRequested then
+                shownFrame:SetAlpha(0)
+                if not InCombatLockdown() and type(shownFrame.EnableMouse) == "function" then
+                    shownFrame:EnableMouse(false)
+                end
+            end
+        end)
+        frame._mummuHideHooked = true
+    end
+
+    frame._mummuHideRequested = shouldHide and true or false
+    if shouldHide then
+        frame:SetAlpha(0)
+        if not InCombatLockdown() and type(frame.EnableMouse) == "function" then
+            frame:EnableMouse(false)
+        end
+        return
+    end
+
+    frame:SetAlpha(frame._mummuOriginalAlpha or 1)
+    if not InCombatLockdown() and type(frame.EnableMouse) == "function" then
+        if frame._mummuOriginalMouseEnabled ~= nil then
+            frame:EnableMouse(frame._mummuOriginalMouseEnabled)
+        else
+            frame:EnableMouse(true)
+        end
+    end
+end
+
+-- Restore all supported Blizzard unit frames to their original visual state.
+function UnitFrames:RestoreAllBlizzardUnitFrames()
+    for unitToken in pairs(BLIZZARD_FRAME_NAME_BY_UNIT) do
+        self:SetBlizzardUnitFrameHidden(unitToken, false)
+    end
+end
+
+-- Map unit tokens to Blizzard cast bar global names.
+local BLIZZARD_CASTBAR_BY_UNIT = {
+    player = "PlayerCastingBarFrame",
+    target = "TargetFrameSpellBar",
+}
+
+-- Apply visual hide/show for a Blizzard cast bar frame.
+function UnitFrames:SetBlizzardCastBarHidden(unitToken, shouldHide)
+    local frameName = BLIZZARD_CASTBAR_BY_UNIT[unitToken]
+    if not frameName then
+        return
+    end
+
+    local frame = _G[frameName]
+    if not frame then
+        return
+    end
+
+    if not frame._mummuHideInit then
+        frame._mummuHideInit = true
+        frame._mummuOriginalAlpha = frame:GetAlpha()
+    end
+
+    if not frame._mummuHideHooked and type(frame.HookScript) == "function" then
+        -- Hook both OnShow and OnUpdate to catch Blizzard alpha resets.
+        frame:HookScript("OnShow", function(shownFrame)
+            if shownFrame._mummuHideRequested then
+                shownFrame:SetAlpha(0)
+            end
+        end)
+        frame:HookScript("OnUpdate", function(shownFrame)
+            if shownFrame._mummuHideRequested and shownFrame:GetAlpha() > 0 then
+                shownFrame:SetAlpha(0)
+            end
+        end)
+        frame._mummuHideHooked = true
+    end
+
+    frame._mummuHideRequested = shouldHide and true or false
+    if shouldHide then
+        frame:SetAlpha(0)
+    else
+        frame:SetAlpha(frame._mummuOriginalAlpha or 1)
+    end
+end
+
+-- Apply hide/show settings for all Blizzard unit frames based on unit options.
+function UnitFrames:ApplyBlizzardFrameVisibility()
+    if not self.dataHandle then
+        return
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local addonEnabled = profile and profile.enabled ~= false
+
+    for i = 1, #FRAME_ORDER do
+        local unitToken = FRAME_ORDER[i]
+        local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+        local shouldHide = addonEnabled and unitConfig.hideBlizzardFrame == true
+        self:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
+
+        -- Hide Blizzard cast bars when configured.
+        if CASTBAR_UNITS[unitToken] then
+            local castbarConfig = unitConfig.castbar or {}
+            local shouldHideCastBar = addonEnabled and castbarConfig.hideBlizzardCastBar == true
+            self:SetBlizzardCastBarHidden(unitToken, shouldHideCastBar)
+        end
+    end
+end
+
 -- Hide all cached unit frames.
 function UnitFrames:HideAll()
     for _, frame in pairs(self.frames) do
         if frame then
             self:SetFrameVisibility(frame, false)
+            if frame.CastBar then
+                stopCastBarTimer(frame.CastBar)
+            end
         end
     end
 end
@@ -1188,8 +1382,229 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
     frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
 end
 
+-- Start the OnUpdate timer to animate the cast bar progress.
+local function startCastBarTimer(castBar)
+    if castBar._timerActive then
+        return
+    end
+    castBar._timerActive = true
+    castBar:SetScript("OnUpdate", function(self, _)
+        if not self._castEnd or not self._castStart then
+            return
+        end
+
+        local now = GetTime()
+        local duration = self._castEnd - self._castStart
+        if duration <= 0 then
+            return
+        end
+
+        local elapsed = now - self._castStart
+        local progress
+
+        if self._channeling then
+            progress = 1 - (elapsed / duration)
+        else
+            progress = elapsed / duration
+        end
+
+        progress = math.max(0, math.min(1, progress))
+        self.Bar:SetValue(progress)
+
+        local remaining = math.max(0, self._castEnd - now)
+        local okFmt, text = pcall(string.format, "%.1fs", remaining)
+        self.TimeText:SetText(okFmt and text or "")
+
+        if now >= self._castEnd then
+            self:SetScript("OnUpdate", nil)
+            self._timerActive = false
+            self:Hide()
+        end
+    end)
+end
+
+-- Stop the OnUpdate timer and hide the cast bar.
+local function stopCastBarTimer(castBar)
+    castBar:SetScript("OnUpdate", nil)
+    castBar._timerActive = false
+    castBar:Hide()
+end
+
+-- Refresh one frame's cast bar state from current casting/channeling info.
+function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
+    if not frame.CastBar then
+        return
+    end
+
+    local castBar = frame.CastBar
+    if not castBar._enabled then
+        stopCastBarTimer(castBar)
+        return
+    end
+
+    if not exists and not self.editModeActive then
+        stopCastBarTimer(castBar)
+        return
+    end
+
+    -- In edit mode, show a static preview bar so the user can see placement.
+    if self.editModeActive then
+        castBar.Bar:SetMinMaxValues(0, 1)
+        castBar.Bar:SetValue(0.6)
+        castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
+        castBar.SpellText:SetText(unitToken == "player" and UnitName("player") or L.UNIT_TEST_TARGET)
+        castBar.TimeText:SetText("")
+        castBar.Icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        castBar:SetScript("OnUpdate", nil)
+        castBar._timerActive = false
+        castBar:Show()
+        return
+    end
+
+    -- Check for active cast or channel.
+    local spellName, _, iconTexture, startTimeMs, endTimeMs, _, _, notInterruptible
+    if type(UnitCastingInfo) == "function" then
+        spellName, _, iconTexture, startTimeMs, endTimeMs, _, _, notInterruptible = UnitCastingInfo(unitToken)
+    end
+
+    if spellName then
+        castBar._castStart = detaintNumber(startTimeMs) / 1000
+        castBar._castEnd = detaintNumber(endTimeMs) / 1000
+        castBar._channeling = false
+        castBar.SpellText:SetText(spellName)
+        castBar.Icon:SetTexture(iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        if tostring(notInterruptible) == "true" then
+            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
+        else
+            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
+        end
+
+        castBar:Show()
+        startCastBarTimer(castBar)
+        return
+    end
+
+    -- Check for channel.
+    local channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible
+    if type(UnitChannelInfo) == "function" then
+        channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible = UnitChannelInfo(unitToken)
+    end
+
+    if channelName then
+        castBar._castStart = detaintNumber(channelStartMs) / 1000
+        castBar._castEnd = detaintNumber(channelEndMs) / 1000
+        castBar._channeling = true
+        castBar.SpellText:SetText(channelName)
+        castBar.Icon:SetTexture(channelIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        if tostring(channelNotInterruptible) == "true" then
+            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
+        else
+            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
+        end
+
+        castBar:Show()
+        startCastBarTimer(castBar)
+        return
+    end
+
+    -- No active cast or channel.
+    stopCastBarTimer(castBar)
+end
+
+-- Create an Edit Mode selection overlay for a detached cast bar.
+function UnitFrames:EnsureCastBarEditModeSelection(frame)
+    local castBar = frame.CastBar
+    if not castBar or castBar.EditModeSelection then
+        return
+    end
+
+    local selection = CreateFrame("Frame", nil, castBar)
+    local border = selection:CreateTexture(nil, "OVERLAY")
+    border:SetPoint("TOPLEFT", -2, 2)
+    border:SetPoint("BOTTOMRIGHT", 2, -2)
+    border:SetColorTexture(0.98, 0.74, 0.29, 0.55)
+    selection._fallbackBorder = border
+
+    local label = selection:CreateFontString(nil, "OVERLAY")
+    label:SetPoint("TOP", 0, 10)
+    label:SetTextColor(1, 1, 1, 1)
+    Style:ApplyFont(label, 11, "OUTLINE")
+    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Cast Bar"
+    label:SetText(labelText)
+    selection.Label = label
+
+    selection:SetAllPoints(castBar)
+    selection:EnableMouse(true)
+    selection:RegisterForDrag("LeftButton")
+    selection:SetClampedToScreen(true)
+    selection:SetFrameStrata("DIALOG")
+    selection:SetFrameLevel(castBar:GetFrameLevel() + 30)
+
+    selection:SetScript("OnDragStart", function()
+        if not self.editModeActive or InCombatLockdown() then
+            return
+        end
+        castBar:SetMovable(true)
+        castBar:StartMoving()
+        castBar._editModeMoving = true
+    end)
+
+    selection:SetScript("OnDragStop", function()
+        if not castBar._editModeMoving then
+            return
+        end
+        castBar:StopMovingOrSizing()
+        castBar._editModeMoving = false
+        self:SaveCastBarAnchorFromEditMode(frame)
+    end)
+
+    castBar.EditModeSelection = selection
+    selection:Hide()
+end
+
+-- Persist moved cast bar position into the addon's unit config.
+function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
+    if not frame or not frame.CastBar or not self.dataHandle or not frame.unitToken then
+        return
+    end
+
+    local castBar = frame.CastBar
+    local centerX, centerY = castBar:GetCenter()
+    local parentX, parentY = UIParent:GetCenter()
+    if not centerX or not centerY or not parentX or not parentY then
+        return
+    end
+
+    local offsetX = centerX - parentX
+    local offsetY = centerY - parentY
+    local pixel = (Style and Style.GetPixelSize and Style:GetPixelSize()) or 1
+    local centerSnapThreshold = 10 * pixel
+    if math.abs(offsetX) <= centerSnapThreshold then
+        offsetX = 0
+    end
+    if math.abs(offsetY) <= centerSnapThreshold then
+        offsetY = 0
+    end
+
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        offsetX = Style:Snap(offsetX)
+        offsetY = Style:Snap(offsetY)
+    else
+        offsetX = math.floor(offsetX + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    self.dataHandle:SetUnitConfig(frame.unitToken, "castbar.x", offsetX)
+    self.dataHandle:SetUnitConfig(frame.unitToken, "castbar.y", offsetY)
+    self:RefreshFrame(frame.unitToken, true)
+end
+
 -- Refresh every supported frame, or hide all when addon is disabled.
 function UnitFrames:RefreshAll(forceLayout)
+    self:ApplyBlizzardFrameVisibility()
+
     local profile = self.dataHandle:GetProfile()
     if profile.enabled == false and not self.editModeActive then
         -- Defer hide operations when combat lockdown blocks frame updates.
@@ -1287,6 +1702,9 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout)
 
     self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
     self:RefreshPlayerStatusIcons(frame, unitToken)
+    if CASTBAR_UNITS[unitToken] then
+        self:RefreshCastBar(frame, unitToken, exists, previewMode)
+    end
     self:SetFrameVisibility(frame, true)
 end
 

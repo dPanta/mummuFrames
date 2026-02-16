@@ -87,6 +87,7 @@ end
 -- Create small player-only status badges shown above the frame.
 function GlobalFrames:CreatePlayerStatusIcons(frame)
     local container = CreateFrame("Frame", nil, frame)
+    container:SetFrameStrata("HIGH")
     container:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 1, 2)
     container:SetSize(52, 14)
     container:Hide()
@@ -130,6 +131,69 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
         Leader = leader,
         Combat = combat,
     }
+end
+
+-- Create the cast bar widget attached to a unit frame.
+function GlobalFrames:CreateCastBar(frame)
+    local container = CreateFrame("Frame", nil, UIParent)
+    container:SetSize(200, 20)
+    container:SetFrameStrata("MEDIUM")
+    container:SetClampedToScreen(true)
+    container:Hide()
+
+    -- Class-colored border (1px frame).
+    local borderSize = 1
+    local borderTop = container:CreateTexture(nil, "BORDER")
+    borderTop:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+    borderTop:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+    borderTop:SetHeight(borderSize)
+    borderTop:SetColorTexture(1, 1, 1, 1)
+    local borderBottom = container:CreateTexture(nil, "BORDER")
+    borderBottom:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
+    borderBottom:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+    borderBottom:SetHeight(borderSize)
+    borderBottom:SetColorTexture(1, 1, 1, 1)
+    local borderLeft = container:CreateTexture(nil, "BORDER")
+    borderLeft:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+    borderLeft:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
+    borderLeft:SetWidth(borderSize)
+    borderLeft:SetColorTexture(1, 1, 1, 1)
+    local borderRight = container:CreateTexture(nil, "BORDER")
+    borderRight:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+    borderRight:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+    borderRight:SetWidth(borderSize)
+    borderRight:SetColorTexture(1, 1, 1, 1)
+    container.BorderTextures = { borderTop, borderBottom, borderLeft, borderRight }
+
+    container.Background = Style:CreateBackground(container, 0.06, 0.06, 0.07, 0.9)
+
+    local inset = borderSize
+    local iconSize = 20
+    container.Icon = container:CreateTexture(nil, "ARTWORK")
+    container.Icon:SetPoint("TOPLEFT", container, "TOPLEFT", inset, -inset)
+    container.Icon:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", inset, inset)
+    container.Icon:SetWidth(iconSize)
+    container.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    local bar = self:CreateStatusBar(container)
+    bar:SetPoint("TOPLEFT", container.Icon, "TOPRIGHT", 1, 0)
+    bar:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -inset, inset)
+    bar:SetMinMaxValues(0, 1)
+    bar:SetValue(0)
+    bar:SetStatusBarColor(0.29, 0.52, 0.90, 1)
+    container.Bar = bar
+
+    container.SpellText = bar:CreateFontString(nil, "OVERLAY")
+    container.SpellText:SetDrawLayer("OVERLAY", 7)
+    container.SpellText:SetJustifyH("LEFT")
+
+    container.TimeText = bar:CreateFontString(nil, "OVERLAY")
+    container.TimeText:SetDrawLayer("OVERLAY", 7)
+    container.TimeText:SetJustifyH("RIGHT")
+
+    container.parentUnitFrame = frame
+    container.unitToken = frame.unitToken
+    frame.CastBar = container
 end
 
 -- Create the base secure unit frame container and core widgets.
@@ -178,6 +242,10 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
+
+    if unitToken == "player" or unitToken == "target" then
+        self:CreateCastBar(frame)
+    end
 
     if unitToken == "player" then
         self:CreatePlayerStatusIcons(frame)
@@ -249,15 +317,26 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     local textInset = pixelPerfect and Style:Snap(6) or 6
 
     frame.PowerBar:ClearAllPoints()
-    frame.PowerBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-    frame.PowerBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+    frame.HealthBar:ClearAllPoints()
     frame.PowerBar:SetHeight(powerHeight)
 
-    frame.HealthBar:ClearAllPoints()
-    frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
-    frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-    frame.HealthBar:SetPoint("BOTTOMLEFT", frame.PowerBar, "TOPLEFT", 0, border)
-    frame.HealthBar:SetPoint("BOTTOMRIGHT", frame.PowerBar, "TOPRIGHT", 0, border)
+    if unitConfig.powerOnTop then
+        frame.PowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+        frame.PowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+
+        frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+        frame.HealthBar:SetPoint("TOPLEFT", frame.PowerBar, "BOTTOMLEFT", 0, -border)
+        frame.HealthBar:SetPoint("TOPRIGHT", frame.PowerBar, "BOTTOMRIGHT", 0, -border)
+    else
+        frame.PowerBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+        frame.PowerBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+
+        frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+        frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+        frame.HealthBar:SetPoint("BOTTOMLEFT", frame.PowerBar, "TOPLEFT", 0, border)
+        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame.PowerBar, "TOPRIGHT", 0, border)
+    end
 
     frame.NameText:ClearAllPoints()
     frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)
@@ -325,6 +404,93 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.StatusIcons.Combat:SetSize(combatIconSize, combatIconSize)
         frame.StatusIcons.Combat.Icon:SetAllPoints()
         frame.StatusIcons.Combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
+    end
+
+    -- Cast bar layout for player and target.
+    if frame.CastBar then
+        local castbarConfig = unitConfig.castbar or {}
+        local cbEnabled = castbarConfig.enabled ~= false
+        local cbDetached = castbarConfig.detached == true
+        local cbWidth = Util:Clamp(tonumber(castbarConfig.width) or width, 50, 600)
+        local cbHeight = Util:Clamp(tonumber(castbarConfig.height) or 20, 8, 40)
+
+        if pixelPerfect then
+            cbWidth = Style:Snap(cbWidth)
+            cbHeight = Style:Snap(cbHeight)
+        else
+            cbWidth = math.floor(cbWidth + 0.5)
+            cbHeight = math.floor(cbHeight + 0.5)
+        end
+
+        frame.CastBar:ClearAllPoints()
+
+        if cbDetached then
+            local cbX = tonumber(castbarConfig.x) or 0
+            local cbY = tonumber(castbarConfig.y) or 0
+            if pixelPerfect then
+                cbX = Style:Snap(cbX)
+                cbY = Style:Snap(cbY)
+            else
+                cbX = math.floor(cbX + 0.5)
+                cbY = math.floor(cbY + 0.5)
+            end
+            frame.CastBar:SetSize(cbWidth, cbHeight)
+            if not InCombatLockdown() then
+                frame.CastBar:SetPoint("CENTER", UIParent, "CENTER", cbX, cbY)
+            end
+        else
+            frame.CastBar:SetSize(width, cbHeight)
+            frame.CastBar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -border)
+            frame.CastBar:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -border)
+        end
+
+        -- Dark gray border.
+        local cbBorderInset = 1
+        if frame.CastBar.BorderTextures then
+            for _, tex in ipairs(frame.CastBar.BorderTextures) do
+                tex:SetColorTexture(0.2, 0.2, 0.2, 1)
+            end
+        end
+
+        -- Icon visibility.
+        local cbShowIcon = castbarConfig.showIcon ~= false
+        frame.CastBar.Icon:SetShown(cbShowIcon)
+        local innerHeight = cbHeight - cbBorderInset * 2
+        frame.CastBar.Icon:SetWidth(cbShowIcon and math.max(1, innerHeight) or 0)
+
+        -- Re-anchor bar based on icon visibility.
+        frame.CastBar.Bar:ClearAllPoints()
+        if cbShowIcon then
+            frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar.Icon, "TOPRIGHT", 1, 0)
+        else
+            frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar, "TOPLEFT", cbBorderInset, -cbBorderInset)
+        end
+        frame.CastBar.Bar:SetPoint("BOTTOMRIGHT", frame.CastBar, "BOTTOMRIGHT", -cbBorderInset, cbBorderInset)
+
+        -- Update bar texture and fonts.
+        Style:ApplyStatusBarTexture(frame.CastBar.Bar)
+
+        local cbTextInset = pixelPerfect and Style:Snap(4) or 4
+        local cbFontSize = Util:Clamp(math.floor(cbHeight * 0.55 + 0.5), 8, 20)
+
+        frame.CastBar.SpellText:ClearAllPoints()
+        frame.CastBar.SpellText:SetPoint("LEFT", frame.CastBar.Bar, "LEFT", cbTextInset, 0)
+        frame.CastBar.SpellText:SetPoint("RIGHT", frame.CastBar.TimeText, "LEFT", -cbTextInset, 0)
+
+        frame.CastBar.TimeText:ClearAllPoints()
+        frame.CastBar.TimeText:SetPoint("RIGHT", frame.CastBar.Bar, "RIGHT", -cbTextInset, 0)
+
+        Style:ApplyFont(frame.CastBar.SpellText, cbFontSize, "OUTLINE")
+        Style:ApplyFont(frame.CastBar.TimeText, cbFontSize, "OUTLINE")
+        frame.CastBar.SpellText:SetTextColor(1, 1, 1, 1)
+        frame.CastBar.TimeText:SetTextColor(1, 1, 1, 1)
+        frame.CastBar.SpellText:SetShadowColor(0, 0, 0, 0)
+        frame.CastBar.TimeText:SetShadowColor(0, 0, 0, 0)
+        frame.CastBar.SpellText:SetShadowOffset(0, 0)
+        frame.CastBar.TimeText:SetShadowOffset(0, 0)
+
+        frame.CastBar._enabled = cbEnabled
+        frame.CastBar._detached = cbDetached
     end
 end
 
