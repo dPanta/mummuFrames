@@ -3,10 +3,51 @@ local _, ns = ...
 local Style = {}
 local fontValidationCache = {}
 local availableFontsCache = nil
+local availableBarTexturesCache = nil
 local fontProbe = nil
+local lsm = nil
+local lsmCallbacksRegistered = false
 
 Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
+
+local function normalizeMediaPath(path)
+    if type(path) ~= "string" then
+        return nil
+    end
+    return string.lower(string.gsub(path, "/", "\\"))
+end
+
+local function getLSM()
+    if lsm then
+        return lsm
+    end
+
+    local libStub = _G.LibStub or LibStub
+    if type(libStub) == "table" and type(libStub.GetLibrary) == "function" then
+        lsm = libStub:GetLibrary("LibSharedMedia-3.0", true)
+    elseif type(libStub) == "function" then
+        local ok, found = pcall(libStub, "LibSharedMedia-3.0", true)
+        if ok then
+            lsm = found
+        end
+    end
+
+    if lsm and not lsmCallbacksRegistered and type(lsm.RegisterCallback) == "function" then
+        local function invalidateMediaCaches()
+            availableFontsCache = nil
+            availableBarTexturesCache = nil
+        end
+
+        -- LibSharedMedia embeds CallbackHandler methods on itself with signature:
+        -- RegisterCallback(eventName, method[, arg])
+        lsm:RegisterCallback("LibSharedMedia_Registered", invalidateMediaCaches)
+        lsm:RegisterCallback("LibSharedMedia_SetGlobal", invalidateMediaCaches)
+        lsmCallbacksRegistered = true
+    end
+
+    return lsm
+end
 
 -- Read style settings from the active profile when available.
 local function getProfileStyle()
@@ -113,38 +154,137 @@ function Style:GetAvailableFonts(forceRefresh)
     local seenPaths = {}
     local catalog = ns.FontCatalog and ns.FontCatalog.list or {}
 
-    for i = 1, #catalog do
-        local entry = catalog[i]
-        local path = type(entry) == "table" and entry.path or nil
-        if type(path) == "string" and path ~= "" and not seenPaths[path] then
-            available[#available + 1] = {
-                key = entry.key or path,
-                label = entry.label or path,
-                path = path,
-            }
-            seenPaths[path] = true
+    local function addFontOption(key, label, path)
+        if type(path) ~= "string" or path == "" then
+            return
+        end
+
+        local normalized = normalizeMediaPath(path)
+        if normalized and seenPaths[normalized] then
+            return
+        end
+
+        available[#available + 1] = {
+            key = key or path,
+            label = label or path,
+            path = path,
+        }
+
+        if normalized then
+            seenPaths[normalized] = true
         end
     end
 
-    if not seenPaths[self.DEFAULT_FONT] and type(self.DEFAULT_FONT) == "string" and self.DEFAULT_FONT ~= "" then
-        available[#available + 1] = {
-            key = "default",
-            label = "Default",
-            path = self.DEFAULT_FONT,
-        }
-        seenPaths[self.DEFAULT_FONT] = true
+    for i = 1, #catalog do
+        local entry = catalog[i]
+        local path = type(entry) == "table" and entry.path or nil
+        if type(path) == "string" and path ~= "" then
+            addFontOption(entry.key or path, entry.label or path, path)
+        end
     end
 
-    if #available == 0 and type(STANDARD_TEXT_FONT) == "string" and STANDARD_TEXT_FONT ~= "" then
-        available[#available + 1] = {
-            key = "standard",
-            label = "Blizzard Default",
-            path = STANDARD_TEXT_FONT,
-        }
+    local lsmRef = getLSM()
+    if lsmRef and type(lsmRef.Fetch) == "function" then
+        local names = nil
+        if type(lsmRef.List) == "function" then
+            names = lsmRef:List("font")
+        end
+        if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
+            local fontTable = lsmRef:HashTable("font")
+            if type(fontTable) == "table" then
+                names = {}
+                for name in pairs(fontTable) do
+                    names[#names + 1] = name
+                end
+                table.sort(names)
+            end
+        end
+
+        if type(names) == "table" then
+            for i = 1, #names do
+                local mediaName = names[i]
+                local mediaPath = lsmRef:Fetch("font", mediaName, true)
+                if self:IsFontPathUsable(mediaPath) then
+                    addFontOption("lsm_font_" .. mediaName, mediaName, mediaPath)
+                end
+            end
+        end
+    end
+
+    addFontOption("default", "Default", self.DEFAULT_FONT)
+
+    if #available == 0 then
+        addFontOption("standard", "Blizzard Default", STANDARD_TEXT_FONT)
     end
 
     availableFontsCache = available
     return availableFontsCache
+end
+
+-- Return discovered status bar textures from the addon and LibSharedMedia.
+function Style:GetAvailableBarTextures(forceRefresh)
+    if forceRefresh then
+        availableBarTexturesCache = nil
+    end
+
+    if availableBarTexturesCache then
+        return availableBarTexturesCache
+    end
+
+    local available = {}
+    local seenPaths = {}
+
+    local function addTextureOption(key, label, path)
+        if type(path) ~= "string" or path == "" then
+            return
+        end
+
+        local normalized = normalizeMediaPath(path)
+        if normalized and seenPaths[normalized] then
+            return
+        end
+
+        available[#available + 1] = {
+            key = key or path,
+            label = label or path,
+            path = path,
+        }
+
+        if normalized then
+            seenPaths[normalized] = true
+        end
+    end
+
+    addTextureOption("default", "Default", self.DEFAULT_BAR_TEXTURE)
+
+    local lsmRef = getLSM()
+    if lsmRef and type(lsmRef.Fetch) == "function" then
+        local names = nil
+        if type(lsmRef.List) == "function" then
+            names = lsmRef:List("statusbar")
+        end
+        if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
+            local textureTable = lsmRef:HashTable("statusbar")
+            if type(textureTable) == "table" then
+                names = {}
+                for name in pairs(textureTable) do
+                    names[#names + 1] = name
+                end
+                table.sort(names)
+            end
+        end
+
+        if type(names) == "table" then
+            for i = 1, #names do
+                local mediaName = names[i]
+                local mediaPath = lsmRef:Fetch("statusbar", mediaName, true)
+                addTextureOption("lsm_statusbar_" .. mediaName, mediaName, mediaPath)
+            end
+        end
+    end
+
+    availableBarTexturesCache = available
+    return availableBarTexturesCache
 end
 
 -- Return the preferred fallback font path for this addon.
@@ -163,6 +303,22 @@ function Style:GetDefaultFontPath()
     return self.DEFAULT_FONT
 end
 
+-- Return the preferred fallback bar texture path for this addon.
+function Style:GetDefaultBarTexturePath()
+    local available = self:GetAvailableBarTextures()
+    for i = 1, #available do
+        if available[i].path == self.DEFAULT_BAR_TEXTURE then
+            return self.DEFAULT_BAR_TEXTURE
+        end
+    end
+
+    if available[1] and available[1].path then
+        return available[1].path
+    end
+
+    return self.DEFAULT_BAR_TEXTURE
+end
+
 -- Return the configured font path, or the addon default.
 function Style:GetFontPath()
     local style = getProfileStyle()
@@ -177,7 +333,12 @@ end
 -- Return the configured bar texture path, or the addon default.
 function Style:GetBarTexturePath()
     local style = getProfileStyle()
-    return (style and style.barTexturePath) or self.DEFAULT_BAR_TEXTURE
+    local configuredPath = style and style.barTexturePath or nil
+    if type(configuredPath) == "string" and configuredPath ~= "" then
+        return configuredPath
+    end
+
+    return self:GetDefaultBarTexturePath()
 end
 
 -- Apply font settings with safe fallbacks if a font fails to load.

@@ -3,6 +3,7 @@ local _, ns = ...
 local Util = {}
 
 local deferredQueue = {}
+local deferredQueueByKey = {}
 local deferredFrame = CreateFrame("Frame")
 deferredFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 -- Run queued callbacks as soon as combat restrictions are lifted.
@@ -17,6 +18,7 @@ deferredFrame:SetScript("OnEvent", function()
         end
     end
     wipe(deferredQueue)
+    wipe(deferredQueueByKey)
 end)
 
 -- Print a namespaced addon message to chat.
@@ -79,16 +81,36 @@ function Util:GetCharacterKey()
 end
 
 -- Run now when possible, or queue work until combat ends.
-function Util:RunWhenOutOfCombat(fn, deferredMessage)
+-- Optional key de-duplicates queued work while still in combat.
+function Util:RunWhenOutOfCombat(fn, deferredMessage, key)
     if type(fn) ~= "function" then
         return false
     end
 
     if InCombatLockdown() then
-        table.insert(deferredQueue, {
-            fn = fn,
-        })
-        if deferredMessage then
+        local queuedNew = true
+        if type(key) == "string" and key ~= "" then
+            local existingIndex = deferredQueueByKey[key]
+            if existingIndex then
+                deferredQueue[existingIndex] = {
+                    fn = fn,
+                    key = key,
+                }
+                queuedNew = false
+            else
+                deferredQueue[#deferredQueue + 1] = {
+                    fn = fn,
+                    key = key,
+                }
+                deferredQueueByKey[key] = #deferredQueue
+            end
+        else
+            deferredQueue[#deferredQueue + 1] = {
+                fn = fn,
+            }
+        end
+
+        if deferredMessage and queuedNew then
             self:Print(deferredMessage)
         end
         return false

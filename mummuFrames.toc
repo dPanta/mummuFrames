@@ -2,8 +2,12 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 0.4.0
+## Version: 0.5.0
 ## SavedVariables: mummuFramesDB
+## OptionalDeps: LibSharedMedia-3.0, SharedMedia
+
+# Libraries
+Libs\lib.xml
 
 # Locales
 Locales\enUS.lua

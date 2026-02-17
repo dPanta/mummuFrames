@@ -4,17 +4,7 @@ local _, ns = ...
 -- Re-run this script after adding/removing files in Fonts/.
 ns.FontCatalog = {
     list = {
-        { key = "Dosis_Bold", label = "Dosis Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\Dosis-Bold.ttf" },
-        { key = "Dosis_ExtraBold", label = "Dosis Extra Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\Dosis-ExtraBold.ttf" },
         { key = "expressway", label = "Expressway", path = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf" },
         { key = "Fredoka_SemiBold", label = "Fredoka Semi Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\Fredoka-SemiBold.ttf" },
-        { key = "HammersmithOne_Regular", label = "Hammersmith One Regular", path = "Interface\\AddOns\\mummuFrames\\Fonts\\HammersmithOne-Regular.ttf" },
-        { key = "NotoSans_Bold", label = "Noto Sans Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\NotoSans-Bold.ttf" },
-        { key = "NotoSans_SemiBold", label = "Noto Sans Semi Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\NotoSans-SemiBold.ttf" },
-        { key = "PassionOne_Bold", label = "Passion One Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\PassionOne-Bold.ttf" },
-        { key = "PassionOne_Regular", label = "Passion One Regular", path = "Interface\\AddOns\\mummuFrames\\Fonts\\PassionOne-Regular.ttf" },
-        { key = "ProductSans_Bold", label = "Product Sans Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf" },
-        { key = "Quicksand_Bold", label = "Quicksand Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\Quicksand-Bold.ttf" },
-        { key = "Roboto_Bold", label = "Roboto Bold", path = "Interface\\AddOns\\mummuFrames\\Fonts\\Roboto-Bold.ttf" },
     },
 }

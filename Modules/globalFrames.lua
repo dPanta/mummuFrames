@@ -264,7 +264,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
 
-    if unitToken == "player" or unitToken == "target" then
+    if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
         self:CreateCastBar(frame)
     end
 

@@ -66,9 +66,21 @@ function EventRouter:Dispatch(eventName, ...)
         return
     end
 
+    local count = #list
+    if count == 1 then
+        local entry = list[1]
+        if entry and entry.owner and entry.handler then
+            local ok, err = pcall(entry.handler, entry.owner, eventName, ...)
+            if not ok then
+                geterrorhandler()(err)
+            end
+        end
+        return
+    end
+
     -- Use a snapshot so handlers can modify registrations safely.
     local snapshot = {}
-    for i = 1, #list do
+    for i = 1, count do
         snapshot[i] = list[i]
     end
 

@@ -60,6 +60,8 @@ local AURA_FILTER_BY_SECTION = {
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 -- Hard stop for aura scanning to avoid unbounded loops.
 local MAX_AURA_SCAN = 40
+-- Cache whether C_UnitAuras accepts a given unit token.
+local MODERN_AURA_API_BY_UNIT = {}
 
 -- Cast bar color constants.
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
@@ -72,6 +74,30 @@ local SECONDARY_POWER_EMPTY_ALPHA = 0.22
 local CASTBAR_UNITS = {
     player = true,
     target = true,
+    focus = true,
+}
+
+local REFRESH_OPTIONS_FULL = {
+    vitals = true,
+    auras = true,
+    statusIcons = true,
+    secondaryPower = true,
+    castbar = true,
+    visibility = true,
+}
+
+local REFRESH_OPTIONS_VITALS = {
+    vitals = true,
+    secondaryPower = true,
+    visibility = true,
+}
+
+local REFRESH_OPTIONS_AURAS = {
+    auras = true,
+}
+
+local REFRESH_OPTIONS_CASTBAR = {
+    castbar = true,
 }
 
 local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
@@ -238,10 +264,27 @@ end
 -- Read one aura entry safely from the active API available on this client.
 local function getAuraDataByIndex(unitToken, index, filter)
     if C_UnitAuras and type(C_UnitAuras.GetAuraDataByIndex) == "function" then
-        local auraData = C_UnitAuras.GetAuraDataByIndex(unitToken, index, filter)
-        local normalized = normalizeAuraData(auraData)
-        if normalized then
-            return normalized
+        local modernSupport = MODERN_AURA_API_BY_UNIT[unitToken]
+        if modernSupport ~= false then
+            local auraData
+
+            if modernSupport == true then
+                auraData = C_UnitAuras.GetAuraDataByIndex(unitToken, index, filter)
+            else
+                -- Some compound unit tokens are rejected by C_UnitAuras; detect once then fall back.
+                local ok, result = pcall(C_UnitAuras.GetAuraDataByIndex, unitToken, index, filter)
+                if ok then
+                    MODERN_AURA_API_BY_UNIT[unitToken] = true
+                    auraData = result
+                else
+                    MODERN_AURA_API_BY_UNIT[unitToken] = false
+                end
+            end
+
+            local normalized = normalizeAuraData(auraData)
+            if normalized then
+                return normalized
+            end
         end
     end
 
@@ -877,7 +920,7 @@ end
 -- Refresh any supported unit frame on shared unit update events.
 function UnitFrames:OnUnitEvent(_, unitToken)
     if SUPPORTED_UNITS[unitToken] then
-        self:RefreshFrame(unitToken)
+        self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_VITALS)
     end
 end
 
@@ -893,13 +936,10 @@ function UnitFrames:OnUnitTarget(_, unitToken)
     end
 end
 
--- Handle all cast-related events for player and target.
+-- Handle all cast-related events for units with enabled cast bars.
 function UnitFrames:OnUnitCastEvent(_, unitToken)
     if CASTBAR_UNITS[unitToken] then
-        local frame = self.frames[unitToken]
-        if frame and frame.CastBar then
-            self:RefreshCastBar(frame, unitToken, UnitExists(unitToken), false)
-        end
+        self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_CASTBAR)
     end
 end
 
@@ -916,15 +956,7 @@ function UnitFrames:OnUnitAura(_, unitToken)
         return
     end
 
-    local frame = self.frames[unitToken]
-    if not frame then
-        return
-    end
-
-    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
-    local previewMode = (profile and profile.testMode == true) or self.editModeActive
-    local unitConfig = self.dataHandle and self.dataHandle:GetUnitConfig(unitToken) or nil
-    self:RefreshAuras(frame, unitToken, UnitExists(unitToken), previewMode, unitConfig)
+    self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_AURAS)
 end
 
 -- Create one aura icon frame with texture, stack count, and cooldown swipe.
@@ -1041,6 +1073,7 @@ function UnitFrames:ApplyAuraLayout(frame, unitConfig)
         local scale = Util:Clamp(tonumber(sectionConfig.scale) or 1, 0.5, 2)
         local maxIcons = Util:Clamp(math.floor((tonumber(sectionConfig.max) or 8) + 0.5), 1, 16)
         local spacing = pixelPerfect and Style:GetPixelSize() or 1
+        local growFromRight = string.find(anchorPoint, "RIGHT", 1, true) ~= nil
 
         if pixelPerfect then
             x = Style:Snap(x)
@@ -1052,14 +1085,39 @@ function UnitFrames:ApplyAuraLayout(frame, unitConfig)
             size = math.max(1, math.floor(size + 0.5))
         end
 
-        container:ClearAllPoints()
-        container:SetPoint(anchorPoint, frame, relativePoint, x, y)
-        container:SetScale(scale)
-        container:SetSize((size * maxIcons) + ((maxIcons - 1) * spacing), size)
+        local containerWidth = (size * maxIcons) + ((maxIcons - 1) * spacing)
+        local layoutChanged = container._anchorPoint ~= anchorPoint
+            or container._relativePoint ~= relativePoint
+            or container._offsetX ~= x
+            or container._offsetY ~= y
+            or container._scale ~= scale
+            or container._iconSize ~= size
+            or container._maxIcons ~= maxIcons
+            or container._spacing ~= spacing
+            or container._width ~= containerWidth
+            or container._growFromRight ~= growFromRight
+
+        if layoutChanged then
+            container:ClearAllPoints()
+            container:SetPoint(anchorPoint, frame, relativePoint, x, y)
+            container:SetScale(scale)
+            container:SetSize(containerWidth, size)
+            container._anchorPoint = anchorPoint
+            container._relativePoint = relativePoint
+            container._offsetX = x
+            container._offsetY = y
+            container._scale = scale
+            container._iconSize = size
+            container._maxIcons = maxIcons
+            container._spacing = spacing
+            container._width = containerWidth
+            container._growFromRight = growFromRight
+        end
+
         container.iconSize = size
         container.spacing = spacing
         container.maxIcons = maxIcons
-        container.growFromRight = string.find(anchorPoint, "RIGHT", 1, true) ~= nil
+        container.growFromRight = growFromRight
         container.enabled = auraEnabled and (sectionConfig.enabled ~= false)
         container.source = sectionName == "buffs" and (sectionConfig.source == "self" and "self" or "all") or nil
     end
@@ -1090,7 +1148,11 @@ function UnitFrames:ApplyAuraToIcon(container, sectionName, auraIndex, auraData)
     if not okSetCount then
         icon.CountText:SetText("")
     end
-    Style:ApplyFont(icon.CountText, math.max(8, math.floor((iconSize * 0.55) + 0.5)), "OUTLINE")
+    local countFontSize = math.max(8, math.floor((iconSize * 0.55) + 0.5))
+    if icon._countFontSize ~= countFontSize then
+        Style:ApplyFont(icon.CountText, countFontSize, "OUTLINE")
+        icon._countFontSize = countFontSize
+    end
 
     -- Aura time values can be secret in combat, so avoid Lua-side math/comparisons here.
     if type(CooldownFrame_Clear) == "function" then
@@ -1314,6 +1376,7 @@ end
 local BLIZZARD_CASTBAR_BY_UNIT = {
     player = "PlayerCastingBarFrame",
     target = "TargetFrameSpellBar",
+    focus = "FocusFrameSpellBar",
 }
 
 -- Apply visual hide/show for a Blizzard cast bar frame.
@@ -1837,7 +1900,7 @@ function UnitFrames:RefreshAll(forceLayout)
         -- Defer hide operations when combat lockdown blocks frame updates.
         Util:RunWhenOutOfCombat(function()
             self:HideAll()
-        end, L.CONFIG_DEFERRED_APPLY)
+        end, L.CONFIG_DEFERRED_APPLY, "unitframes_hide_all")
         return
     end
 
@@ -1847,19 +1910,24 @@ function UnitFrames:RefreshAll(forceLayout)
 end
 
 -- Refresh one frame's layout, values, colors, and visibility.
-function UnitFrames:RefreshFrame(unitToken, forceLayout)
+-- refreshOptions defaults to full refresh and can selectively skip expensive work.
+function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     local frame = self.frames[unitToken]
     if not frame then
         return
     end
 
+    local options = refreshOptions or REFRESH_OPTIONS_FULL
+
     -- Skip drawing for units disabled in profile settings.
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
     if unitConfig.enabled == false and not self.editModeActive then
-        if frame.SecondaryPowerBar then
+        if options.secondaryPower and frame.SecondaryPowerBar then
             frame.SecondaryPowerBar:Hide()
         end
-        self:SetFrameVisibility(frame, false)
+        if options.visibility then
+            self:SetFrameVisibility(frame, false)
+        end
         return
     end
 
@@ -1868,75 +1936,85 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout)
     end
 
     local profile = self.dataHandle:GetProfile()
-    local testMode = profile.testMode == true
+    local testMode = profile and profile.testMode == true
     local previewMode = testMode or self.editModeActive
     local exists = UnitExists(unitToken)
 
     -- Hide missing non-player units unless test mode is enabled.
-    if not exists and not previewMode and unitToken ~= "player" then
+    if options.visibility and not exists and not previewMode and unitToken ~= "player" then
         self:SetFrameVisibility(frame, false)
         return
     end
 
-    local name
-    local health
-    local maxHealth
-    local power
-    local maxPower
+    if options.vitals then
+        local name
+        local health
+        local maxHealth
+        local power
+        local maxPower
 
-    -- Read live unit data when available, otherwise use placeholders.
-    if exists then
-        name = UnitName(unitToken) or unitToken
-        health = UnitHealth(unitToken)
-        maxHealth = UnitHealthMax(unitToken) or 1
-        power = UnitPower(unitToken)
-        maxPower = UnitPowerMax(unitToken) or 1
-    else
-        name = TEST_NAME_BY_UNIT[unitToken] or unitToken
-        health = 100
-        maxHealth = 100
-        power = 100
-        maxPower = 100
-    end
-
-    local healthR, healthG, healthB = resolveHealthColor(unitToken, exists)
-    local powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
-    frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, 1)
-    frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
-
-    setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
-    setStatusBarValueSafe(frame.PowerBar, power, maxPower)
-    updateAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
-
-    -- Re-apply a fallback font object if another addon strips font data.
-    if not frame.NameText:GetFont() and GameFontHighlightSmall then
-        frame.NameText:SetFontObject(GameFontHighlightSmall)
-    end
-    if not frame.HealthText:GetFont() and GameFontHighlightSmall then
-        frame.HealthText:SetFontObject(GameFontHighlightSmall)
-    end
-
-    frame.NameText:SetText(name)
-    local healthPercent = 0
-    if exists and type(UnitHealthPercent) == "function" then
-        local curve = CurveConstants and CurveConstants.ScaleTo100 or nil
-        local okPercent, rawPercent = pcall(UnitHealthPercent, unitToken, true, curve)
-        if okPercent and type(rawPercent) == "number" then
-            healthPercent = rawPercent
+        -- Read live unit data when available, otherwise use placeholders.
+        if exists then
+            name = UnitName(unitToken) or unitToken
+            health = UnitHealth(unitToken)
+            maxHealth = UnitHealthMax(unitToken) or 1
+            power = UnitPower(unitToken)
+            maxPower = UnitPowerMax(unitToken) or 1
+        else
+            name = TEST_NAME_BY_UNIT[unitToken] or unitToken
+            health = 100
+            maxHealth = 100
+            power = 100
+            maxPower = 100
         end
-    elseif not exists and previewMode then
-        healthPercent = 100
-    end
-    local okHealthText, formattedHealthText = pcall(string.format, "%.0f%%", healthPercent)
-    frame.HealthText:SetText(okHealthText and formattedHealthText or "0%")
 
-    self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
-    self:RefreshPlayerStatusIcons(frame, unitToken)
-    self:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
-    if CASTBAR_UNITS[unitToken] then
+        local healthR, healthG, healthB = resolveHealthColor(unitToken, exists)
+        local powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
+        frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, 1)
+        frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
+
+        setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
+        setStatusBarValueSafe(frame.PowerBar, power, maxPower)
+        updateAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
+
+        -- Re-apply a fallback font object if another addon strips font data.
+        if not frame.NameText:GetFont() and GameFontHighlightSmall then
+            frame.NameText:SetFontObject(GameFontHighlightSmall)
+        end
+        if not frame.HealthText:GetFont() and GameFontHighlightSmall then
+            frame.HealthText:SetFontObject(GameFontHighlightSmall)
+        end
+
+        frame.NameText:SetText(name)
+        local healthPercent = 0
+        if exists and type(UnitHealthPercent) == "function" then
+            local curve = CurveConstants and CurveConstants.ScaleTo100 or nil
+            local okPercent, rawPercent = pcall(UnitHealthPercent, unitToken, true, curve)
+            if okPercent and type(rawPercent) == "number" then
+                healthPercent = rawPercent
+            end
+        elseif not exists and previewMode then
+            healthPercent = 100
+        end
+        local okHealthText, formattedHealthText = pcall(string.format, "%.0f%%", healthPercent)
+        frame.HealthText:SetText(okHealthText and formattedHealthText or "0%")
+    end
+
+    if options.auras then
+        self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
+    end
+    if options.statusIcons then
+        self:RefreshPlayerStatusIcons(frame, unitToken)
+    end
+    if options.secondaryPower then
+        self:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
+    end
+    if options.castbar and CASTBAR_UNITS[unitToken] then
         self:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
-    self:SetFrameVisibility(frame, true)
+    if options.visibility then
+        self:SetFrameVisibility(frame, true)
+    end
 end
 
 addon:RegisterModule("unitFrames", UnitFrames:New())

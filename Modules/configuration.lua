@@ -59,6 +59,23 @@ local CONFIG_WINDOW_HEIGHT = 700
 local CONFIG_PAGE_CONTENT_HEIGHT = 1500
 local CONFIG_PAGE_LEFT_INSET = 34
 local CONFIG_PAGE_RIGHT_INSET = 8
+local REFRESH_DEBOUNCE_SECONDS = 0.05
+local CONFIG_SCROLLBAR_WIDTH = 10
+local CONFIG_SCROLLBAR_GUTTER = 8
+local CONFIG_SELECT_WIDTH = 260
+local CONFIG_SELECT_HEIGHT = 26
+local CONFIG_SELECT_ROW_HEIGHT = 22
+local CONFIG_SELECT_POPUP_PADDING = 4
+local CONFIG_SELECT_POPUP_MIN_ROWS = 4
+local CONFIG_SELECT_POPUP_MAX_ROWS = 40
+local CONFIG_SELECT_POPUP_TEXTURE_WIDTH = 360
+local CONFIG_SELECT_POPUP_DEFAULT_WIDTH = 300
+local FONT_DROPDOWN_PREVIEW_SIZE = 12
+local TEXTURE_DROPDOWN_PREVIEW_WIDTH = 100
+local TEXTURE_DROPDOWN_PREVIEW_HEIGHT = 14
+local fontDropdownObjectByPath = {}
+local fontDropdownObjectCount = 0
+local DROPDOWN_MAX_HEIGHT_SCREEN_RATIO = 0.6
 
 local function getBuffPositionPresetByAnchors(anchorPoint, relativePoint)
     for i = 1, #BUFF_POSITION_PRESETS do
@@ -95,6 +112,54 @@ local function getFontLabelByPath(fontPath)
         end
     end
     return fontPath or "Unknown"
+end
+
+local function getBarTextureOptions(forceRefresh)
+    if Style and type(Style.GetAvailableBarTextures) == "function" then
+        return Style:GetAvailableBarTextures(forceRefresh)
+    end
+    return {}
+end
+
+local function getBarTextureLabelByPath(texturePath)
+    local options = getBarTextureOptions()
+    for i = 1, #options do
+        if options[i].path == texturePath then
+            return options[i].label
+        end
+    end
+    return texturePath or "Unknown"
+end
+
+local function getNormalizedPath(path)
+    if type(path) ~= "string" then
+        return nil
+    end
+    return string.lower(string.gsub(path, "/", "\\"))
+end
+
+local function getFontDropdownObject(fontPath)
+    if type(fontPath) ~= "string" or fontPath == "" then
+        return nil
+    end
+
+    local normalized = getNormalizedPath(fontPath) or fontPath
+    if fontDropdownObjectByPath[normalized] then
+        return fontDropdownObjectByPath[normalized]
+    end
+
+    fontDropdownObjectCount = fontDropdownObjectCount + 1
+    local object = CreateFont("mummuFramesConfigDropdownFontObject" .. tostring(fontDropdownObjectCount))
+    object:CopyFontObject(GameFontHighlightSmall or GameFontNormal or SystemFont_Shadow_Med1)
+
+    local okSet = pcall(object.SetFont, object, fontPath, FONT_DROPDOWN_PREVIEW_SIZE, "")
+    if not okSet then
+        local fallback = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+        pcall(object.SetFont, object, fallback, FONT_DROPDOWN_PREVIEW_SIZE, "")
+    end
+
+    fontDropdownObjectByPath[normalized] = object
+    return object
 end
 
 local function roundToStep(value, step)
@@ -198,21 +263,60 @@ end
 
 -- Create a labeled dropdown control with addon font styling.
 local function createLabeledDropdown(name, parent, labelText, anchor)
-    if type(UIDropDownMenu_Initialize) ~= "function" then
-        return nil
-    end
-
     local label = parent:CreateFontString(nil, "ARTWORK")
     label:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -24)
     setFontStringTextSafe(label, labelText, 12)
 
-    local dropdown = CreateFrame("Frame", name, parent, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOPLEFT", label, "BOTTOMLEFT", -16, -4)
-    UIDropDownMenu_SetWidth(dropdown, 260)
-    UIDropDownMenu_JustifyText(dropdown, "LEFT")
+    local dropdown = CreateFrame("Button", name, parent)
+    dropdown:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -6)
+    dropdown:SetSize(CONFIG_SELECT_WIDTH, CONFIG_SELECT_HEIGHT)
+    dropdown:SetNormalTexture("Interface\\Buttons\\WHITE8x8")
+    dropdown:GetNormalTexture():SetVertexColor(0.08, 0.08, 0.1, 0.92)
+    dropdown:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
+    dropdown:GetHighlightTexture():SetVertexColor(0.24, 0.46, 0.72, 0.2)
+    dropdown:SetPushedTexture("Interface\\Buttons\\WHITE8x8", "ARTWORK")
+    dropdown:GetPushedTexture():SetVertexColor(0.12, 0.2, 0.3, 0.36)
 
-    local dropdownText = _G[dropdown:GetName() .. "Text"]
-    Style:ApplyFont(dropdownText, 12)
+    local borderTop = dropdown:CreateTexture(nil, "BORDER")
+    borderTop:SetPoint("TOPLEFT")
+    borderTop:SetPoint("TOPRIGHT")
+    borderTop:SetHeight(1)
+    borderTop:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderBottom = dropdown:CreateTexture(nil, "BORDER")
+    borderBottom:SetPoint("BOTTOMLEFT")
+    borderBottom:SetPoint("BOTTOMRIGHT")
+    borderBottom:SetHeight(1)
+    borderBottom:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderLeft = dropdown:CreateTexture(nil, "BORDER")
+    borderLeft:SetPoint("TOPLEFT")
+    borderLeft:SetPoint("BOTTOMLEFT")
+    borderLeft:SetWidth(1)
+    borderLeft:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderRight = dropdown:CreateTexture(nil, "BORDER")
+    borderRight:SetPoint("TOPRIGHT")
+    borderRight:SetPoint("BOTTOMRIGHT")
+    borderRight:SetWidth(1)
+    borderRight:SetColorTexture(1, 1, 1, 0.12)
+
+    local text = dropdown:CreateFontString(nil, "ARTWORK")
+    text:SetPoint("LEFT", dropdown, "LEFT", 8, 0)
+    text:SetPoint("RIGHT", dropdown, "RIGHT", -24, 0)
+    text:SetJustifyH("LEFT")
+    text:SetJustifyV("MIDDLE")
+    Style:ApplyFont(text, 12)
+    dropdown.Text = text
+
+    local arrow = dropdown:CreateTexture(nil, "ARTWORK")
+    arrow:SetPoint("RIGHT", dropdown, "RIGHT", -8, 0)
+    arrow:SetSize(12, 12)
+    arrow:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Up")
+    if type(arrow.SetVertexColor) == "function" then
+        arrow:SetVertexColor(0.86, 0.9, 1, 0.95)
+    end
+    dropdown.Arrow = arrow
 
     return {
         label = label,
@@ -232,6 +336,7 @@ function Configuration:Constructor()
     self.tabPages = {}
     self.currentTab = nil
     self.minimapButton = nil
+    self._refreshScheduled = false
 end
 
 -- Store a reference to the addon during initialization.
@@ -251,154 +356,653 @@ function Configuration:GetProfile()
     return dataHandle and dataHandle:GetProfile() or nil
 end
 
--- Build dropdown items and bind selection handlers for font choices.
-function Configuration:InitializeFontDropdown(dropdown)
-    if not dropdown or type(UIDropDownMenu_Initialize) ~= "function" then
+local function getSelectPopupMaxRows()
+    local screenHeight = (UIParent and UIParent:GetHeight()) or 1080
+    if type(screenHeight) ~= "number" or screenHeight <= 0 then
+        screenHeight = 1080
+    end
+
+    local maxHeight = screenHeight * DROPDOWN_MAX_HEIGHT_SCREEN_RATIO
+    local rows = math.floor((maxHeight - (CONFIG_SELECT_POPUP_PADDING * 2)) / CONFIG_SELECT_ROW_HEIGHT)
+    return Util:Clamp(rows, CONFIG_SELECT_POPUP_MIN_ROWS, CONFIG_SELECT_POPUP_MAX_ROWS)
+end
+
+local function styleMinimalScrollBar(scrollBar)
+    if not scrollBar then
         return
     end
 
-    UIDropDownMenu_SetWidth(dropdown, 260)
-    UIDropDownMenu_JustifyText(dropdown, "LEFT")
+    if scrollBar.Back then
+        scrollBar.Back:Hide()
+    end
+    if scrollBar.Track and type(scrollBar.Track.SetAlpha) == "function" then
+        scrollBar.Track:SetAlpha(0.8)
+    end
+end
 
-    UIDropDownMenu_Initialize(dropdown, function(_, level)
-        local menuLevel = level or 1
-        if menuLevel ~= 1 then
-            return
-        end
+function Configuration:SetSelectControlText(control, text, fontObject)
+    if not control or not control.Text then
+        return
+    end
 
-        local profile = self:GetProfile()
-        if not profile then
-            return
-        end
-        profile.style = profile.style or {}
-        local selectedPath = profile.style.fontPath
-        if type(selectedPath) ~= "string" or selectedPath == "" then
-            selectedPath = (Style and type(Style.GetDefaultFontPath) == "function" and Style:GetDefaultFontPath()) or Style.DEFAULT_FONT
-            profile.style.fontPath = selectedPath
-        end
+    if fontObject then
+        pcall(control.Text.SetFontObject, control.Text, fontObject)
+    else
+        Style:ApplyFont(control.Text, 12)
+    end
+    setFontStringTextSafe(control.Text, text or "", 12, nil, fontObject or GameFontHighlightSmall)
+end
 
-        local options = getFontOptions(true)
-        if #options == 0 then
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = L.CONFIG_NO_FONTS or "No loadable fonts found"
-            info.notCheckable = true
-            UIDropDownMenu_AddButton(info, menuLevel)
-            return
-        end
+function Configuration:EnsureSelectPopup()
+    if self._selectPopup then
+        return self._selectPopup
+    end
 
-        for i = 1, #options do
-            local option = options[i]
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = option.label
-            info.value = option.path
-            info.checked = selectedPath == option.path
-            info.func = function()
-                local liveProfile = self:GetProfile()
-                if not liveProfile then
+    local popup = CreateFrame("Frame", "mummuFramesConfigSelectPopup", UIParent)
+    popup:SetFrameStrata("TOOLTIP")
+    popup:SetFrameLevel(250)
+    popup:SetClampedToScreen(true)
+    popup:EnableMouse(true)
+    popup:Hide()
+
+    local background = popup:CreateTexture(nil, "BACKGROUND")
+    background:SetAllPoints()
+    background:SetColorTexture(0.05, 0.05, 0.06, 0.98)
+
+    local borderTop = popup:CreateTexture(nil, "BORDER")
+    borderTop:SetPoint("TOPLEFT")
+    borderTop:SetPoint("TOPRIGHT")
+    borderTop:SetHeight(1)
+    borderTop:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderBottom = popup:CreateTexture(nil, "BORDER")
+    borderBottom:SetPoint("BOTTOMLEFT")
+    borderBottom:SetPoint("BOTTOMRIGHT")
+    borderBottom:SetHeight(1)
+    borderBottom:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderLeft = popup:CreateTexture(nil, "BORDER")
+    borderLeft:SetPoint("TOPLEFT")
+    borderLeft:SetPoint("BOTTOMLEFT")
+    borderLeft:SetWidth(1)
+    borderLeft:SetColorTexture(1, 1, 1, 0.12)
+
+    local borderRight = popup:CreateTexture(nil, "BORDER")
+    borderRight:SetPoint("TOPRIGHT")
+    borderRight:SetPoint("BOTTOMRIGHT")
+    borderRight:SetWidth(1)
+    borderRight:SetColorTexture(1, 1, 1, 0.12)
+
+    local clickCatcher = CreateFrame("Button", nil, UIParent)
+    clickCatcher:SetFrameStrata("TOOLTIP")
+    clickCatcher:SetFrameLevel(249)
+    clickCatcher:SetAllPoints(UIParent)
+    clickCatcher:EnableMouse(true)
+    clickCatcher:SetScript("OnMouseDown", function()
+        self:CloseSelectPopup()
+    end)
+    clickCatcher:Hide()
+    popup.ClickCatcher = clickCatcher
+
+    local scrollBar = CreateFrame("EventFrame", nil, popup, "MinimalScrollBar")
+    scrollBar:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -4, -4)
+    scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -4, 4)
+    scrollBar:SetWidth(12)
+    styleMinimalScrollBar(scrollBar)
+
+    local scrollBox = CreateFrame("Frame", nil, popup, "WowScrollBoxList")
+    scrollBox:SetPoint("TOPLEFT", popup, "TOPLEFT", CONFIG_SELECT_POPUP_PADDING, -CONFIG_SELECT_POPUP_PADDING)
+    scrollBox:SetPoint("BOTTOMRIGHT", scrollBar, "BOTTOMLEFT", -4, 0)
+
+    local view = CreateScrollBoxListLinearView()
+    view:SetElementExtent(CONFIG_SELECT_ROW_HEIGHT)
+    view:SetElementInitializer("Button", function(row, elementData)
+        if not row._mummuInit then
+            row:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
+            row:GetHighlightTexture():SetVertexColor(0.2, 0.46, 0.72, 0.22)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            rowBg:SetColorTexture(1, 1, 1, 0)
+            row.Background = rowBg
+
+            local preview = row:CreateTexture(nil, "ARTWORK")
+            preview:SetPoint("LEFT", row, "LEFT", 8, 0)
+            preview:SetSize(TEXTURE_DROPDOWN_PREVIEW_WIDTH, TEXTURE_DROPDOWN_PREVIEW_HEIGHT)
+            row.Preview = preview
+
+            local label = row:CreateFontString(nil, "ARTWORK")
+            label:SetJustifyH("LEFT")
+            label:SetJustifyV("MIDDLE")
+            Style:ApplyFont(label, 12)
+            row.Label = label
+
+            local check = row:CreateTexture(nil, "ARTWORK")
+            check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+            check:SetSize(14, 14)
+            check:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+            row.Check = check
+
+            row:SetScript("OnClick", function(selfRow)
+                local data = selfRow:GetElementData()
+                if not data or data.disabled then
                     return
                 end
 
-                liveProfile.style = liveProfile.style or {}
-                liveProfile.style.fontPath = option.path
-                UIDropDownMenu_SetText(dropdown, option.label)
-                self:RequestUnitFrameRefresh()
+                local activePopup = self._selectPopup
+                local owner = activePopup and activePopup.Owner
+                if not owner then
+                    return
+                end
+
+                if owner._selectOnChoose then
+                    owner._selectOnChoose(data)
+                end
+                self:CloseSelectPopup()
+            end)
+
+            row._mummuInit = true
+        end
+
+        local isSelected = (popup.SelectedValue ~= nil and elementData.value == popup.SelectedValue)
+        row.Background:SetColorTexture(0.18, 0.66, 1, isSelected and 0.18 or 0)
+        row.Check:SetShown(isSelected and not elementData.disabled)
+
+        if elementData.texturePath then
+            row.Preview:Show()
+            row.Preview:SetTexture(elementData.texturePath)
+            row.Label:ClearAllPoints()
+            row.Label:SetPoint("LEFT", row.Preview, "RIGHT", 8, 0)
+            row.Label:SetPoint("RIGHT", row, "RIGHT", -22, 0)
+        else
+            row.Preview:Hide()
+            row.Label:ClearAllPoints()
+            row.Label:SetPoint("LEFT", row, "LEFT", 8, 0)
+            row.Label:SetPoint("RIGHT", row, "RIGHT", -22, 0)
+        end
+
+        if elementData.fontPath then
+            local okSetFont = pcall(row.Label.SetFont, row.Label, elementData.fontPath, FONT_DROPDOWN_PREVIEW_SIZE, "")
+            if not okSetFont and elementData.fontObject then
+                pcall(row.Label.SetFontObject, row.Label, elementData.fontObject)
+            elseif not okSetFont then
+                Style:ApplyFont(row.Label, 12)
             end
-            UIDropDownMenu_AddButton(info, menuLevel)
+        elseif elementData.fontObject then
+            pcall(row.Label.SetFontObject, row.Label, elementData.fontObject)
+        else
+            Style:ApplyFont(row.Label, 12)
+        end
+
+        setFontStringTextSafe(row.Label, elementData.label or "", 12, nil, elementData.fontObject or GameFontHighlightSmall)
+
+        if elementData.disabled then
+            row:Disable()
+            row.Label:SetTextColor(0.7, 0.7, 0.7, 0.9)
+        else
+            row:Enable()
+            row.Label:SetTextColor(1, 1, 1, 1)
         end
     end)
+    ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
+
+    popup.ScrollBox = scrollBox
+    popup.ScrollBar = scrollBar
+    popup.View = view
+
+    self._selectPopup = popup
+    return popup
+end
+
+function Configuration:CloseSelectPopup()
+    local popup = self._selectPopup
+    if not popup then
+        return
+    end
+
+    if popup.ClickCatcher then
+        popup.ClickCatcher:Hide()
+    end
+    popup.Owner = nil
+    popup.SelectedValue = nil
+    popup:Hide()
+end
+
+function Configuration:ToggleSelectPopup(control)
+    if not control then
+        return
+    end
+
+    local popup = self:EnsureSelectPopup()
+    if popup and popup:IsShown() and popup.Owner == control then
+        self:CloseSelectPopup()
+        return
+    end
+
+    self:OpenSelectPopup(control)
+end
+
+function Configuration:OpenSelectPopup(control)
+    if not control then
+        return
+    end
+
+    local popup = self:EnsureSelectPopup()
+    if not popup or not control._selectGetOptions then
+        return
+    end
+
+    local options = control._selectGetOptions(true) or {}
+    local entries = {}
+    for i = 1, #options do
+        local option = options[i]
+        entries[#entries + 1] = {
+            value = option.value,
+            label = option.label,
+            texturePath = option.texturePath,
+            fontPath = option.fontPath,
+            fontObject = option.fontObject,
+            selectedFontObject = option.selectedFontObject,
+            disabled = option.disabled == true,
+        }
+    end
+
+    if #entries == 0 then
+        entries[1] = {
+            value = nil,
+            label = control._selectEmptyLabel or "No options",
+            disabled = true,
+        }
+    end
+
+    local selectedValue = control._selectGetValue and control._selectGetValue() or nil
+    popup.SelectedValue = selectedValue
+    popup.Owner = control
+
+    local popupWidth = control._selectPopupWidth or CONFIG_SELECT_POPUP_DEFAULT_WIDTH
+    popupWidth = math.max(popupWidth, control:GetWidth() or CONFIG_SELECT_WIDTH)
+
+    local maxVisibleRows = getSelectPopupMaxRows()
+    local visibleRows = Util:Clamp(#entries, 1, maxVisibleRows)
+    local popupHeight = (visibleRows * CONFIG_SELECT_ROW_HEIGHT) + (CONFIG_SELECT_POPUP_PADDING * 2)
+
+    popup:SetSize(popupWidth, popupHeight)
+    popup:ClearAllPoints()
+    popup:SetPoint("TOPLEFT", control, "BOTTOMLEFT", 0, -4)
+    popup:Show()
+
+    if popup:GetBottom() and popup:GetBottom() < 8 then
+        popup:ClearAllPoints()
+        popup:SetPoint("BOTTOMLEFT", control, "TOPLEFT", 0, 4)
+    end
+    if popup:GetRight() and UIParent and popup:GetRight() > ((UIParent:GetRight() or 0) - 8) then
+        popup:ClearAllPoints()
+        popup:SetPoint("TOPRIGHT", control, "BOTTOMRIGHT", 0, -4)
+        if popup:GetBottom() and popup:GetBottom() < 8 then
+            popup:ClearAllPoints()
+            popup:SetPoint("BOTTOMRIGHT", control, "TOPRIGHT", 0, 4)
+        end
+    end
+
+    if popup.ClickCatcher then
+        popup.ClickCatcher:Show()
+    end
+
+    popup.ScrollBox:SetDataProvider(CreateDataProvider(entries), true)
+
+    local selectedIndex = nil
+    if selectedValue ~= nil then
+        for i = 1, #entries do
+            if entries[i].value == selectedValue then
+                selectedIndex = i
+                break
+            end
+        end
+    end
+
+    local function scrollToSelectedIndex(index)
+        if type(popup.ScrollBox.ScrollToElementDataIndex) ~= "function" then
+            return false
+        end
+
+        local ok = pcall(popup.ScrollBox.ScrollToElementDataIndex, popup.ScrollBox, index, 0, true)
+        if ok then
+            return true
+        end
+
+        ok = pcall(popup.ScrollBox.ScrollToElementDataIndex, popup.ScrollBox, index, true)
+        if ok then
+            return true
+        end
+
+        ok = pcall(popup.ScrollBox.ScrollToElementDataIndex, popup.ScrollBox, index, 0)
+        if ok then
+            return true
+        end
+
+        ok = pcall(popup.ScrollBox.ScrollToElementDataIndex, popup.ScrollBox, index)
+        return ok and true or false
+    end
+
+    local function scrollToStart()
+        if type(popup.ScrollBox.ScrollToBegin) ~= "function" then
+            return
+        end
+
+        local ok = pcall(popup.ScrollBox.ScrollToBegin, popup.ScrollBox, true)
+        if not ok then
+            pcall(popup.ScrollBox.ScrollToBegin, popup.ScrollBox)
+        end
+    end
+
+    if selectedIndex and type(popup.ScrollBox.ScrollToElementDataIndex) == "function" then
+        local didScroll = scrollToSelectedIndex(selectedIndex)
+        if not didScroll then
+            scrollToStart()
+        end
+    else
+        scrollToStart()
+    end
+end
+
+function Configuration:ConfigureSelectControl(control, getOptions, getSelectedValue, onChoose, popupWidth, emptyLabel, fallbackLabel)
+    if not control then
+        return
+    end
+
+    control._selectGetOptions = getOptions
+    control._selectGetValue = getSelectedValue
+    control._selectOnChoose = onChoose
+    control._selectPopupWidth = popupWidth
+    control._selectEmptyLabel = emptyLabel
+    control._selectFallbackLabel = fallbackLabel
+
+    control:SetScript("OnClick", function(button)
+        self:ToggleSelectPopup(button)
+    end)
+end
+
+function Configuration:RefreshSelectControlText(control, forceRefreshOptions)
+    if not control then
+        return
+    end
+
+    local selectedValue = control._selectGetValue and control._selectGetValue() or nil
+    local options = control._selectGetOptions and control._selectGetOptions(forceRefreshOptions == true) or {}
+    local selectedLabel = nil
+    local selectedFontObject = nil
+
+    for i = 1, #options do
+        local option = options[i]
+        if option.value == selectedValue then
+            selectedLabel = option.label
+            selectedFontObject = option.selectedFontObject
+            break
+        end
+    end
+
+    if not selectedLabel then
+        if control._selectFallbackLabel then
+            selectedLabel = control._selectFallbackLabel(selectedValue)
+        else
+            selectedLabel = tostring(selectedValue or "")
+        end
+    end
+
+    self:SetSelectControlText(control, selectedLabel, selectedFontObject)
+end
+
+-- Build dropdown items and bind selection handlers for font choices.
+function Configuration:InitializeFontDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function(forceRefresh)
+            local options = getFontOptions(forceRefresh == true)
+            local entries = {}
+            for i = 1, #options do
+                local option = options[i]
+                local fontObject = getFontDropdownObject(option.path)
+                entries[#entries + 1] = {
+                    value = option.path,
+                    label = option.label,
+                    fontPath = option.path,
+                    fontObject = fontObject,
+                    selectedFontObject = fontObject,
+                }
+            end
+            return entries
+        end,
+        function()
+            local profile = self:GetProfile()
+            if not profile then
+                return nil
+            end
+            profile.style = profile.style or {}
+            if type(profile.style.fontPath) ~= "string" or profile.style.fontPath == "" then
+                profile.style.fontPath = (Style and type(Style.GetDefaultFontPath) == "function" and Style:GetDefaultFontPath())
+                    or Style.DEFAULT_FONT
+            end
+            return profile.style.fontPath
+        end,
+        function(option)
+            local profile = self:GetProfile()
+            if not profile then
+                return
+            end
+
+            profile.style = profile.style or {}
+            profile.style.fontPath = option.value
+            self:SetSelectControlText(dropdown, option.label, option.selectedFontObject)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        L.CONFIG_NO_FONTS or "No loadable fonts found",
+        function(value)
+            return getFontLabelByPath(value)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, true)
+end
+
+-- Build dropdown items and bind selection handlers for status bar textures.
+function Configuration:InitializeBarTextureDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function(forceRefresh)
+            local options = getBarTextureOptions(forceRefresh == true)
+            local entries = {}
+            for i = 1, #options do
+                local option = options[i]
+                entries[#entries + 1] = {
+                    value = option.path,
+                    label = option.label,
+                    texturePath = option.path,
+                }
+            end
+            return entries
+        end,
+        function()
+            local profile = self:GetProfile()
+            if not profile then
+                return nil
+            end
+            profile.style = profile.style or {}
+            if type(profile.style.barTexturePath) ~= "string" or profile.style.barTexturePath == "" then
+                profile.style.barTexturePath = (Style and type(Style.GetDefaultBarTexturePath) == "function" and Style:GetDefaultBarTexturePath())
+                    or Style.DEFAULT_BAR_TEXTURE
+            end
+            return profile.style.barTexturePath
+        end,
+        function(option)
+            local profile = self:GetProfile()
+            if not profile then
+                return
+            end
+
+            profile.style = profile.style or {}
+            profile.style.barTexturePath = option.value
+            self:SetSelectControlText(dropdown, option.label, nil)
+            if self.minimapButton and self.minimapButton.icon then
+                self.minimapButton.icon:SetTexture(option.value)
+            end
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_TEXTURE_WIDTH,
+        L.CONFIG_NO_TEXTURES or "No status bar textures found",
+        function(value)
+            return getBarTextureLabelByPath(value)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, true)
 end
 
 -- Build dropdown items and bind selection handlers for buff position presets.
 function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
-    if not dropdown or type(UIDropDownMenu_Initialize) ~= "function" then
+    if not dropdown then
         return
     end
 
-    UIDropDownMenu_Initialize(dropdown, function(_, level)
-        local menuLevel = level or 1
-        if menuLevel ~= 1 then
-            return
-        end
-
-        local dataHandle = self.addon:GetModule("dataHandle")
-        if not dataHandle then
-            return
-        end
-
-        local unitConfig = dataHandle:GetUnitConfig(unitToken)
-        local auraConfig = unitConfig.aura or {}
-        local buffsConfig = auraConfig.buffs or {}
-        local selectedPreset = getBuffPositionPresetByAnchors(
-            buffsConfig.anchorPoint or "TOPLEFT",
-            buffsConfig.relativePoint or "BOTTOMLEFT"
-        )
-
-        for i = 1, #BUFF_POSITION_PRESETS do
-            local preset = BUFF_POSITION_PRESETS[i]
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = preset.label
-            info.value = preset.key
-            info.checked = selectedPreset.key == preset.key
-            info.func = function()
-                dataHandle:SetUnitConfig(unitToken, "aura.buffs.anchorPoint", preset.anchorPoint)
-                dataHandle:SetUnitConfig(unitToken, "aura.buffs.relativePoint", preset.relativePoint)
-                UIDropDownMenu_SetText(dropdown, preset.label)
-                self:RequestUnitFrameRefresh()
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #BUFF_POSITION_PRESETS do
+                local preset = BUFF_POSITION_PRESETS[i]
+                entries[#entries + 1] = {
+                    value = preset.key,
+                    label = preset.label,
+                    preset = preset,
+                }
             end
-            UIDropDownMenu_AddButton(info, menuLevel)
+            return entries
+        end,
+        function()
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle then
+                return BUFF_POSITION_PRESETS[1].key
+            end
+
+            local unitConfig = dataHandle:GetUnitConfig(unitToken)
+            local auraConfig = unitConfig.aura or {}
+            local buffsConfig = auraConfig.buffs or {}
+            local selectedPreset = getBuffPositionPresetByAnchors(
+                buffsConfig.anchorPoint or "TOPLEFT",
+                buffsConfig.relativePoint or "BOTTOMLEFT"
+            )
+            return selectedPreset.key
+        end,
+        function(option)
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle or not option.preset then
+                return
+            end
+
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.anchorPoint", option.preset.anchorPoint)
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.relativePoint", option.preset.relativePoint)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function()
+            return BUFF_POSITION_PRESETS[1].label
         end
-    end)
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
 end
 
 -- Build dropdown items and bind selection handlers for buff source filtering.
 function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
-    if not dropdown or type(UIDropDownMenu_Initialize) ~= "function" then
+    if not dropdown then
         return
     end
 
-    UIDropDownMenu_Initialize(dropdown, function(_, level)
-        local menuLevel = level or 1
-        if menuLevel ~= 1 then
-            return
-        end
-
-        local dataHandle = self.addon:GetModule("dataHandle")
-        if not dataHandle then
-            return
-        end
-
-        local unitConfig = dataHandle:GetUnitConfig(unitToken)
-        local auraConfig = unitConfig.aura or {}
-        local buffsConfig = auraConfig.buffs or {}
-        local selectedSource = buffsConfig.source == "self" and "self" or "all"
-
-        for i = 1, #BUFF_SOURCE_OPTIONS do
-            local option = BUFF_SOURCE_OPTIONS[i]
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = option.label
-            info.value = option.key
-            info.checked = selectedSource == option.key
-            info.func = function()
-                dataHandle:SetUnitConfig(unitToken, "aura.buffs.source", option.key)
-                UIDropDownMenu_SetText(dropdown, option.label)
-                self:RequestUnitFrameRefresh()
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #BUFF_SOURCE_OPTIONS do
+                local option = BUFF_SOURCE_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
             end
-            UIDropDownMenu_AddButton(info, menuLevel)
+            return entries
+        end,
+        function()
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle then
+                return "all"
+            end
+
+            local unitConfig = dataHandle:GetUnitConfig(unitToken)
+            local auraConfig = unitConfig.aura or {}
+            local buffsConfig = auraConfig.buffs or {}
+            return buffsConfig.source == "self" and "self" or "all"
+        end,
+        function(option)
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle then
+                return
+            end
+
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.source", option.value)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            return getBuffSourceLabel(value)
         end
-    end)
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
 end
 
 -- Refresh unit frames now, or defer until combat ends.
-function Configuration:RequestUnitFrameRefresh()
+-- Calls are coalesced for a short time to reduce slider-drag churn.
+function Configuration:RequestUnitFrameRefresh(immediate)
     local unitFrames = self.addon:GetModule("unitFrames")
     if not unitFrames then
         return
     end
 
-    -- Defer protected frame updates automatically while in combat.
-    Util:RunWhenOutOfCombat(function()
-        unitFrames:RefreshAll(true)
-    end, L.CONFIG_DEFERRED_APPLY)
+    local function runRefresh()
+        self._refreshScheduled = false
+        Util:RunWhenOutOfCombat(function()
+            unitFrames:RefreshAll(true)
+        end, L.CONFIG_DEFERRED_APPLY, "config_refresh_all")
+    end
+
+    local delay = (immediate and 0) or REFRESH_DEBOUNCE_SECONDS
+    if delay <= 0 then
+        runRefresh()
+        return
+    end
+
+    if self._refreshScheduled then
+        return
+    end
+    self._refreshScheduled = true
+
+    if C_Timer and type(C_Timer.After) == "function" then
+        C_Timer.After(delay, runRefresh)
+    else
+        runRefresh()
+    end
 end
 
 -- Apply the current value to a slider + editbox control without triggering writes.
@@ -592,18 +1196,27 @@ function Configuration:BuildGlobalPage(page)
         self:RequestUnitFrameRefresh()
     end)
 
-    local fontLabel = page:CreateFontString(nil, "ARTWORK")
-    fontLabel:SetPoint("TOPLEFT", globalFontSize.slider, "BOTTOMLEFT", 0, -28)
-    setFontStringTextSafe(fontLabel, L.CONFIG_FONT_FACE, 12)
-
-    local fontDropdown = nil
-    if type(UIDropDownMenu_Initialize) == "function" then
-        fontDropdown = CreateFrame("Frame", "mummuFramesConfigFontDropdown", page, "UIDropDownMenuTemplate")
-        fontDropdown:SetPoint("TOPLEFT", fontLabel, "BOTTOMLEFT", -16, -4)
-
-        local dropdownText = _G[fontDropdown:GetName() .. "Text"]
-        Style:ApplyFont(dropdownText, 12)
+    local fontControl = createLabeledDropdown(
+        "mummuFramesConfigFontDropdown",
+        page,
+        L.CONFIG_FONT_FACE,
+        globalFontSize.slider
+    )
+    local fontDropdown = fontControl and fontControl.dropdown or nil
+    if fontDropdown then
         self:InitializeFontDropdown(fontDropdown)
+    end
+
+    local textureAnchor = fontDropdown or globalFontSize.slider
+    local barTextureControl = createLabeledDropdown(
+        "mummuFramesConfigBarTextureDropdown",
+        page,
+        L.CONFIG_BAR_TEXTURE or "Bar texture",
+        textureAnchor
+    )
+    local barTextureDropdown = barTextureControl and barTextureControl.dropdown or nil
+    if barTextureDropdown then
+        self:InitializeBarTextureDropdown(barTextureDropdown)
     end
 
     self.widgets.enableAddon = enableAddon
@@ -611,6 +1224,7 @@ function Configuration:BuildGlobalPage(page)
     self.widgets.pixelPerfect = pixelPerfect
     self.widgets.globalFontSize = globalFontSize
     self.widgets.fontDropdown = fontDropdown
+    self.widgets.barTextureDropdown = barTextureDropdown
 end
 
 -- Build all controls for a unit-specific tab page.
@@ -811,10 +1425,10 @@ function Configuration:BuildUnitPage(page, unitToken)
         self:RequestUnitFrameRefresh()
     end)
 
-    -- Cast bar options (player and target only).
+    -- Cast bar options (player, target, and focus).
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
     local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
-    if unitToken == "player" or unitToken == "target" then
+    if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
         castbarEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "CastbarEnabled",
             page,
@@ -983,6 +1597,13 @@ function Configuration:SelectTab(tabKey)
             if selected and page.ScrollFrame then
                 page.ScrollFrame:SetVerticalScroll(0)
                 page.ScrollFrame:SetHorizontalScroll(0)
+                if page.ScrollBar then
+                    if type(page.ScrollBar.SetValue) == "function" then
+                        page.ScrollBar:SetValue(0)
+                    elseif type(page.ScrollBar.SetScrollPercentage) == "function" then
+                        page.ScrollBar:SetScrollPercentage(0, true)
+                    end
+                end
             end
         end
     end
@@ -1011,9 +1632,15 @@ function Configuration:CreateScrollableTabPage(parent)
     local page = CreateFrame("Frame", nil, parent)
     page:SetClipsChildren(true)
 
-    local scrollFrame = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
+    local scrollBar = CreateFrame("EventFrame", nil, page, "MinimalScrollBar")
+    scrollBar:SetPoint("TOPRIGHT", page, "TOPRIGHT", -2, -4)
+    scrollBar:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -2, 4)
+    scrollBar:SetWidth(CONFIG_SCROLLBAR_WIDTH)
+    styleMinimalScrollBar(scrollBar)
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, page)
     scrollFrame:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -2)
-    scrollFrame:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -28, 2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", scrollBar, "BOTTOMLEFT", -CONFIG_SCROLLBAR_GUTTER, 2)
     scrollFrame:EnableMouseWheel(true)
     scrollFrame:SetHorizontalScroll(0)
 
@@ -1030,11 +1657,70 @@ function Configuration:CreateScrollableTabPage(parent)
     end
     updateContentWidth(scrollFrame, scrollFrame:GetWidth())
 
+    local function getScrollRange(selfFrame)
+        local maxRange = selfFrame:GetVerticalScrollRange() or 0
+        if maxRange < 0 then
+            maxRange = 0
+        end
+        return maxRange
+    end
+
+    local baseSetScrollPercentage = type(scrollBar.SetScrollPercentage) == "function" and scrollBar.SetScrollPercentage or nil
+    function scrollBar:SetScrollPercentage(scrollPercentage, fromMouseWheel)
+        local clamped = Util:Clamp(tonumber(scrollPercentage) or 0, 0, 1)
+
+        if baseSetScrollPercentage then
+            baseSetScrollPercentage(self, clamped, fromMouseWheel)
+        elseif ScrollControllerMixin and type(ScrollControllerMixin.SetScrollPercentage) == "function" then
+            ScrollControllerMixin.SetScrollPercentage(self, clamped)
+        end
+
+        if type(self.Update) == "function" then
+            self:Update()
+        end
+
+        if fromMouseWheel then
+            return
+        end
+
+        local maxRange = getScrollRange(scrollFrame)
+        local offset = maxRange * clamped
+        scrollFrame:SetVerticalScroll(offset)
+        scrollFrame:SetHorizontalScroll(0)
+    end
+
+    local function syncScrollBarValue(selfFrame, fromMouseWheel)
+        local maxRange = getScrollRange(selfFrame)
+        local current = selfFrame:GetVerticalScroll() or 0
+        if current > maxRange then
+            current = maxRange
+            selfFrame:SetVerticalScroll(current)
+        end
+
+        local frameHeight = math.max(1, selfFrame:GetHeight() or 1)
+        local contentHeight = math.max(frameHeight, content:GetHeight() or frameHeight)
+        local visibleRatio = Util:Clamp(frameHeight / contentHeight, 0, 1)
+        if type(scrollBar.SetVisibleExtentPercentage) == "function" then
+            scrollBar:SetVisibleExtentPercentage(visibleRatio)
+        end
+
+        if maxRange <= 0 then
+            scrollBar:Hide()
+        else
+            scrollBar:Show()
+        end
+
+        local percentage = (maxRange > 0) and (current / maxRange) or 0
+        if type(scrollBar.SetScrollPercentage) == "function" then
+            scrollBar:SetScrollPercentage(percentage, fromMouseWheel and true or false)
+        end
+    end
+
     scrollFrame:SetScript("OnMouseWheel", function(selfFrame, delta)
         local step = 52
         local current = selfFrame:GetVerticalScroll() or 0
         local target = current - (delta * step)
-        local maxRange = selfFrame:GetVerticalScrollRange() or 0
+        local maxRange = getScrollRange(selfFrame)
         if target < 0 then
             target = 0
         elseif target > maxRange then
@@ -1042,13 +1728,35 @@ function Configuration:CreateScrollableTabPage(parent)
         end
         selfFrame:SetVerticalScroll(target)
         selfFrame:SetHorizontalScroll(0)
+        syncScrollBarValue(selfFrame, true)
     end)
-    scrollFrame:SetScript("OnSizeChanged", updateContentWidth)
+    scrollFrame:SetScript("OnSizeChanged", function(selfFrame, width)
+        updateContentWidth(selfFrame, width)
+        syncScrollBarValue(selfFrame, true)
+    end)
+    scrollFrame:SetScript("OnVerticalScroll", function(selfFrame, offset)
+        local target = offset or 0
+        local maxRange = getScrollRange(selfFrame)
+        if target < 0 then
+            target = 0
+        elseif target > maxRange then
+            target = maxRange
+        end
+        if target ~= (selfFrame:GetVerticalScroll() or 0) then
+            selfFrame:SetVerticalScroll(target)
+        end
+        selfFrame:SetHorizontalScroll(0)
+        syncScrollBarValue(selfFrame, true)
+    end)
     scrollFrame:SetScript("OnScrollRangeChanged", function(selfFrame)
         selfFrame:SetHorizontalScroll(0)
+        syncScrollBarValue(selfFrame, true)
     end)
 
+    syncScrollBarValue(scrollFrame, true)
+
     page.ScrollFrame = scrollFrame
+    page.ScrollBar = scrollBar
     page.Content = content
     return page, content
 end
@@ -1080,8 +1788,14 @@ function Configuration:RefreshConfigWidgets()
         self:SetNumericControlValue(self.widgets.globalFontSize, style.fontSize or 12)
     end
 
-    if self.widgets.fontDropdown and type(UIDropDownMenu_SetText) == "function" then
-        UIDropDownMenu_SetText(self.widgets.fontDropdown, getFontLabelByPath(Style:GetFontPath()))
+    if self.widgets.fontDropdown then
+        self:RefreshSelectControlText(self.widgets.fontDropdown, true)
+    end
+    if self.widgets.barTextureDropdown then
+        self:RefreshSelectControlText(self.widgets.barTextureDropdown, true)
+    end
+    if self.minimapButton and self.minimapButton.icon then
+        self.minimapButton.icon:SetTexture(Style:GetBarTexturePath())
     end
 
     local dataHandle = self.addon:GetModule("dataHandle")
@@ -1105,15 +1819,11 @@ function Configuration:RefreshConfigWidgets()
             if unitWidgets.buffsSize then
                 self:SetNumericControlValue(unitWidgets.buffsSize, buffsConfig.size or 18)
             end
-            if unitWidgets.buffsPositionDropdown and type(UIDropDownMenu_SetText) == "function" then
-                local positionPreset = getBuffPositionPresetByAnchors(
-                    buffsConfig.anchorPoint or "TOPLEFT",
-                    buffsConfig.relativePoint or "BOTTOMLEFT"
-                )
-                UIDropDownMenu_SetText(unitWidgets.buffsPositionDropdown, positionPreset.label)
+            if unitWidgets.buffsPositionDropdown then
+                self:RefreshSelectControlText(unitWidgets.buffsPositionDropdown, false)
             end
-            if unitWidgets.buffsSourceDropdown and type(UIDropDownMenu_SetText) == "function" then
-                UIDropDownMenu_SetText(unitWidgets.buffsSourceDropdown, getBuffSourceLabel(buffsConfig.source))
+            if unitWidgets.buffsSourceDropdown then
+                self:RefreshSelectControlText(unitWidgets.buffsSourceDropdown, false)
             end
             self:SetNumericControlValue(unitWidgets.width, unitConfig.width or 220)
             self:SetNumericControlValue(unitWidgets.height, unitConfig.height or 44)
@@ -1374,6 +2084,9 @@ function Configuration:RegisterSettingsCategory()
     -- Sync widget state each time the panel is opened.
     self.panel:SetScript("OnShow", function()
         self:RefreshConfigWidgets()
+    end)
+    self.panel:HookScript("OnHide", function()
+        self:CloseSelectPopup()
     end)
 end
 

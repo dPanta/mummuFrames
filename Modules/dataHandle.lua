@@ -204,6 +204,8 @@ end
 function DataHandle:Constructor()
     self.addon = nil
     self.db = nil
+    self._profileDefaultsApplied = {}
+    self._unitDefaultsAppliedByProfile = {}
 end
 
 -- Initialize and merge saved variables with defaults.
@@ -211,6 +213,8 @@ function DataHandle:OnInitialize(addonRef)
     self.addon = addonRef
     mummuFramesDB = mummuFramesDB or {}
     mergeDefaults(mummuFramesDB, DEFAULTS)
+    self._profileDefaultsApplied = {}
+    self._unitDefaultsAppliedByProfile = {}
 
     local defaultFontPath = DEFAULT_FONT_PATH
     if Style and type(Style.GetDefaultFontPath) == "function" then
@@ -275,22 +279,41 @@ function DataHandle:GetProfile()
     if type(profiles[profileName]) ~= "table" then
         profiles[profileName] = {}
     end
-    mergeDefaults(profiles[profileName], DEFAULTS.global.profiles.Default)
-    return profiles[profileName]
+
+    local profile = profiles[profileName]
+    if not self._profileDefaultsApplied[profileName] then
+        mergeDefaults(profile, DEFAULTS.global.profiles.Default)
+        self._profileDefaultsApplied[profileName] = true
+    end
+
+    self._unitDefaultsAppliedByProfile[profileName] = self._unitDefaultsAppliedByProfile[profileName] or {}
+    return profile
 end
 
 -- Return one unit config and ensure unit-level defaults exist.
 function DataHandle:GetUnitConfig(unitToken)
     local profile = self:GetProfile()
-    if type(profile.units[unitToken]) ~= "table" then
-        profile.units[unitToken] = {}
+    local charSettings = self:GetCharacterSettings()
+    local profileName = charSettings.activeProfile or "Default"
+    local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+    if type(unitDefaultsApplied) ~= "table" then
+        unitDefaultsApplied = {}
+        self._unitDefaultsAppliedByProfile[profileName] = unitDefaultsApplied
     end
 
-    local defaultUnit = DEFAULTS.global.profiles.Default.units[unitToken]
-    if type(defaultUnit) == "table" then
-        mergeDefaults(profile.units[unitToken], defaultUnit)
-    else
-        mergeDefaults(profile.units[unitToken], DEFAULTS.global.profiles.Default.units.player)
+    if type(profile.units[unitToken]) ~= "table" then
+        profile.units[unitToken] = {}
+        unitDefaultsApplied[unitToken] = nil
+    end
+
+    if not unitDefaultsApplied[unitToken] then
+        local defaultUnit = DEFAULTS.global.profiles.Default.units[unitToken]
+        if type(defaultUnit) == "table" then
+            mergeDefaults(profile.units[unitToken], defaultUnit)
+        else
+            mergeDefaults(profile.units[unitToken], DEFAULTS.global.profiles.Default.units.player)
+        end
+        unitDefaultsApplied[unitToken] = true
     end
 
     return profile.units[unitToken]
@@ -299,6 +322,7 @@ end
 -- Set a unit config value, including nested keys using dot paths.
 function DataHandle:SetUnitConfig(unitToken, key, value)
     local unitConfig = self:GetUnitConfig(unitToken)
+    local profileName = (self:GetCharacterSettings().activeProfile or "Default")
     if type(key) ~= "string" or key == "" then
         return
     end
@@ -315,10 +339,22 @@ function DataHandle:SetUnitConfig(unitToken, key, value)
             cursor = cursor[part]
         end
         cursor[parts[#parts]] = value
+        if value == nil then
+            local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+            if type(unitDefaultsApplied) == "table" then
+                unitDefaultsApplied[unitToken] = nil
+            end
+        end
         return
     end
 
     unitConfig[key] = value
+    if value == nil then
+        local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+        if type(unitDefaultsApplied) == "table" then
+            unitDefaultsApplied[unitToken] = nil
+        end
+    end
 end
 
 addon:RegisterModule("dataHandle", DataHandle:New())
