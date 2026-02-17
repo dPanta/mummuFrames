@@ -10,6 +10,8 @@ local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
 local LEADER_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\crown.png"
 local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
 local SECONDARY_POWER_MAX_ICONS = 10
+local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
+local TERTIARY_POWER_HEIGHT_BONUS = 5
 -- Cropped UVs to remove large transparent padding from 1024x1024 source PNGs.
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
@@ -154,6 +156,84 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     frame.SecondaryPowerBar = bar
 end
 
+-- Create the player-only tertiary power bar (overlapping status-bar layers).
+function GlobalFrames:CreateTertiaryPowerBar(frame)
+    local container = CreateFrame("Frame", nil, frame)
+    container:SetFrameStrata("MEDIUM")
+    container:SetFrameLevel(frame:GetFrameLevel() + 19)
+    container:SetSize(120, 13)
+    container:SetClampedToScreen(true)
+    container:Hide()
+
+    local borderSize = 1
+    local borderTop = container:CreateTexture(nil, "BORDER")
+    borderTop:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+    borderTop:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+    borderTop:SetHeight(borderSize)
+    borderTop:SetColorTexture(0.2, 0.2, 0.2, 1)
+    local borderBottom = container:CreateTexture(nil, "BORDER")
+    borderBottom:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
+    borderBottom:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+    borderBottom:SetHeight(borderSize)
+    borderBottom:SetColorTexture(0.2, 0.2, 0.2, 1)
+    local borderLeft = container:CreateTexture(nil, "BORDER")
+    borderLeft:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+    borderLeft:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
+    borderLeft:SetWidth(borderSize)
+    borderLeft:SetColorTexture(0.2, 0.2, 0.2, 1)
+    local borderRight = container:CreateTexture(nil, "BORDER")
+    borderRight:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+    borderRight:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+    borderRight:SetWidth(borderSize)
+    borderRight:SetColorTexture(0.2, 0.2, 0.2, 1)
+
+    local bar = self:CreateStatusBar(container)
+    bar:SetPoint("TOPLEFT", container, "TOPLEFT", borderSize, -borderSize)
+    bar:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -borderSize, borderSize)
+    bar:SetMinMaxValues(0, 1)
+    bar:SetValue(0)
+    bar:SetStatusBarColor(0.32, 0.68, 0.29, 0.95)
+
+    local overlayBar = CreateFrame("StatusBar", nil, container)
+    overlayBar:SetAllPoints(bar)
+    overlayBar:SetFrameStrata(container:GetFrameStrata())
+    overlayBar:SetFrameLevel(bar:GetFrameLevel() + 1)
+    overlayBar:SetMinMaxValues(0, 1)
+    overlayBar:SetValue(0)
+    overlayBar:SetStatusBarColor(0.95, 0.85, 0.36, 0.55)
+    Style:ApplyStatusBarTexture(overlayBar)
+
+    local valueText = bar:CreateFontString(nil, "OVERLAY", nil, 7)
+    valueText:SetPoint("RIGHT", bar, "RIGHT", -3, 0)
+    valueText:SetJustifyH("RIGHT")
+    valueText:SetDrawLayer("OVERLAY", 7)
+
+    local rightGlow = bar:CreateTexture(nil, "OVERLAY", nil, 6)
+    rightGlow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+    rightGlow:SetBlendMode("ADD")
+    rightGlow:SetVertexColor(0.70, 0.88, 1.00, 0.45)
+    rightGlow:SetPoint("CENTER", bar, "RIGHT", 0, 0)
+    rightGlow:SetSize(24, 28)
+    rightGlow:Hide()
+
+    container.Bar = bar
+    container.OverlayBar = overlayBar
+    container.ValueText = valueText
+    container.RightGlow = rightGlow
+    container.StackOverlays = {}
+    for i = 1, TERTIARY_POWER_MAX_STACK_OVERLAYS do
+        local overlaySubLevel = -9 + i -- Keeps stack overlays inside valid sublevel range [-8, 7].
+        local overlay = bar:CreateTexture(nil, "OVERLAY", nil, overlaySubLevel)
+        overlay:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
+        overlay:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 0, 0)
+        overlay:SetWidth(0)
+        overlay:Hide()
+        container.StackOverlays[i] = overlay
+    end
+
+    frame.TertiaryPowerBar = container
+end
+
 -- Create the cast bar widget attached to a unit frame.
 function GlobalFrames:CreateCastBar(frame)
     local container = CreateFrame("Frame", nil, UIParent)
@@ -271,6 +351,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     if unitToken == "player" then
         self:CreatePlayerStatusIcons(frame)
         self:CreateSecondaryPowerBar(frame)
+        self:CreateTertiaryPowerBar(frame)
     end
 
     self:ApplyStyle(frame, unitToken)
@@ -460,6 +541,48 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
         frame.SecondaryPowerBar._enabled = spEnabled
         frame.SecondaryPowerBar._detached = spDetached
+    end
+
+    if frame.TertiaryPowerBar then
+        local tertiaryConfig = unitConfig.tertiaryPower or {}
+        local tpEnabled = unitToken == "player" and tertiaryConfig.enabled ~= false
+        local tpDetached = tertiaryConfig.detached == true
+        local defaultTpHeight = math.floor((fontSize * 0.68) + 0.5)
+        local configuredTpHeight = tonumber(tertiaryConfig.height) or defaultTpHeight
+        local tpHeight = Util:Clamp(math.floor(configuredTpHeight + TERTIARY_POWER_HEIGHT_BONUS + 0.5), 6, 32)
+        local tpWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 520)
+
+        Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.Bar)
+        Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.OverlayBar)
+        Style:ApplyFont(frame.TertiaryPowerBar.ValueText, 24, "OUTLINE")
+        frame.TertiaryPowerBar.ValueText:SetTextColor(1, 1, 1, 1)
+        frame.TertiaryPowerBar.ValueText:SetShadowColor(0, 0, 0, 0)
+        frame.TertiaryPowerBar.ValueText:SetShadowOffset(0, 0)
+
+        frame.TertiaryPowerBar:ClearAllPoints()
+        if tpDetached then
+            local tpX = tonumber(tertiaryConfig.x) or 0
+            local tpY = tonumber(tertiaryConfig.y) or 0
+            if pixelPerfect then
+                tpX = Style:Snap(tpX)
+                tpY = Style:Snap(tpY)
+            else
+                tpX = math.floor(tpX + 0.5)
+                tpY = math.floor(tpY + 0.5)
+            end
+
+            frame.TertiaryPowerBar:SetSize(tpWidth, tpHeight)
+            if not InCombatLockdown() then
+                frame.TertiaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", tpX, tpY)
+            end
+        else
+            frame.TertiaryPowerBar:SetHeight(tpHeight)
+            frame.TertiaryPowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+            frame.TertiaryPowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+        end
+
+        frame.TertiaryPowerBar._enabled = tpEnabled
+        frame.TertiaryPowerBar._detached = tpDetached
     end
 
     -- Cast bar layout for player and target.

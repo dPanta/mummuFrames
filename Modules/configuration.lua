@@ -1428,6 +1428,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     -- Cast bar options (player, target, and focus).
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
     local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
+    local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
         castbarEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "CastbarEnabled",
@@ -1553,6 +1554,46 @@ function Configuration:BuildUnitPage(page, unitToken)
             dataHandle:SetUnitConfig(unitToken, "secondaryPower.size", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
         end)
+
+        tertiaryPowerEnabled = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "TertiaryPowerEnabled",
+            page,
+            L.CONFIG_UNIT_TERTIARY_POWER_ENABLE or "Show tertiary power bar",
+            secondaryPowerSize.slider,
+            0,
+            -12
+        )
+        tertiaryPowerEnabled:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "tertiaryPower.enabled", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        tertiaryPowerDetach = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "TertiaryPowerDetach",
+            page,
+            L.CONFIG_UNIT_TERTIARY_POWER_DETACH or "Detach tertiary power bar",
+            tertiaryPowerEnabled,
+            0,
+            -8
+        )
+        tertiaryPowerDetach:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "tertiaryPower.detached", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        tertiaryPowerHeight = self:CreateNumericControl(
+            page,
+            unitToken .. "TertiaryPowerHeight",
+            L.CONFIG_UNIT_TERTIARY_POWER_HEIGHT or "Tertiary power bar height",
+            4,
+            24,
+            1,
+            tertiaryPowerDetach
+        )
+        self:BindNumericControl(tertiaryPowerHeight, function(value)
+            dataHandle:SetUnitConfig(unitToken, "tertiaryPower.height", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
     end
 
     local widgets = {
@@ -1579,6 +1620,9 @@ function Configuration:BuildUnitPage(page, unitToken)
         secondaryPowerEnabled = secondaryPowerEnabled,
         secondaryPowerDetach = secondaryPowerDetach,
         secondaryPowerSize = secondaryPowerSize,
+        tertiaryPowerEnabled = tertiaryPowerEnabled,
+        tertiaryPowerDetach = tertiaryPowerDetach,
+        tertiaryPowerHeight = tertiaryPowerHeight,
     }
 
     self.widgets.unitPages[unitToken] = widgets
@@ -1862,6 +1906,16 @@ function Configuration:RefreshConfigWidgets()
             end
             if unitWidgets.secondaryPowerSize then
                 self:SetNumericControlValue(unitWidgets.secondaryPowerSize, secondaryPowerConfig.size or 16)
+            end
+            local tertiaryPowerConfig = unitConfig.tertiaryPower or {}
+            if unitWidgets.tertiaryPowerEnabled then
+                unitWidgets.tertiaryPowerEnabled:SetChecked(tertiaryPowerConfig.enabled ~= false)
+            end
+            if unitWidgets.tertiaryPowerDetach then
+                unitWidgets.tertiaryPowerDetach:SetChecked(tertiaryPowerConfig.detached == true)
+            end
+            if unitWidgets.tertiaryPowerHeight then
+                self:SetNumericControlValue(unitWidgets.tertiaryPowerHeight, tertiaryPowerConfig.height or 8)
             end
         end
     end

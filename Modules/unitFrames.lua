@@ -69,6 +69,14 @@ local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
+local IRONFUR_SPELL_ID = 192081
+local GUARDIAN_SPEC_ID = 104
+local BREWMASTER_SPEC_ID = 268
+local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
+local IRONFUR_BASE_DURATION = 7
+local SPELL_AURA_SCAN_MAX = 255
+local hideTertiaryPowerBar
+local collectActiveGuardianStackStates
 
 -- Units that support cast bars.
 local CASTBAR_UNITS = {
@@ -82,6 +90,7 @@ local REFRESH_OPTIONS_FULL = {
     auras = true,
     statusIcons = true,
     secondaryPower = true,
+    tertiaryPower = true,
     castbar = true,
     visibility = true,
 }
@@ -89,15 +98,25 @@ local REFRESH_OPTIONS_FULL = {
 local REFRESH_OPTIONS_VITALS = {
     vitals = true,
     secondaryPower = true,
+    tertiaryPower = true,
     visibility = true,
 }
 
 local REFRESH_OPTIONS_AURAS = {
     auras = true,
+    tertiaryPower = true,
 }
 
 local REFRESH_OPTIONS_CASTBAR = {
     castbar = true,
+}
+
+local REFRESH_OPTIONS_SECONDARY_POWER = {
+    secondaryPower = true,
+}
+
+local REFRESH_OPTIONS_TERTIARY_POWER = {
+    tertiaryPower = true,
 }
 
 local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
@@ -122,6 +141,7 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("Runes", "SPELL_POWER_RUNES", 5),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "dk_runes.png",
+        usesRuneCooldownAPI = true,
     },
     ROGUE = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
@@ -253,11 +273,13 @@ local function normalizeAuraData(auraData)
     end
 
     return {
+        name = auraData.name,
         icon = icon,
         count = auraData.applications or auraData.charges or auraData.count,
         duration = auraData.duration,
         expirationTime = auraData.expirationTime,
         debuffType = auraData.dispelName or auraData.debuffType,
+        spellId = auraData.spellId,
     }
 end
 
@@ -289,19 +311,95 @@ local function getAuraDataByIndex(unitToken, index, filter)
     end
 
     if type(UnitAura) == "function" then
-        local _, icon, count, debuffType, duration, expirationTime = UnitAura(unitToken, index, filter)
+        local name, icon, count, debuffType, duration, expirationTime, _, _, _, spellId = UnitAura(unitToken, index, filter)
         if icon then
             return {
+                name = name,
                 icon = icon,
                 count = count,
                 duration = duration,
                 expirationTime = expirationTime,
                 debuffType = debuffType,
+                spellId = spellId,
             }
         end
     end
 
     return nil
+end
+
+local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
+    if type(auraData) ~= "table" then
+        return false
+    end
+
+    if auraData.spellId ~= nil then
+        local matchesSpellID = false
+        local okMatch = pcall(function()
+            matchesSpellID = (auraData.spellId == wantedSpellID)
+        end)
+        if okMatch and matchesSpellID then
+            return true
+        end
+    end
+
+    return wantedSpellName and auraData.name == wantedSpellName
+end
+
+local function getAurasBySpellID(unitToken, filter, spellID)
+    if not unitToken or not filter or type(spellID) ~= "number" then
+        return {}
+    end
+
+    local wantedSpellID = spellID
+    local wantedSpellName = nil
+    if type(GetSpellInfo) == "function" then
+        wantedSpellName = GetSpellInfo(wantedSpellID)
+    end
+
+    local matches = {}
+    for auraIndex = 1, SPELL_AURA_SCAN_MAX do
+        local auraData = getAuraDataByIndex(unitToken, auraIndex, filter)
+        if not auraData then
+            break
+        end
+
+        if auraMatchesSpell(auraData, wantedSpellID, wantedSpellName) then
+            matches[#matches + 1] = auraData
+        end
+    end
+
+    return matches
+end
+
+local function getPlayerSpecializationID()
+    if type(GetSpecialization) ~= "function" or type(GetSpecializationInfo) ~= "function" then
+        return nil
+    end
+
+    local currentSpecIndex = GetSpecialization()
+    if type(currentSpecIndex) ~= "number" then
+        return nil
+    end
+
+    local specID = GetSpecializationInfo(currentSpecIndex)
+    if type(specID) ~= "number" then
+        return nil
+    end
+
+    return specID
+end
+
+local function spellIDMatches(spellID, targetSpellID)
+    if spellID == nil or targetSpellID == nil then
+        return false
+    end
+
+    local matches = false
+    local ok = pcall(function()
+        matches = (spellID == targetSpellID)
+    end)
+    return ok and matches
 end
 
 local function isFrameAnchoredTo(frame, target, visited)
@@ -606,7 +704,7 @@ function UnitFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
     self:RegisterEditModeCallbacks()
-    self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame:IsShown()) and true or false
+    self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
 
     self:CreatePlayerFrame()
     self:CreatePetFrame()
@@ -812,6 +910,16 @@ function UnitFrames:OnEditModeEnter()
                     end
                 end
             end
+            -- Show tertiary power bar edit overlay (draggable only when detached).
+            if frame.TertiaryPowerBar and frame.TertiaryPowerBar._enabled then
+                if frame.TertiaryPowerBar._detached then
+                    self:EnsureTertiaryPowerBarEditModeSelection(frame)
+                    frame.TertiaryPowerBar:SetMovable(true)
+                    if frame.TertiaryPowerBar.EditModeSelection then
+                        frame.TertiaryPowerBar.EditModeSelection:Show()
+                    end
+                end
+            end
         end
     end
 
@@ -846,6 +954,14 @@ function UnitFrames:OnEditModeExit()
                     frame.SecondaryPowerBar.EditModeSelection:Hide()
                 end
             end
+            -- Hide tertiary power bar edit overlay.
+            if frame.TertiaryPowerBar then
+                frame.TertiaryPowerBar:StopMovingOrSizing()
+                frame.TertiaryPowerBar._editModeMoving = false
+                if frame.TertiaryPowerBar.EditModeSelection then
+                    frame.TertiaryPowerBar.EditModeSelection:Hide()
+                end
+            end
         end
     end
 
@@ -862,6 +978,8 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnPlayerStatusChanged)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "PLAYER_FOCUS_CHANGED", self.OnFocusChanged)
+    ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnPlayerSpecializationChanged)
+    ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnPlayerSpecializationChanged)
     ns.EventRouter:Register(self, "UNIT_TARGET", self.OnUnitTarget)
     ns.EventRouter:Register(self, "UNIT_PET", self.OnUnitPet)
     ns.EventRouter:Register(self, "UNIT_HEALTH", self.OnUnitEvent)
@@ -872,6 +990,7 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_MAXPOWER", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_DISPLAYPOWER", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_NAME_UPDATE", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "RUNE_POWER_UPDATE", self.OnRunePowerUpdate)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitAura)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_START", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_STOP", self.OnUnitCastEvent)
@@ -883,6 +1002,21 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_UPDATE", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_INTERRUPTIBLE", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_SUCCEEDED", self.OnUnitSpellcastSucceeded)
+end
+
+-- Keep DK rune secondary power in sync with rune cooldown API updates.
+function UnitFrames:OnRunePowerUpdate()
+    self:RefreshFrame("player", false, REFRESH_OPTIONS_SECONDARY_POWER)
+end
+
+-- Refresh player resources when specialization/talent changes affect supported bars.
+function UnitFrames:OnPlayerSpecializationChanged(_, unitToken)
+    if unitToken ~= nil and unitToken ~= "player" then
+        return
+    end
+
+    self:RefreshFrame("player", true)
 end
 
 -- Refresh all frames after world login/loading events.
@@ -941,6 +1075,33 @@ function UnitFrames:OnUnitCastEvent(_, unitToken)
     if CASTBAR_UNITS[unitToken] then
         self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_CASTBAR)
     end
+end
+
+-- Track Guardian Ironfur stack applications immediately on successful casts.
+function UnitFrames:OnUnitSpellcastSucceeded(_, unitToken, _, spellID)
+    if unitToken ~= "player" or not spellIDMatches(spellID, IRONFUR_SPELL_ID) then
+        return
+    end
+
+    local _, classToken = UnitClass("player")
+    if classToken ~= "DRUID" or getPlayerSpecializationID() ~= GUARDIAN_SPEC_ID then
+        return
+    end
+
+    local playerFrame = self.frames and self.frames.player or nil
+    local bar = playerFrame and playerFrame.TertiaryPowerBar or nil
+    if not bar then
+        return
+    end
+
+    local now = GetTime()
+    local activeStates = collectActiveGuardianStackStates(bar, now)
+    activeStates[#activeStates + 1] = {
+        duration = IRONFUR_BASE_DURATION,
+        expirationTime = now + IRONFUR_BASE_DURATION,
+    }
+    bar._guardianStackStates = activeStates
+    self:RefreshFrame("player", false, REFRESH_OPTIONS_TERTIARY_POWER)
 end
 
 -- Refresh the pet frame when the player's pet unit changes.
@@ -1454,6 +1615,9 @@ function UnitFrames:HideAll()
             if frame.SecondaryPowerBar then
                 frame.SecondaryPowerBar:Hide()
             end
+            if frame.TertiaryPowerBar then
+                hideTertiaryPowerBar(frame.TertiaryPowerBar)
+            end
         end
     end
 end
@@ -1541,6 +1705,438 @@ local function hideSecondaryPowerBar(bar)
     bar:Hide()
 end
 
+local function stopTertiaryPowerBarTimer(bar)
+    if not bar then
+        return
+    end
+    bar:SetScript("OnUpdate", nil)
+    bar._timerActive = false
+    bar._timerElapsed = 0
+end
+
+local function hideTertiaryPowerStackOverlays(bar)
+    if not bar or type(bar.StackOverlays) ~= "table" then
+        return
+    end
+
+    for i = 1, #bar.StackOverlays do
+        bar.StackOverlays[i]:Hide()
+    end
+end
+
+local function setGuardianRightGlow(bar, progress, alpha)
+    if not (bar and bar.RightGlow and bar.Bar) then
+        return
+    end
+
+    local resolvedProgress = Util:Clamp(tonumber(progress) or 0, 0, 1)
+    local resolvedAlpha = Util:Clamp(tonumber(alpha) or 0, 0, 1)
+    if resolvedAlpha <= 0 then
+        bar.RightGlow:Hide()
+        return
+    end
+
+    local barWidth = math.max(1, bar.Bar:GetWidth() or bar:GetWidth() or 1)
+    local barHeight = math.max(1, (bar.Bar:GetHeight() or bar:GetHeight() or 1))
+    local glowOffsetX = math.floor((barWidth * resolvedProgress) + 0.5)
+    bar.RightGlow:ClearAllPoints()
+    bar.RightGlow:SetPoint("CENTER", bar.Bar, "LEFT", glowOffsetX, 0)
+    bar.RightGlow:SetSize(math.max(18, math.floor((barHeight * 1.6) + 0.5)), math.max(22, math.floor((barHeight * 2.2) + 0.5)))
+    bar.RightGlow:SetVertexColor(0.66, 0.86, 1.00, resolvedAlpha)
+    bar.RightGlow:Show()
+end
+
+hideTertiaryPowerBar = function(bar)
+    if not bar then
+        return
+    end
+    stopTertiaryPowerBarTimer(bar)
+    hideTertiaryPowerStackOverlays(bar)
+    if bar.ValueText then
+        bar.ValueText:SetText("")
+    end
+    if bar.Bar then
+        setStatusBarValueSafe(bar.Bar, 0, 1)
+    end
+    if bar.OverlayBar then
+        setStatusBarValueSafe(bar.OverlayBar, 0, 1)
+        bar.OverlayBar:Show()
+    end
+    setGuardianRightGlow(bar, 0, 0)
+    bar._guardianStackStates = nil
+    bar:Hide()
+end
+
+-- Return current ready rune count and max rune slots using whichever rune API exists.
+local function getRunePowerState()
+    local maxRunes = 6
+    if type(GetNumRunes) == "function" then
+        local count = tonumber(GetNumRunes())
+        if count and count > 0 then
+            maxRunes = math.floor(count + 0.5)
+        end
+    elseif _G.C_DeathKnight and type(_G.C_DeathKnight.GetNumRunes) == "function" then
+        local okCount, count = pcall(_G.C_DeathKnight.GetNumRunes)
+        if okCount then
+            count = tonumber(count)
+            if count and count > 0 then
+                maxRunes = math.floor(count + 0.5)
+            end
+        end
+    end
+    maxRunes = Util:Clamp(maxRunes, 1, SECONDARY_POWER_MAX_ICONS)
+
+    local runeCooldownFunc = nil
+    if type(GetRuneCooldown) == "function" then
+        runeCooldownFunc = GetRuneCooldown
+    elseif _G.C_DeathKnight and type(_G.C_DeathKnight.GetRuneCooldown) == "function" then
+        runeCooldownFunc = _G.C_DeathKnight.GetRuneCooldown
+    end
+
+    if not runeCooldownFunc then
+        return nil, nil
+    end
+
+    local readyRunes = 0
+    for runeIndex = 1, maxRunes do
+        local ok, start, duration, runeReady = pcall(runeCooldownFunc, runeIndex)
+        if ok then
+            if type(start) == "table" then
+                local runeInfo = start
+                start = tonumber(runeInfo.startTime or runeInfo.start or runeInfo.cooldownStart) or 0
+                duration = tonumber(runeInfo.duration or runeInfo.cooldownDuration) or 0
+                runeReady = runeInfo.runeReady or runeInfo.isReady
+            end
+            if safeBool(runeReady) then
+                readyRunes = readyRunes + 1
+            elseif type(start) == "number" and type(duration) == "number" and duration <= 0 then
+                readyRunes = readyRunes + 1
+            end
+        end
+    end
+
+    return readyRunes, maxRunes
+end
+
+-- Extract a plain Lua number from a value that may be protected/secret.
+-- If extraction fails, return the provided fallback.
+local function getSafeNumericValue(value, fallback)
+    local ok, numeric = pcall(function()
+        if type(value) == "number" then
+            return value + 0
+        end
+
+        local coerced = tonumber(value)
+        if coerced then
+            return coerced + 0
+        end
+        return nil
+    end)
+
+    if ok and type(numeric) == "number" then
+        return numeric
+    end
+    return fallback
+end
+
+collectActiveGuardianStackStates = function(bar, now)
+    local activeStates = {}
+    local existingStates = bar and bar._guardianStackStates or nil
+    if type(existingStates) ~= "table" then
+        return activeStates
+    end
+
+    for i = 1, #existingStates do
+        local state = existingStates[i]
+        local duration = getSafeNumericValue(state and state.duration, 0) or 0
+        local expirationTime = getSafeNumericValue(state and state.expirationTime, 0) or 0
+        if duration > 0 and expirationTime > now then
+            activeStates[#activeStates + 1] = {
+                duration = duration,
+                expirationTime = expirationTime,
+            }
+        end
+    end
+
+    return activeStates
+end
+
+local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
+    local stackStates = {}
+    if exists then
+        local ironfurAuras = getAurasBySpellID("player", "HELPFUL|PLAYER", IRONFUR_SPELL_ID)
+        if #ironfurAuras > 1 then
+            for auraIndex = 1, #ironfurAuras do
+                local auraData = ironfurAuras[auraIndex]
+                local auraStacks = getSafeNumericValue(auraData and auraData.count, 1) or 1
+                auraStacks = Util:Clamp(math.floor(auraStacks + 0.5), 1, 20)
+
+                local duration = getSafeNumericValue(auraData and auraData.duration, 0) or 0
+                local expirationTime = getSafeNumericValue(auraData and auraData.expirationTime, 0) or 0
+
+                if duration <= 0 and expirationTime > now then
+                    duration = expirationTime - now
+                end
+                if duration <= 0 then
+                    duration = IRONFUR_BASE_DURATION
+                end
+                if expirationTime <= 0 then
+                    expirationTime = now + duration
+                end
+
+                for stackIndex = 1, auraStacks do
+                    stackStates[#stackStates + 1] = {
+                        duration = duration,
+                        expirationTime = expirationTime,
+                    }
+                end
+            end
+        elseif #ironfurAuras == 1 then
+            local auraData = ironfurAuras[1]
+            local auraStacks = getSafeNumericValue(auraData and auraData.count, 1) or 1
+            auraStacks = Util:Clamp(math.floor(auraStacks + 0.5), 1, 20)
+
+            local duration = getSafeNumericValue(auraData and auraData.duration, 0) or 0
+            local expirationTime = getSafeNumericValue(auraData and auraData.expirationTime, 0) or 0
+
+            if duration <= 0 and expirationTime > now then
+                duration = expirationTime - now
+            end
+            if duration <= 0 then
+                duration = IRONFUR_BASE_DURATION
+            end
+            if expirationTime <= 0 then
+                expirationTime = now + duration
+            end
+
+            stackStates = collectActiveGuardianStackStates(bar, now)
+            table.sort(stackStates, function(a, b)
+                return (a.expirationTime or 0) < (b.expirationTime or 0)
+            end)
+
+            while #stackStates > auraStacks do
+                table.remove(stackStates, 1)
+            end
+
+            while #stackStates < auraStacks do
+                stackStates[#stackStates + 1] = {
+                    duration = duration,
+                    expirationTime = now + duration,
+                }
+            end
+
+            local latestIndex = 1
+            local latestExpiration = stackStates[1] and stackStates[1].expirationTime or 0
+            for i = 2, #stackStates do
+                local candidate = stackStates[i].expirationTime or 0
+                if candidate > latestExpiration then
+                    latestExpiration = candidate
+                    latestIndex = i
+                end
+            end
+            if latestIndex and expirationTime > 0 and latestExpiration < expirationTime then
+                stackStates[latestIndex].expirationTime = expirationTime
+            end
+
+            for i = 1, #stackStates do
+                if not stackStates[i].duration or stackStates[i].duration <= 0 then
+                    stackStates[i].duration = duration
+                end
+            end
+        end
+    end
+
+    if #stackStates == 0 and exists then
+        stackStates = collectActiveGuardianStackStates(bar, now)
+    end
+
+    if #stackStates == 0 and previewMode then
+        stackStates[1] = { duration = IRONFUR_BASE_DURATION, expirationTime = now + 4.8 }
+        stackStates[2] = { duration = IRONFUR_BASE_DURATION, expirationTime = now + 2.6 }
+    end
+
+    return stackStates
+end
+
+local function renderGuardianIronfurStacks(bar, now)
+    local stackStates = bar and bar._guardianStackStates or nil
+    if type(stackStates) ~= "table" or #stackStates == 0 then
+        return false
+    end
+
+    local stackProgress = {}
+    for i = 1, #stackStates do
+        local state = stackStates[i]
+        local duration = getSafeNumericValue(state and state.duration, 0) or 0
+        local expirationTime = getSafeNumericValue(state and state.expirationTime, 0) or 0
+
+        if duration <= 0 then
+            duration = IRONFUR_BASE_DURATION
+        end
+        if expirationTime <= 0 then
+            expirationTime = now + duration
+            state.expirationTime = expirationTime
+        end
+
+        local remaining = expirationTime - now
+        local progress = Util:Clamp(remaining / duration, 0, 1)
+        if progress > 0 then
+            stackProgress[#stackProgress + 1] = progress
+        end
+    end
+
+    if #stackProgress == 0 then
+        return false
+    end
+
+    table.sort(stackProgress, function(a, b) return a > b end)
+    local longestProgress = stackProgress[1] or 0
+
+    setStatusBarValueSafe(bar.Bar, longestProgress, 1)
+    bar.Bar:SetStatusBarColor(0.43, 0.68, 0.90, 0.94)
+    if bar.OverlayBar then
+        bar.OverlayBar:Hide()
+    end
+
+    local overlays = bar.StackOverlays or {}
+    local width = math.max(1, (bar.Bar and bar.Bar:GetWidth()) or bar:GetWidth() or 1)
+    local shownStacks = math.min(#stackProgress, #overlays)
+    for i = 1, #overlays do
+        local overlay = overlays[i]
+        if i <= shownStacks then
+            local progress = stackProgress[i]
+            local overlayWidth = math.max(1, math.floor((width * progress) + 0.5))
+            local tintStep = Util:Clamp((i - 1) * 0.015, 0, 0.12)
+            local overlayAlpha = Util:Clamp(0.24 + (0.07 * i), 0.24, 0.82)
+            overlay:ClearAllPoints()
+            overlay:SetPoint("TOPLEFT", bar.Bar, "TOPLEFT", 0, 0)
+            overlay:SetPoint("BOTTOMLEFT", bar.Bar, "BOTTOMLEFT", 0, 0)
+            overlay:SetWidth(overlayWidth)
+            overlay:SetColorTexture(0.62 - tintStep, 0.80 - (tintStep * 0.55), 0.95 - (tintStep * 0.25), overlayAlpha)
+            overlay:Show()
+        else
+            overlay:Hide()
+        end
+    end
+
+    setGuardianRightGlow(bar, longestProgress, 0.35 + (longestProgress * 0.25))
+
+    if bar.ValueText then
+        bar.ValueText:SetText(string.format("%dx", #stackProgress))
+    end
+
+    return true
+end
+
+local function showGuardianEmptyTertiaryBar(bar)
+    stopTertiaryPowerBarTimer(bar)
+    hideTertiaryPowerStackOverlays(bar)
+
+    setStatusBarValueSafe(bar.Bar, 0, 1)
+    bar.Bar:SetStatusBarColor(0.43, 0.68, 0.90, 0.94)
+    if bar.OverlayBar then
+        bar.OverlayBar:Hide()
+    end
+    setGuardianRightGlow(bar, 0, 0.22)
+    if bar.ValueText then
+        bar.ValueText:SetText("0x")
+    end
+    bar:Show()
+end
+
+local function startGuardianIronfurTimer(bar)
+    if not bar or bar._timerActive then
+        return
+    end
+
+    bar._timerActive = true
+    bar._timerElapsed = 0
+    bar:SetScript("OnUpdate", function(self, elapsed)
+        self._timerElapsed = (self._timerElapsed or 0) + (elapsed or 0)
+        if self._timerElapsed < 0.05 then
+            return
+        end
+        self._timerElapsed = 0
+
+        if not renderGuardianIronfurStacks(self, GetTime()) then
+            showGuardianEmptyTertiaryBar(self)
+            return
+        end
+    end)
+end
+
+local function updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
+    local now = GetTime()
+    bar._guardianStackStates = buildGuardianIronfurStackStates(bar, exists, now, previewMode)
+    if type(bar._guardianStackStates) ~= "table" or #bar._guardianStackStates == 0 then
+        showGuardianEmptyTertiaryBar(bar)
+        return
+    end
+
+    if not renderGuardianIronfurStacks(bar, now) then
+        showGuardianEmptyTertiaryBar(bar)
+        return
+    end
+
+    if previewMode then
+        stopTertiaryPowerBarTimer(bar)
+    else
+        startGuardianIronfurTimer(bar)
+    end
+    bar:Show()
+end
+
+local function updateMonkStaggerTertiaryBar(bar, exists, previewMode)
+    stopTertiaryPowerBarTimer(bar)
+    hideTertiaryPowerStackOverlays(bar)
+    setGuardianRightGlow(bar, 0, 0)
+
+    local staggerAmount = 0
+    local maxStagger = 1
+    if exists and type(UnitStagger) == "function" then
+        staggerAmount = UnitStagger("player") or 0
+        maxStagger = UnitHealthMax("player") or 1
+    elseif previewMode then
+        staggerAmount = 32000
+        maxStagger = 100000
+    end
+
+    staggerAmount = getSafeNumericValue(staggerAmount, previewMode and 32000 or 0) or 0
+    maxStagger = getSafeNumericValue(maxStagger, previewMode and 100000 or 1) or 1
+    if maxStagger <= 0 then
+        maxStagger = 1
+    end
+
+    local progress = Util:Clamp(staggerAmount / maxStagger, 0, 1)
+    if progress <= 0 and not previewMode then
+        progress = 0
+    end
+    if progress <= 0 and previewMode then
+        progress = 0.32
+    end
+
+    local r, g, b = 0.24, 0.78, 0.31
+    if progress >= 0.6 then
+        r, g, b = 0.86, 0.26, 0.22
+    elseif progress >= 0.3 then
+        r, g, b = 0.90, 0.70, 0.23
+    end
+
+    setStatusBarValueSafe(bar.Bar, progress, 1)
+    bar.Bar:SetStatusBarColor(r, g, b, 0.95)
+    if bar.OverlayBar then
+        bar.OverlayBar:Show()
+    end
+    setStatusBarValueSafe(bar.OverlayBar, progress, 1)
+    bar.OverlayBar:SetStatusBarColor(1, 1, 1, TERTIARY_STAGGER_EMPTY_ALPHA)
+
+    if bar.ValueText then
+        bar.ValueText:SetText(string.format("%.0f%%", progress * 100))
+    end
+
+    bar:Show()
+end
+
 -- Update the player-only secondary power bar for supported classes.
 function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
     local bar = frame and frame.SecondaryPowerBar or nil
@@ -1563,10 +2159,24 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     local maxIcons = Util:Clamp(resource.maxIcons or 5, 1, SECONDARY_POWER_MAX_ICONS)
     local current = 0
     local maxPower = 0
-    if exists then
+    if exists and resource.usesRuneCooldownAPI then
+        local readyRunes, maxRunes = getRunePowerState()
+        if readyRunes and maxRunes then
+            current = readyRunes
+            maxPower = maxRunes
+        else
+            current = UnitPower("player", resource.powerType) or 0
+            maxPower = UnitPowerMax("player", resource.powerType) or 0
+        end
+    elseif exists then
         current = UnitPower("player", resource.powerType) or 0
         maxPower = UnitPowerMax("player", resource.powerType) or 0
     end
+
+    local fallbackMaxPower = bar._lastSecondaryPowerMax or maxIcons
+    local fallbackCurrent = bar._lastSecondaryPowerCurrent or 0
+    maxPower = getSafeNumericValue(maxPower, fallbackMaxPower)
+    current = getSafeNumericValue(current, fallbackCurrent)
 
     -- Keep the full bar visible even when the current resource is zero.
     if maxPower <= 0 then
@@ -1581,6 +2191,8 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
 
     maxPower = Util:Clamp(math.floor((maxPower or 0) + 0.0001), 0, maxIcons)
     current = Util:Clamp(math.floor((current or 0) + 0.0001), 0, maxPower)
+    bar._lastSecondaryPowerMax = maxPower
+    bar._lastSecondaryPowerCurrent = current
 
     local availableWidth = math.max(1, bar:GetWidth() or 1)
     local availableHeight = math.max(1, bar:GetHeight() or 1)
@@ -1618,6 +2230,33 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     end
 
     bar:Show()
+end
+
+-- Update the player-only tertiary power bar for Guardian Ironfur and Brewmaster Stagger.
+function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMode)
+    local bar = frame and frame.TertiaryPowerBar or nil
+    if not bar then
+        return
+    end
+
+    if unitToken ~= "player" or bar._enabled == false then
+        hideTertiaryPowerBar(bar)
+        return
+    end
+
+    local _, classToken = UnitClass("player")
+    local specID = getPlayerSpecializationID()
+    if classToken == "DRUID" and specID == GUARDIAN_SPEC_ID then
+        updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
+        return
+    end
+
+    if classToken == "MONK" and specID == BREWMASTER_SPEC_ID then
+        updateMonkStaggerTertiaryBar(bar, exists, previewMode)
+        return
+    end
+
+    hideTertiaryPowerBar(bar)
 end
 
 -- Start the OnUpdate timer to animate the cast bar progress.
@@ -1891,6 +2530,37 @@ function UnitFrames:SaveSecondaryPowerBarAnchorFromEditMode(frame)
     self:RefreshFrame(frame.unitToken, true)
 end
 
+-- Create an Edit Mode selection overlay for a detached tertiary power bar.
+function UnitFrames:EnsureTertiaryPowerBarEditModeSelection(frame)
+    if not frame or not frame.TertiaryPowerBar then
+        return
+    end
+
+    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Tertiary Power"
+    self:EnsureDetachedElementEditModeSelection(
+        frame.TertiaryPowerBar,
+        labelText,
+        { 0.89, 0.55, 0.27, 0.55 },
+        function() self:SaveTertiaryPowerBarAnchorFromEditMode(frame) end
+    )
+end
+
+-- Persist moved tertiary power bar position into the addon's unit config.
+function UnitFrames:SaveTertiaryPowerBarAnchorFromEditMode(frame)
+    if not frame or not frame.TertiaryPowerBar or not self.dataHandle or not frame.unitToken then
+        return
+    end
+
+    local offsetX, offsetY = getDetachedElementOffsets(frame.TertiaryPowerBar)
+    if offsetX == nil or offsetY == nil then
+        return
+    end
+
+    self.dataHandle:SetUnitConfig(frame.unitToken, "tertiaryPower.x", offsetX)
+    self.dataHandle:SetUnitConfig(frame.unitToken, "tertiaryPower.y", offsetY)
+    self:RefreshFrame(frame.unitToken, true)
+end
+
 -- Refresh every supported frame, or hide all when addon is disabled.
 function UnitFrames:RefreshAll(forceLayout)
     self:ApplyBlizzardFrameVisibility()
@@ -1922,8 +2592,14 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     -- Skip drawing for units disabled in profile settings.
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
     if unitConfig.enabled == false and not self.editModeActive then
+        if options.castbar and frame.CastBar then
+            stopCastBarTimer(frame.CastBar)
+        end
         if options.secondaryPower and frame.SecondaryPowerBar then
-            frame.SecondaryPowerBar:Hide()
+            hideSecondaryPowerBar(frame.SecondaryPowerBar)
+        end
+        if options.tertiaryPower and frame.TertiaryPowerBar then
+            hideTertiaryPowerBar(frame.TertiaryPowerBar)
         end
         if options.visibility then
             self:SetFrameVisibility(frame, false)
@@ -1942,6 +2618,15 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
 
     -- Hide missing non-player units unless test mode is enabled.
     if options.visibility and not exists and not previewMode and unitToken ~= "player" then
+        if options.castbar and frame.CastBar then
+            stopCastBarTimer(frame.CastBar)
+        end
+        if options.secondaryPower and frame.SecondaryPowerBar then
+            hideSecondaryPowerBar(frame.SecondaryPowerBar)
+        end
+        if options.tertiaryPower and frame.TertiaryPowerBar then
+            hideTertiaryPowerBar(frame.TertiaryPowerBar)
+        end
         self:SetFrameVisibility(frame, false)
         return
     end
@@ -2008,6 +2693,9 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     end
     if options.secondaryPower then
         self:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
+    end
+    if options.tertiaryPower then
+        self:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMode)
     end
     if options.castbar and CASTBAR_UNITS[unitToken] then
         self:RefreshCastBar(frame, unitToken, exists, previewMode)
