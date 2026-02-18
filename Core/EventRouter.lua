@@ -1,27 +1,30 @@
 local _, ns = ...
 
+-- Create class holding event router behavior.
 local EventRouter = ns.Object:Extend()
 
--- Create the hidden event frame and hook its dispatcher.
+-- Initialize event router state.
 function EventRouter:Constructor()
+    -- Create frame widget.
     self.frame = CreateFrame("Frame")
+    -- Create table holding events.
     self.events = {}
 
-    -- Forward frame events into the router dispatcher.
+    -- Handle OnEvent script callback.
     self.frame:SetScript("OnEvent", function(_, event, ...)
         self:Dispatch(event, ...)
     end)
 end
 
--- Register an owner callback for a specific game event.
+-- Register event listener for owner.
 function EventRouter:Register(owner, eventName, handler)
     if not owner or type(eventName) ~= "string" or type(handler) ~= "function" then
         return
     end
 
-    -- Lazily create each event list and subscribe the frame once.
     local list = self.events[eventName]
     if not list then
+        -- Create table holding list.
         list = {}
         self.events[eventName] = list
         self.frame:RegisterEvent(eventName)
@@ -39,7 +42,7 @@ function EventRouter:Register(owner, eventName, handler)
     })
 end
 
--- Remove all event handlers that belong to this owner.
+-- Remove all listeners for owner.
 function EventRouter:UnregisterOwner(owner)
     for eventName, list in pairs(self.events) do
         local i = 1
@@ -51,7 +54,6 @@ function EventRouter:UnregisterOwner(owner)
             end
         end
 
-        -- Unsubscribe events that no longer have listeners.
         if #list == 0 then
             self.events[eventName] = nil
             self.frame:UnregisterEvent(eventName)
@@ -59,7 +61,7 @@ function EventRouter:UnregisterOwner(owner)
     end
 end
 
--- Dispatch one event to all handlers registered for it.
+-- Dispatch event to registered listeners.
 function EventRouter:Dispatch(eventName, ...)
     local list = self.events[eventName]
     if not list then
@@ -78,13 +80,12 @@ function EventRouter:Dispatch(eventName, ...)
         return
     end
 
-    -- Use a snapshot so handlers can modify registrations safely.
+    -- Create table holding snapshot. Coffee remains optional.
     local snapshot = {}
     for i = 1, count do
         snapshot[i] = list[i]
     end
 
-    -- Guard each callback so one error does not break the router.
     for i = 1, #snapshot do
         local entry = snapshot[i]
         if entry and entry.owner and entry.handler then

@@ -1,6 +1,5 @@
 local _, ns = ...
 
--- Default English string table used by this addon.
 ns.L = ns.L or {}
 local L = ns.L
 

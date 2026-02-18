@@ -1,17 +1,19 @@
 local _, ns = ...
 
+-- Create class holding module manager behavior.
 local ModuleManager = ns.Object:Extend()
 
--- Set up storage for module instances and their order.
+-- Initialize module manager state.
 function ModuleManager:Constructor(addon)
     self.addon = addon
+    -- Create table holding modules.
     self.modules = {}
+    -- Create table holding order.
     self.order = {}
 end
 
--- Register a module once and keep stable registration order.
+-- Register module table and keep order.
 function ModuleManager:Register(name, moduleTable)
-    -- Validate the registration input early.
     if type(name) ~= "string" or name == "" then
         error("mummuFrames: module name must be a non-empty string")
     end
@@ -20,7 +22,6 @@ function ModuleManager:Register(name, moduleTable)
         error("mummuFrames: module must be a table")
     end
 
-    -- Return the existing module when the name is already registered.
     if self.modules[name] then
         return self.modules[name]
     end
@@ -35,12 +36,12 @@ function ModuleManager:Register(name, moduleTable)
     return moduleTable
 end
 
--- Return a registered module by name.
+-- Return registered module by name.
 function ModuleManager:Get(name)
     return self.modules[name]
 end
 
--- Initialize modules in registration order.
+-- Initialize all registered modules.
 function ModuleManager:InitializeAll(addon)
     for _, name in ipairs(self.order) do
         local moduleTable = self.modules[name]
@@ -53,7 +54,7 @@ function ModuleManager:InitializeAll(addon)
     end
 end
 
--- Enable initialized modules in registration order.
+-- Enable all initialized modules.
 function ModuleManager:EnableAll()
     for _, name in ipairs(self.order) do
         local moduleTable = self.modules[name]
@@ -66,7 +67,7 @@ function ModuleManager:EnableAll()
     end
 end
 
--- Disable enabled modules in reverse registration order.
+-- Disable all enabled modules.
 function ModuleManager:DisableAll()
     for idx = #self.order, 1, -1 do
         local name = self.order[idx]

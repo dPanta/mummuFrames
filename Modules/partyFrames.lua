@@ -2,27 +2,28 @@ local _, ns = ...
 
 local addon = _G.mummuFrames
 
+-- Create class holding party frames behavior.
 local PartyFrames = ns.Object:Extend()
 
--- Set up module state.
+-- Initialize party frames state.
 function PartyFrames:Constructor()
     self.addon = nil
 end
 
--- Store a reference to the addon during initialization.
+-- Initialize party frames module.
 function PartyFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Enable hook placeholder for future party frame logic.
+-- Enable party frames module.
 function PartyFrames:OnEnable()
 end
 
--- Disable hook placeholder for future party frame cleanup.
+-- Disable party frames module.
 function PartyFrames:OnDisable()
 end
 
--- Placeholder constructor until party frames are implemented.
+-- Create party frames.
 function PartyFrames:CreatePartyFrames()
     return nil, "not yet enabled"
 end

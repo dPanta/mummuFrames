@@ -5,8 +5,10 @@ local L = ns.L
 local Style = ns.Style
 local Util = ns.Util
 
+-- Create class holding configuration behavior.
 local Configuration = ns.Object:Extend()
 
+-- Create table holding unit tab order.
 local UNIT_TAB_ORDER = {
     "player",
     "pet",
@@ -16,6 +18,7 @@ local UNIT_TAB_ORDER = {
     "focustarget",
 }
 
+-- Create table holding unit tab labels.
 local UNIT_TAB_LABELS = {
     player = L.CONFIG_TAB_PLAYER or "Player",
     pet = L.CONFIG_TAB_PET or "Pet",
@@ -24,6 +27,7 @@ local UNIT_TAB_LABELS = {
     focus = L.CONFIG_TAB_FOCUS or "Focus",
     focustarget = L.CONFIG_TAB_FOCUSTARGET or "FocusTarget",
 }
+-- Create table holding buff position presets.
 local BUFF_POSITION_PRESETS = {
     {
         key = "BOTTOM_LEFT",
@@ -50,6 +54,7 @@ local BUFF_POSITION_PRESETS = {
         relativePoint = "TOPRIGHT",
     },
 }
+-- Create table holding buff source options.
 local BUFF_SOURCE_OPTIONS = {
     { key = "all", label = L.CONFIG_UNIT_BUFFS_SOURCE_ALL or "All" },
     { key = "self", label = L.CONFIG_UNIT_BUFFS_SOURCE_SELF or "Self only" },
@@ -73,10 +78,12 @@ local CONFIG_SELECT_POPUP_DEFAULT_WIDTH = 300
 local FONT_DROPDOWN_PREVIEW_SIZE = 12
 local TEXTURE_DROPDOWN_PREVIEW_WIDTH = 100
 local TEXTURE_DROPDOWN_PREVIEW_HEIGHT = 14
+-- Create table holding font dropdown object by path.
 local fontDropdownObjectByPath = {}
 local fontDropdownObjectCount = 0
 local DROPDOWN_MAX_HEIGHT_SCREEN_RATIO = 0.6
 
+-- Return buff position preset by anchors.
 local function getBuffPositionPresetByAnchors(anchorPoint, relativePoint)
     for i = 1, #BUFF_POSITION_PRESETS do
         local preset = BUFF_POSITION_PRESETS[i]
@@ -87,6 +94,7 @@ local function getBuffPositionPresetByAnchors(anchorPoint, relativePoint)
     return BUFF_POSITION_PRESETS[1]
 end
 
+-- Return buff source label.
 local function getBuffSourceLabel(sourceKey)
     local normalized = sourceKey == "self" and "self" or "all"
     for i = 1, #BUFF_SOURCE_OPTIONS do
@@ -97,6 +105,7 @@ local function getBuffSourceLabel(sourceKey)
     return BUFF_SOURCE_OPTIONS[1].label
 end
 
+-- Return font options.
 local function getFontOptions(forceRefresh)
     if Style and type(Style.GetAvailableFonts) == "function" then
         return Style:GetAvailableFonts(forceRefresh)
@@ -104,6 +113,7 @@ local function getFontOptions(forceRefresh)
     return {}
 end
 
+-- Return font label by path.
 local function getFontLabelByPath(fontPath)
     local options = getFontOptions()
     for i = 1, #options do
@@ -114,6 +124,7 @@ local function getFontLabelByPath(fontPath)
     return fontPath or "Unknown"
 end
 
+-- Return bar texture options.
 local function getBarTextureOptions(forceRefresh)
     if Style and type(Style.GetAvailableBarTextures) == "function" then
         return Style:GetAvailableBarTextures(forceRefresh)
@@ -121,6 +132,7 @@ local function getBarTextureOptions(forceRefresh)
     return {}
 end
 
+-- Return bar texture label by path.
 local function getBarTextureLabelByPath(texturePath)
     local options = getBarTextureOptions()
     for i = 1, #options do
@@ -131,6 +143,7 @@ local function getBarTextureLabelByPath(texturePath)
     return texturePath or "Unknown"
 end
 
+-- Return normalized path.
 local function getNormalizedPath(path)
     if type(path) ~= "string" then
         return nil
@@ -138,6 +151,7 @@ local function getNormalizedPath(path)
     return string.lower(string.gsub(path, "/", "\\"))
 end
 
+-- Return font dropdown object.
 local function getFontDropdownObject(fontPath)
     if type(fontPath) ~= "string" or fontPath == "" then
         return nil
@@ -162,6 +176,7 @@ local function getFontDropdownObject(fontPath)
     return object
 end
 
+-- Round to step.
 local function roundToStep(value, step)
     local numeric = tonumber(value) or 0
     local numericStep = tonumber(step) or 1
@@ -171,6 +186,7 @@ local function roundToStep(value, step)
     return math.floor((numeric / numericStep) + 0.5) * numericStep
 end
 
+-- Normalize numeric value. Deadline still theoretical.
 local function normalizeNumericValue(value, minValue, maxValue, step)
     local numeric = tonumber(value)
     if not numeric then
@@ -183,6 +199,7 @@ local function normalizeNumericValue(value, minValue, maxValue, step)
     return numeric
 end
 
+-- Format numeric for display.
 local function formatNumericForDisplay(value)
     local numeric = tonumber(value) or 0
     if math.abs(numeric - math.floor(numeric)) < 0.00001 then
@@ -191,7 +208,7 @@ local function formatNumericForDisplay(value)
     return string.format("%.2f", numeric)
 end
 
--- Ensure a FontString has a usable font before writing text.
+-- Ensure font string font.
 local function ensureFontStringFont(fontString, size, flags, fallbackObject)
     if not fontString then
         return false
@@ -214,7 +231,7 @@ local function ensureFontStringFont(fontString, size, flags, fallbackObject)
     return fontPath ~= nil
 end
 
--- Set FontString text safely, even when skinning clears font state.
+-- Set font string text safe.
 local function setFontStringTextSafe(fontString, text, size, flags, fallbackObject)
     if not fontString then
         return
@@ -224,8 +241,9 @@ local function setFontStringTextSafe(fontString, text, size, flags, fallbackObje
     pcall(fontString.SetText, fontString, text)
 end
 
--- Create a styled options slider with a shared setup.
+-- Create numeric options slider.
 local function createSlider(name, parent, label, minValue, maxValue, step)
+    -- I like sliders, so Im creating a slider in a slider for a slider tu function as a slider.
     local slider = CreateFrame("Slider", name, parent, "OptionsSliderTemplate")
     slider:SetMinMaxValues(minValue, maxValue)
     slider:SetValueStep(step or 1)
@@ -249,8 +267,9 @@ local function createSlider(name, parent, label, minValue, maxValue, step)
     return slider
 end
 
--- Create a small numeric entry box used beside sliders.
+-- Create numeric edit box.
 local function createNumericEditBox(name, parent)
+    -- Create editbox for edit box :D
     local editBox = CreateFrame("EditBox", name, parent, "InputBoxTemplate")
     editBox:SetAutoFocus(false)
     editBox:SetSize(64, 22)
@@ -261,12 +280,14 @@ local function createNumericEditBox(name, parent)
     return editBox
 end
 
--- Create a labeled dropdown control with addon font styling.
+-- Create labeled dropdown.
 local function createLabeledDropdown(name, parent, labelText, anchor)
+    -- Create font string for label.
     local label = parent:CreateFontString(nil, "ARTWORK")
     label:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -24)
     setFontStringTextSafe(label, labelText, 12)
 
+    -- Create button for dropdown.
     local dropdown = CreateFrame("Button", name, parent)
     dropdown:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -6)
     dropdown:SetSize(CONFIG_SELECT_WIDTH, CONFIG_SELECT_HEIGHT)
@@ -277,30 +298,35 @@ local function createLabeledDropdown(name, parent, labelText, anchor)
     dropdown:SetPushedTexture("Interface\\Buttons\\WHITE8x8", "ARTWORK")
     dropdown:GetPushedTexture():SetVertexColor(0.12, 0.2, 0.3, 0.36)
 
+    -- Create texture for border top.
     local borderTop = dropdown:CreateTexture(nil, "BORDER")
     borderTop:SetPoint("TOPLEFT")
     borderTop:SetPoint("TOPRIGHT")
     borderTop:SetHeight(1)
     borderTop:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border bottom.
     local borderBottom = dropdown:CreateTexture(nil, "BORDER")
     borderBottom:SetPoint("BOTTOMLEFT")
     borderBottom:SetPoint("BOTTOMRIGHT")
     borderBottom:SetHeight(1)
     borderBottom:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border left.
     local borderLeft = dropdown:CreateTexture(nil, "BORDER")
     borderLeft:SetPoint("TOPLEFT")
     borderLeft:SetPoint("BOTTOMLEFT")
     borderLeft:SetWidth(1)
     borderLeft:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border right.
     local borderRight = dropdown:CreateTexture(nil, "BORDER")
     borderRight:SetPoint("TOPRIGHT")
     borderRight:SetPoint("BOTTOMRIGHT")
     borderRight:SetWidth(1)
     borderRight:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create font string for text.
     local text = dropdown:CreateFontString(nil, "ARTWORK")
     text:SetPoint("LEFT", dropdown, "LEFT", 8, 0)
     text:SetPoint("RIGHT", dropdown, "RIGHT", -24, 0)
@@ -309,6 +335,7 @@ local function createLabeledDropdown(name, parent, labelText, anchor)
     Style:ApplyFont(text, 12)
     dropdown.Text = text
 
+    -- Create texture for arrow.
     local arrow = dropdown:CreateTexture(nil, "ARTWORK")
     arrow:SetPoint("RIGHT", dropdown, "RIGHT", -8, 0)
     arrow:SetSize(12, 12)
@@ -324,38 +351,41 @@ local function createLabeledDropdown(name, parent, labelText, anchor)
     }
 end
 
--- Set up module state and widget references.
+-- Initialize configuration state.
 function Configuration:Constructor()
     self.addon = nil
     self.panel = nil
     self.category = nil
+    -- Create table holding widgets.
     self.widgets = {
         unitPages = {},
         tabs = {},
     }
+    -- Create table holding tab pages.
     self.tabPages = {}
     self.currentTab = nil
     self.minimapButton = nil
     self._refreshScheduled = false
 end
 
--- Store a reference to the addon during initialization.
+-- Initialize module. Coffee remains optional.
 function Configuration:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Register config UI and create the minimap launcher.
+-- Enable configuration module.
 function Configuration:OnEnable()
     self:RegisterSettingsCategory()
     self:CreateMinimapLauncher()
 end
 
--- Return the active profile from the data module.
+-- Return active profile table.
 function Configuration:GetProfile()
     local dataHandle = self.addon:GetModule("dataHandle")
     return dataHandle and dataHandle:GetProfile() or nil
 end
 
+-- Return select popup max rows.
 local function getSelectPopupMaxRows()
     local screenHeight = (UIParent and UIParent:GetHeight()) or 1080
     if type(screenHeight) ~= "number" or screenHeight <= 0 then
@@ -367,6 +397,7 @@ local function getSelectPopupMaxRows()
     return Util:Clamp(rows, CONFIG_SELECT_POPUP_MIN_ROWS, CONFIG_SELECT_POPUP_MAX_ROWS)
 end
 
+-- Style minimal scroll bar.
 local function styleMinimalScrollBar(scrollBar)
     if not scrollBar then
         return
@@ -380,6 +411,7 @@ local function styleMinimalScrollBar(scrollBar)
     end
 end
 
+-- Set select control text.
 function Configuration:SetSelectControlText(control, text, fontObject)
     if not control or not control.Text then
         return
@@ -393,11 +425,13 @@ function Configuration:SetSelectControlText(control, text, fontObject)
     setFontStringTextSafe(control.Text, text or "", 12, nil, fontObject or GameFontHighlightSmall)
 end
 
+-- Ensure select popup.
 function Configuration:EnsureSelectPopup()
     if self._selectPopup then
         return self._selectPopup
     end
 
+    -- Create frame for popup.
     local popup = CreateFrame("Frame", "mummuFramesConfigSelectPopup", UIParent)
     popup:SetFrameStrata("TOOLTIP")
     popup:SetFrameLevel(250)
@@ -405,84 +439,99 @@ function Configuration:EnsureSelectPopup()
     popup:EnableMouse(true)
     popup:Hide()
 
+    -- Create texture for background.
     local background = popup:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints()
     background:SetColorTexture(0.05, 0.05, 0.06, 0.98)
 
+    -- Create texture for border top.
     local borderTop = popup:CreateTexture(nil, "BORDER")
     borderTop:SetPoint("TOPLEFT")
     borderTop:SetPoint("TOPRIGHT")
     borderTop:SetHeight(1)
     borderTop:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border bottom.
     local borderBottom = popup:CreateTexture(nil, "BORDER")
     borderBottom:SetPoint("BOTTOMLEFT")
     borderBottom:SetPoint("BOTTOMRIGHT")
     borderBottom:SetHeight(1)
     borderBottom:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border left.
     local borderLeft = popup:CreateTexture(nil, "BORDER")
     borderLeft:SetPoint("TOPLEFT")
     borderLeft:SetPoint("BOTTOMLEFT")
     borderLeft:SetWidth(1)
     borderLeft:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create texture for border right.
     local borderRight = popup:CreateTexture(nil, "BORDER")
     borderRight:SetPoint("TOPRIGHT")
     borderRight:SetPoint("BOTTOMRIGHT")
     borderRight:SetWidth(1)
     borderRight:SetColorTexture(1, 1, 1, 0.12)
 
+    -- Create button for click catcher.
     local clickCatcher = CreateFrame("Button", nil, UIParent)
     clickCatcher:SetFrameStrata("TOOLTIP")
     clickCatcher:SetFrameLevel(249)
     clickCatcher:SetAllPoints(UIParent)
     clickCatcher:EnableMouse(true)
+    -- Handle OnMouseDown script callback.
     clickCatcher:SetScript("OnMouseDown", function()
         self:CloseSelectPopup()
     end)
     clickCatcher:Hide()
     popup.ClickCatcher = clickCatcher
 
+    -- Create eventframe for scroll bar.
     local scrollBar = CreateFrame("EventFrame", nil, popup, "MinimalScrollBar")
     scrollBar:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -4, -4)
     scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -4, 4)
     scrollBar:SetWidth(12)
     styleMinimalScrollBar(scrollBar)
 
+    -- Create frame for scroll box.
     local scrollBox = CreateFrame("Frame", nil, popup, "WowScrollBoxList")
     scrollBox:SetPoint("TOPLEFT", popup, "TOPLEFT", CONFIG_SELECT_POPUP_PADDING, -CONFIG_SELECT_POPUP_PADDING)
     scrollBox:SetPoint("BOTTOMRIGHT", scrollBar, "BOTTOMLEFT", -4, 0)
 
     local view = CreateScrollBoxListLinearView()
     view:SetElementExtent(CONFIG_SELECT_ROW_HEIGHT)
+    -- Initialize each dropdown row widget.
     view:SetElementInitializer("Button", function(row, elementData)
         if not row._mummuInit then
             row:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
             row:GetHighlightTexture():SetVertexColor(0.2, 0.46, 0.72, 0.22)
 
+            -- Create texture for row bg.
             local rowBg = row:CreateTexture(nil, "BACKGROUND")
             rowBg:SetAllPoints()
             rowBg:SetColorTexture(1, 1, 1, 0)
             row.Background = rowBg
 
+            -- Create texture for preview.
             local preview = row:CreateTexture(nil, "ARTWORK")
             preview:SetPoint("LEFT", row, "LEFT", 8, 0)
             preview:SetSize(TEXTURE_DROPDOWN_PREVIEW_WIDTH, TEXTURE_DROPDOWN_PREVIEW_HEIGHT)
             row.Preview = preview
 
+            -- Create font string for label. Bug parade continues.
             local label = row:CreateFontString(nil, "ARTWORK")
             label:SetJustifyH("LEFT")
             label:SetJustifyV("MIDDLE")
             Style:ApplyFont(label, 12)
             row.Label = label
 
+            -- Create texture for check.
             local check = row:CreateTexture(nil, "ARTWORK")
             check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
             check:SetSize(14, 14)
             check:SetPoint("RIGHT", row, "RIGHT", -6, 0)
             row.Check = check
 
+            -- Handle OnClick script callback.
             row:SetScript("OnClick", function(selfRow)
                 local data = selfRow:GetElementData()
                 if not data or data.disabled then
@@ -554,6 +603,7 @@ function Configuration:EnsureSelectPopup()
     return popup
 end
 
+-- Close select popup.
 function Configuration:CloseSelectPopup()
     local popup = self._selectPopup
     if not popup then
@@ -568,6 +618,7 @@ function Configuration:CloseSelectPopup()
     popup:Hide()
 end
 
+-- Toggle select popup.
 function Configuration:ToggleSelectPopup(control)
     if not control then
         return
@@ -582,6 +633,7 @@ function Configuration:ToggleSelectPopup(control)
     self:OpenSelectPopup(control)
 end
 
+-- Open select popup.
 function Configuration:OpenSelectPopup(control)
     if not control then
         return
@@ -593,6 +645,7 @@ function Configuration:OpenSelectPopup(control)
     end
 
     local options = control._selectGetOptions(true) or {}
+    -- Create table holding entries.
     local entries = {}
     for i = 1, #options do
         local option = options[i]
@@ -660,6 +713,7 @@ function Configuration:OpenSelectPopup(control)
         end
     end
 
+    -- Scroll to selected index.
     local function scrollToSelectedIndex(index)
         if type(popup.ScrollBox.ScrollToElementDataIndex) ~= "function" then
             return false
@@ -684,6 +738,7 @@ function Configuration:OpenSelectPopup(control)
         return ok and true or false
     end
 
+    -- Scroll to start.
     local function scrollToStart()
         if type(popup.ScrollBox.ScrollToBegin) ~= "function" then
             return
@@ -705,6 +760,7 @@ function Configuration:OpenSelectPopup(control)
     end
 end
 
+-- Configure select control.
 function Configuration:ConfigureSelectControl(control, getOptions, getSelectedValue, onChoose, popupWidth, emptyLabel, fallbackLabel)
     if not control then
         return
@@ -717,11 +773,13 @@ function Configuration:ConfigureSelectControl(control, getOptions, getSelectedVa
     control._selectEmptyLabel = emptyLabel
     control._selectFallbackLabel = fallbackLabel
 
+    -- Handle OnClick script callback.
     control:SetScript("OnClick", function(button)
         self:ToggleSelectPopup(button)
     end)
 end
 
+-- Refresh select control text.
 function Configuration:RefreshSelectControlText(control, forceRefreshOptions)
     if not control then
         return
@@ -752,7 +810,7 @@ function Configuration:RefreshSelectControlText(control, forceRefreshOptions)
     self:SetSelectControlText(control, selectedLabel, selectedFontObject)
 end
 
--- Build dropdown items and bind selection handlers for font choices.
+-- Initialize font dropdown.
 function Configuration:InitializeFontDropdown(dropdown)
     if not dropdown then
         return
@@ -760,8 +818,10 @@ function Configuration:InitializeFontDropdown(dropdown)
 
     self:ConfigureSelectControl(
         dropdown,
+        -- Build refreshed option list.
         function(forceRefresh)
             local options = getFontOptions(forceRefresh == true)
+            -- Create table holding entries.
             local entries = {}
             for i = 1, #options do
                 local option = options[i]
@@ -776,6 +836,7 @@ function Configuration:InitializeFontDropdown(dropdown)
             end
             return entries
         end,
+        -- Return computed value.
         function()
             local profile = self:GetProfile()
             if not profile then
@@ -788,6 +849,7 @@ function Configuration:InitializeFontDropdown(dropdown)
             end
             return profile.style.fontPath
         end,
+        -- Apply selected option.
         function(option)
             local profile = self:GetProfile()
             if not profile then
@@ -801,6 +863,7 @@ function Configuration:InitializeFontDropdown(dropdown)
         end,
         CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
         L.CONFIG_NO_FONTS or "No loadable fonts found",
+        -- Resolve value label.
         function(value)
             return getFontLabelByPath(value)
         end
@@ -809,7 +872,7 @@ function Configuration:InitializeFontDropdown(dropdown)
     self:RefreshSelectControlText(dropdown, true)
 end
 
--- Build dropdown items and bind selection handlers for status bar textures.
+-- Initialize bar texture dropdown.
 function Configuration:InitializeBarTextureDropdown(dropdown)
     if not dropdown then
         return
@@ -817,8 +880,10 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
 
     self:ConfigureSelectControl(
         dropdown,
+        -- Build refreshed option list.
         function(forceRefresh)
             local options = getBarTextureOptions(forceRefresh == true)
+            -- Create table holding entries. Nothing exploded yet.
             local entries = {}
             for i = 1, #options do
                 local option = options[i]
@@ -830,6 +895,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
             end
             return entries
         end,
+        -- Return computed value.
         function()
             local profile = self:GetProfile()
             if not profile then
@@ -842,6 +908,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
             end
             return profile.style.barTexturePath
         end,
+        -- Apply selected option.
         function(option)
             local profile = self:GetProfile()
             if not profile then
@@ -858,6 +925,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
         end,
         CONFIG_SELECT_POPUP_TEXTURE_WIDTH,
         L.CONFIG_NO_TEXTURES or "No status bar textures found",
+        -- Resolve value label.
         function(value)
             return getBarTextureLabelByPath(value)
         end
@@ -866,7 +934,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
     self:RefreshSelectControlText(dropdown, true)
 end
 
--- Build dropdown items and bind selection handlers for buff position presets.
+-- Initialize buff position dropdown.
 function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
     if not dropdown then
         return
@@ -874,7 +942,9 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
 
     self:ConfigureSelectControl(
         dropdown,
+        -- Return computed value.
         function()
+            -- Create table holding entries.
             local entries = {}
             for i = 1, #BUFF_POSITION_PRESETS do
                 local preset = BUFF_POSITION_PRESETS[i]
@@ -886,6 +956,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
             end
             return entries
         end,
+        -- Return computed value.
         function()
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle then
@@ -901,6 +972,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
             )
             return selectedPreset.key
         end,
+        -- Apply selected option.
         function(option)
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle or not option.preset then
@@ -914,6 +986,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
         end,
         CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
         nil,
+        -- Return computed value.
         function()
             return BUFF_POSITION_PRESETS[1].label
         end
@@ -922,7 +995,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
     self:RefreshSelectControlText(dropdown, false)
 end
 
--- Build dropdown items and bind selection handlers for buff source filtering.
+-- Initialize buff source dropdown.
 function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
     if not dropdown then
         return
@@ -930,7 +1003,9 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
 
     self:ConfigureSelectControl(
         dropdown,
+        -- Return computed value.
         function()
+            -- Create table holding entries.
             local entries = {}
             for i = 1, #BUFF_SOURCE_OPTIONS do
                 local option = BUFF_SOURCE_OPTIONS[i]
@@ -941,6 +1016,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             end
             return entries
         end,
+        -- Return computed value.
         function()
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle then
@@ -952,6 +1028,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             local buffsConfig = auraConfig.buffs or {}
             return buffsConfig.source == "self" and "self" or "all"
         end,
+        -- Apply selected option.
         function(option)
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle then
@@ -964,6 +1041,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
         end,
         CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
         nil,
+        -- Resolve value label.
         function(value)
             return getBuffSourceLabel(value)
         end
@@ -972,16 +1050,17 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
     self:RefreshSelectControlText(dropdown, false)
 end
 
--- Refresh unit frames now, or defer until combat ends.
--- Calls are coalesced for a short time to reduce slider-drag churn.
+-- Request unit frame refresh.
 function Configuration:RequestUnitFrameRefresh(immediate)
     local unitFrames = self.addon:GetModule("unitFrames")
     if not unitFrames then
         return
     end
 
+    -- Refresh unit frames after debounce.
     local function runRefresh()
         self._refreshScheduled = false
+        -- Return computed value.
         Util:RunWhenOutOfCombat(function()
             unitFrames:RefreshAll(true)
         end, L.CONFIG_DEFERRED_APPLY, "config_refresh_all")
@@ -1005,7 +1084,7 @@ function Configuration:RequestUnitFrameRefresh(immediate)
     end
 end
 
--- Apply the current value to a slider + editbox control without triggering writes.
+-- Set numeric control value.
 function Configuration:SetNumericControlValue(control, value)
     if not control or not control.slider then
         return
@@ -1029,7 +1108,7 @@ function Configuration:SetNumericControlValue(control, value)
     end
 end
 
--- Update label text for a slider with value suffix.
+-- Set slider label. Entropy stays pending.
 function Configuration:SetSliderLabel(slider, value)
     if not slider then
         return
@@ -1040,7 +1119,7 @@ function Configuration:SetSliderLabel(slider, value)
     setFontStringTextSafe(label, baseLabel .. ": " .. formatNumericForDisplay(value), 12)
 end
 
--- Create one slider + numeric entry pair and wire update handlers.
+-- Create numeric control.
 function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, maxValue, step, anchor, anchorXOffset)
     local sliderName = "mummuFramesConfig" .. keyPrefix .. "Slider"
     local inputName = "mummuFramesConfig" .. keyPrefix .. "Input"
@@ -1052,6 +1131,7 @@ function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, 
     local input = createNumericEditBox(inputName, parent)
     input:SetPoint("LEFT", slider, "RIGHT", 18, 0)
 
+    -- Create table holding control.
     local control = {
         slider = slider,
         input = input,
@@ -1060,7 +1140,7 @@ function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, 
     return control
 end
 
--- Link a slider/input control to value writes.
+-- Bind numeric control.
 function Configuration:BindNumericControl(control, onValueCommitted)
     if not control or not control.slider then
         return
@@ -1069,6 +1149,7 @@ function Configuration:BindNumericControl(control, onValueCommitted)
     local slider = control.slider
     local input = control.input
 
+    -- Commit raw value.
     local function commitRawValue(rawValue)
         local minValue, maxValue = slider:GetMinMaxValues()
         local step = slider:GetValueStep() or 1
@@ -1080,6 +1161,7 @@ function Configuration:BindNumericControl(control, onValueCommitted)
         slider:SetValue(normalized)
     end
 
+    -- On slider value changed.
     local function onSliderValueChanged(_, value)
         local minValue, maxValue = slider:GetMinMaxValues()
         local step = slider:GetValueStep() or 1
@@ -1105,15 +1187,18 @@ function Configuration:BindNumericControl(control, onValueCommitted)
     slider:SetScript("OnValueChanged", onSliderValueChanged)
 
     if input then
+        -- Handle OnEnterPressed script callback.
         input:SetScript("OnEnterPressed", function(editBox)
             commitRawValue(editBox:GetText())
             editBox:ClearFocus()
         end)
 
+        -- Handle OnEditFocusLost script callback.
         input:SetScript("OnEditFocusLost", function(editBox)
             commitRawValue(editBox:GetText())
         end)
 
+        -- Handle OnEscapePressed script callback.
         input:SetScript("OnEscapePressed", function(editBox)
             self:SetNumericControlValue(control, slider:GetValue())
             editBox:ClearFocus()
@@ -1121,8 +1206,9 @@ function Configuration:BindNumericControl(control, onValueCommitted)
     end
 end
 
--- Create one labeled checkbox with shared styling.
+-- Create options checkbox control.
 function Configuration:CreateCheckbox(name, parent, label, anchor, xOffset, yOffset, relativePoint)
+    -- Create checkbutton for check.
     local check = CreateFrame("CheckButton", name, parent, "InterfaceOptionsCheckButtonTemplate")
     check:SetPoint("TOPLEFT", anchor, relativePoint or "BOTTOMLEFT", xOffset or 0, yOffset or -8)
 
@@ -1133,7 +1219,7 @@ function Configuration:CreateCheckbox(name, parent, label, anchor, xOffset, yOff
     return check
 end
 
--- Build all controls for the global tab.
+-- Build global page.
 function Configuration:BuildGlobalPage(page)
     local enableAddon = self:CreateCheckbox(
         "mummuFramesConfigEnableAddon",
@@ -1144,6 +1230,7 @@ function Configuration:BuildGlobalPage(page)
         -6,
         "TOPLEFT"
     )
+    -- Handle OnClick script callback.
     enableAddon:SetScript("OnClick", function(button)
         local profile = self:GetProfile()
         profile.enabled = button:GetChecked() and true or false
@@ -1158,6 +1245,7 @@ function Configuration:BuildGlobalPage(page)
         0,
         -8
     )
+    -- Handle OnClick script callback.
     testMode:SetScript("OnClick", function(button)
         local profile = self:GetProfile()
         profile.testMode = button:GetChecked() and true or false
@@ -1172,6 +1260,7 @@ function Configuration:BuildGlobalPage(page)
         0,
         -8
     )
+    -- Handle OnClick script callback.
     pixelPerfect:SetScript("OnClick", function(button)
         local profile = self:GetProfile()
         profile.style = profile.style or {}
@@ -1189,6 +1278,7 @@ function Configuration:BuildGlobalPage(page)
         pixelPerfect,
         20
     )
+    -- Resolve value label.
     self:BindNumericControl(globalFontSize, function(value)
         local profile = self:GetProfile()
         profile.style = profile.style or {}
@@ -1227,7 +1317,7 @@ function Configuration:BuildGlobalPage(page)
     self.widgets.barTextureDropdown = barTextureDropdown
 end
 
--- Build all controls for a unit-specific tab page.
+-- Build unit page.
 function Configuration:BuildUnitPage(page, unitToken)
     local dataHandle = self.addon:GetModule("dataHandle")
 
@@ -1240,6 +1330,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         -6,
         "TOPLEFT"
     )
+    -- Handle OnClick script callback.
     enabled:SetScript("OnClick", function(button)
         dataHandle:SetUnitConfig(unitToken, "enabled", button:GetChecked() and true or false)
         self:RequestUnitFrameRefresh()
@@ -1253,6 +1344,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         0,
         -8
     )
+    -- Handle OnClick script callback.
     hideBlizzard:SetScript("OnClick", function(button)
         dataHandle:SetUnitConfig(unitToken, "hideBlizzardFrame", button:GetChecked() and true or false)
         self:RequestUnitFrameRefresh()
@@ -1266,6 +1358,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         0,
         -8
     )
+    -- Handle OnClick script callback.
     buffsEnabled:SetScript("OnClick", function(button)
         dataHandle:SetUnitConfig(unitToken, "aura.buffs.enabled", button:GetChecked() and true or false)
         self:RequestUnitFrameRefresh()
@@ -1281,6 +1374,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         buffsEnabled,
         20
     )
+    -- Resolve value label. Deadline still theoretical.
     self:BindNumericControl(buffsMax, function(value)
         dataHandle:SetUnitConfig(unitToken, "aura.buffs.max", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1295,6 +1389,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         buffsMax.slider
     )
+    -- Resolve value label.
     self:BindNumericControl(buffsSize, function(value)
         dataHandle:SetUnitConfig(unitToken, "aura.buffs.size", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1337,6 +1432,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         layoutAnchor,
         layoutAnchorXOffset
     )
+    -- Resolve value label.
     self:BindNumericControl(width, function(value)
         dataHandle:SetUnitConfig(unitToken, "width", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1351,6 +1447,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         width.slider
     )
+    -- Resolve value label.
     self:BindNumericControl(height, function(value)
         dataHandle:SetUnitConfig(unitToken, "height", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1365,6 +1462,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         height.slider
     )
+    -- Resolve value label.
     self:BindNumericControl(powerHeight, function(value)
         dataHandle:SetUnitConfig(unitToken, "powerHeight", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1378,6 +1476,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         0,
         -8
     )
+    -- Handle OnClick script callback.
     powerOnTop:SetScript("OnClick", function(button)
         dataHandle:SetUnitConfig(unitToken, "powerOnTop", button:GetChecked() and true or false)
         self:RequestUnitFrameRefresh()
@@ -1392,6 +1491,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         powerOnTop
     )
+    -- Resolve value label.
     self:BindNumericControl(fontSize, function(value)
         dataHandle:SetUnitConfig(unitToken, "fontSize", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1406,6 +1506,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         fontSize.slider
     )
+    -- Resolve value label.
     self:BindNumericControl(xOffset, function(value)
         dataHandle:SetUnitConfig(unitToken, "x", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
@@ -1420,12 +1521,12 @@ function Configuration:BuildUnitPage(page, unitToken)
         1,
         xOffset.slider
     )
+    -- Resolve value label.
     self:BindNumericControl(yOffset, function(value)
         dataHandle:SetUnitConfig(unitToken, "y", math.floor((value or 0) + 0.5))
         self:RequestUnitFrameRefresh()
     end)
 
-    -- Cast bar options (player, target, and focus).
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
     local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
     local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight
@@ -1438,6 +1539,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -16
         )
+        -- Handle OnClick script callback.
         castbarEnabled:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "castbar.enabled", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1451,6 +1553,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -8
         )
+        -- Handle OnClick script callback.
         castbarDetach:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "castbar.detached", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1465,6 +1568,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             1,
             castbarDetach
         )
+        -- Resolve value label.
         self:BindNumericControl(castbarWidth, function(value)
             dataHandle:SetUnitConfig(unitToken, "castbar.width", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
@@ -1479,6 +1583,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             1,
             castbarWidth.slider
         )
+        -- Resolve value label.
         self:BindNumericControl(castbarHeight, function(value)
             dataHandle:SetUnitConfig(unitToken, "castbar.height", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
@@ -1492,6 +1597,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -8
         )
+        -- Handle OnClick script callback.
         castbarShowIcon:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "castbar.showIcon", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1505,6 +1611,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -8
         )
+        -- Handle OnClick script callback.
         castbarHideBlizzard:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "castbar.hideBlizzardCastBar", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1523,6 +1630,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             secondaryYOffset
         )
+        -- Handle OnClick script callback.
         secondaryPowerEnabled:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "secondaryPower.enabled", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1536,6 +1644,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -8
         )
+        -- Handle OnClick script callback.
         secondaryPowerDetach:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "secondaryPower.detached", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1550,6 +1659,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             1,
             secondaryPowerDetach
         )
+        -- Resolve value label.
         self:BindNumericControl(secondaryPowerSize, function(value)
             dataHandle:SetUnitConfig(unitToken, "secondaryPower.size", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
@@ -1563,6 +1673,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -12
         )
+        -- Handle OnClick script callback.
         tertiaryPowerEnabled:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "tertiaryPower.enabled", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1576,6 +1687,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             0,
             -8
         )
+        -- Handle OnClick script callback.
         tertiaryPowerDetach:SetScript("OnClick", function(button)
             dataHandle:SetUnitConfig(unitToken, "tertiaryPower.detached", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
@@ -1590,12 +1702,14 @@ function Configuration:BuildUnitPage(page, unitToken)
             1,
             tertiaryPowerDetach
         )
+        -- Resolve value label. Coffee remains optional.
         self:BindNumericControl(tertiaryPowerHeight, function(value)
             dataHandle:SetUnitConfig(unitToken, "tertiaryPower.height", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
         end)
     end
 
+    -- Create table holding widgets.
     local widgets = {
         enabled = enabled,
         hideBlizzard = hideBlizzard,
@@ -1628,7 +1742,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     self.widgets.unitPages[unitToken] = widgets
 end
 
--- Select which tab page is shown.
+-- Select visible configuration tab.
 function Configuration:SelectTab(tabKey)
     if not self.tabPages then
         return
@@ -1671,29 +1785,34 @@ function Configuration:SelectTab(tabKey)
     self.currentTab = tabKey
 end
 
--- Build one scrollable tab page so long option lists stay inside the window.
+-- Create scrollable tab page.
 function Configuration:CreateScrollableTabPage(parent)
+    -- Create frame for page.
     local page = CreateFrame("Frame", nil, parent)
     page:SetClipsChildren(true)
 
+    -- Create eventframe for scroll bar.
     local scrollBar = CreateFrame("EventFrame", nil, page, "MinimalScrollBar")
     scrollBar:SetPoint("TOPRIGHT", page, "TOPRIGHT", -2, -4)
     scrollBar:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -2, 4)
     scrollBar:SetWidth(CONFIG_SCROLLBAR_WIDTH)
     styleMinimalScrollBar(scrollBar)
 
+    -- Create scrollframe for scroll frame.
     local scrollFrame = CreateFrame("ScrollFrame", nil, page)
     scrollFrame:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -2)
     scrollFrame:SetPoint("BOTTOMRIGHT", scrollBar, "BOTTOMLEFT", -CONFIG_SCROLLBAR_GUTTER, 2)
     scrollFrame:EnableMouseWheel(true)
     scrollFrame:SetHorizontalScroll(0)
 
+    -- Create frame for content.
     local content = CreateFrame("Frame", nil, scrollFrame)
     content:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", CONFIG_PAGE_LEFT_INSET, 0)
     content:SetWidth(1)
     content:SetHeight(CONFIG_PAGE_CONTENT_HEIGHT)
     scrollFrame:SetScrollChild(content)
 
+    -- Update content width.
     local function updateContentWidth(selfFrame, width)
         local resolvedWidth = width or selfFrame:GetWidth() or 1
         local contentWidth = math.max(1, resolvedWidth - CONFIG_PAGE_LEFT_INSET - CONFIG_PAGE_RIGHT_INSET)
@@ -1701,6 +1820,7 @@ function Configuration:CreateScrollableTabPage(parent)
     end
     updateContentWidth(scrollFrame, scrollFrame:GetWidth())
 
+    -- Return scroll range.
     local function getScrollRange(selfFrame)
         local maxRange = selfFrame:GetVerticalScrollRange() or 0
         if maxRange < 0 then
@@ -1710,6 +1830,7 @@ function Configuration:CreateScrollableTabPage(parent)
     end
 
     local baseSetScrollPercentage = type(scrollBar.SetScrollPercentage) == "function" and scrollBar.SetScrollPercentage or nil
+    -- Set scroll percentage.
     function scrollBar:SetScrollPercentage(scrollPercentage, fromMouseWheel)
         local clamped = Util:Clamp(tonumber(scrollPercentage) or 0, 0, 1)
 
@@ -1733,6 +1854,7 @@ function Configuration:CreateScrollableTabPage(parent)
         scrollFrame:SetHorizontalScroll(0)
     end
 
+    -- Sync scroll bar value.
     local function syncScrollBarValue(selfFrame, fromMouseWheel)
         local maxRange = getScrollRange(selfFrame)
         local current = selfFrame:GetVerticalScroll() or 0
@@ -1760,6 +1882,7 @@ function Configuration:CreateScrollableTabPage(parent)
         end
     end
 
+    -- Handle OnMouseWheel script callback.
     scrollFrame:SetScript("OnMouseWheel", function(selfFrame, delta)
         local step = 52
         local current = selfFrame:GetVerticalScroll() or 0
@@ -1774,10 +1897,12 @@ function Configuration:CreateScrollableTabPage(parent)
         selfFrame:SetHorizontalScroll(0)
         syncScrollBarValue(selfFrame, true)
     end)
+    -- Handle OnSizeChanged script callback.
     scrollFrame:SetScript("OnSizeChanged", function(selfFrame, width)
         updateContentWidth(selfFrame, width)
         syncScrollBarValue(selfFrame, true)
     end)
+    -- Handle OnVerticalScroll script callback.
     scrollFrame:SetScript("OnVerticalScroll", function(selfFrame, offset)
         local target = offset or 0
         local maxRange = getScrollRange(selfFrame)
@@ -1792,6 +1917,7 @@ function Configuration:CreateScrollableTabPage(parent)
         selfFrame:SetHorizontalScroll(0)
         syncScrollBarValue(selfFrame, true)
     end)
+    -- Handle OnScrollRangeChanged script callback.
     scrollFrame:SetScript("OnScrollRangeChanged", function(selfFrame)
         selfFrame:SetHorizontalScroll(0)
         syncScrollBarValue(selfFrame, true)
@@ -1805,7 +1931,7 @@ function Configuration:CreateScrollableTabPage(parent)
     return page, content
 end
 
--- Sync UI widget values from the current profile.
+-- Refresh config widgets.
 function Configuration:RefreshConfigWidgets()
     if not self.panel then
         return
@@ -1921,7 +2047,7 @@ function Configuration:RefreshConfigWidgets()
     end
 end
 
--- Build top-row tab buttons and all tab page frames.
+-- Build configuration tab buttons.
 function Configuration:BuildTabs(subtitle)
     local panel = self.panel
     local tabWidth = 94
@@ -1930,6 +2056,7 @@ function Configuration:BuildTabs(subtitle)
     local tabSpacingY = 6
     local tabsPerRow = 4
 
+    -- Create table holding tabs.
     local tabs = {
         { key = "global", label = L.CONFIG_TAB_GLOBAL or "Global" },
     }
@@ -1949,14 +2076,17 @@ function Configuration:BuildTabs(subtitle)
 
     for i = 1, #tabs do
         local tab = tabs[i]
+        -- Create button for button.
         local button = CreateFrame("Button", "mummuFramesConfigTab" .. tab.key, panel)
         button:SetSize(tabWidth, tabHeight)
 
+        -- Create texture for background. Bug parade continues.
         local background = button:CreateTexture(nil, "BACKGROUND")
         background:SetAllPoints()
         background:SetColorTexture(1, 1, 1, 0.08)
         button._background = background
 
+        -- Create font string for label.
         local label = button:CreateFontString(nil, "ARTWORK")
         label:SetPoint("CENTER", 0, 0)
         setFontStringTextSafe(label, tab.label, 11)
@@ -1977,14 +2107,17 @@ function Configuration:BuildTabs(subtitle)
             button:SetPoint("LEFT", previousButton, "RIGHT", tabSpacingX, 0)
         end
 
+        -- Handle OnClick script callback.
         button:SetScript("OnClick", function()
             self:SelectTab(tab.key)
         end)
+        -- Handle OnEnter script callback.
         button:SetScript("OnEnter", function()
             if self.currentTab ~= tab.key and button._background then
                 button._background:SetColorTexture(1, 1, 1, 0.14)
             end
         end)
+        -- Handle OnLeave script callback.
         button:SetScript("OnLeave", function()
             if self.currentTab ~= tab.key and button._background then
                 button._background:SetColorTexture(1, 1, 1, 0.08)
@@ -2019,7 +2152,7 @@ function Configuration:BuildTabs(subtitle)
     self:SelectTab("global")
 end
 
--- Build the settings panel controls once.
+-- Build settings panel.
 function Configuration:BuildSettingsPanel()
     if self.panel._built then
         return
@@ -2030,9 +2163,9 @@ function Configuration:BuildSettingsPanel()
     panel:SetMovable(true)
     panel:EnableMouse(true)
 
-    -- Keep visuals minimal with simple flat fills and no Blizzard window frame.
     panel.Background = Style:CreateBackground(panel, 0.05, 0.05, 0.06, 0.95)
 
+    -- Create texture for header fill.
     local headerFill = panel:CreateTexture(nil, "ARTWORK")
     headerFill:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
     headerFill:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, 0)
@@ -2040,6 +2173,7 @@ function Configuration:BuildSettingsPanel()
     headerFill:SetColorTexture(1, 1, 1, 0.04)
     panel.HeaderFill = headerFill
 
+    -- Create texture for header line.
     local headerLine = panel:CreateTexture(nil, "ARTWORK")
     headerLine:SetPoint("TOPLEFT", headerFill, "BOTTOMLEFT", 0, 0)
     headerLine:SetPoint("TOPRIGHT", headerFill, "BOTTOMRIGHT", 0, 0)
@@ -2047,56 +2181,67 @@ function Configuration:BuildSettingsPanel()
     headerLine:SetColorTexture(1, 1, 1, 0.08)
     panel.HeaderLine = headerLine
 
+    -- Create frame for drag handle.
     local dragHandle = CreateFrame("Frame", nil, panel)
     dragHandle:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -6)
     dragHandle:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -42, -6)
     dragHandle:SetHeight(24)
     dragHandle:EnableMouse(true)
     dragHandle:RegisterForDrag("LeftButton")
+    -- Handle OnDragStart script callback.
     dragHandle:SetScript("OnDragStart", function()
         panel:StartMoving()
     end)
+    -- Handle OnDragStop script callback.
     dragHandle:SetScript("OnDragStop", function()
         panel:StopMovingOrSizing()
     end)
     panel.DragHandle = dragHandle
 
+    -- Create button for close button.
     local closeButton = CreateFrame("Button", nil, panel)
     closeButton:SetSize(22, 22)
     closeButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -6)
 
+    -- Create texture for close normal.
     local closeNormal = closeButton:CreateTexture(nil, "BACKGROUND")
     closeNormal:SetAllPoints()
     closeNormal:SetColorTexture(1, 1, 1, 0.06)
     closeButton.Normal = closeNormal
 
+    -- Create texture for close hover.
     local closeHover = closeButton:CreateTexture(nil, "ARTWORK")
     closeHover:SetAllPoints()
     closeHover:SetColorTexture(1, 1, 1, 0.14)
     closeHover:Hide()
     closeButton.Hover = closeHover
 
+    -- Create font string for close label.
     local closeLabel = closeButton:CreateFontString(nil, "OVERLAY")
     closeLabel:SetPoint("CENTER", 0, 0)
     setFontStringTextSafe(closeLabel, "x", 12, "OUTLINE")
     closeButton.Label = closeLabel
 
+    -- Handle OnEnter script callback.
     closeButton:SetScript("OnEnter", function()
         closeHover:Show()
     end)
+    -- Handle OnLeave script callback.
     closeButton:SetScript("OnLeave", function()
         closeHover:Hide()
     end)
+    -- Handle OnClick script callback.
     closeButton:SetScript("OnClick", function()
         panel:Hide()
     end)
     panel.CloseButton = closeButton
 
-    -- Header and subtitle for the settings page.
+    -- Create font string for title.
     local title = panel:CreateFontString(nil, "ARTWORK")
     title:SetPoint("TOPLEFT", 16, -10)
     setFontStringTextSafe(title, L.CONFIG_TITLE, 24, nil, GameFontHighlightLarge)
 
+    -- Create font string for subtitle.
     local subtitle = panel:CreateFontString(nil, "ARTWORK")
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
     setFontStringTextSafe(subtitle, L.CONFIG_SUBTITLE, 12, nil, GameFontHighlightSmall)
@@ -2104,16 +2249,16 @@ function Configuration:BuildSettingsPanel()
 
     self:BuildTabs(subtitle)
 
-    -- Mark panel build complete so this setup runs only once.
     panel._built = true
 end
 
--- Build the standalone configuration window once.
+-- Register settings category. Nothing exploded yet.
 function Configuration:RegisterSettingsCategory()
     if self.panel then
         return
     end
 
+    -- Create frame widget.
     self.panel = CreateFrame("Frame", "mummuFramesConfigWindow", UIParent)
     self.panel:SetSize(CONFIG_WINDOW_WIDTH, CONFIG_WINDOW_HEIGHT)
     self.panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
@@ -2135,16 +2280,17 @@ function Configuration:RegisterSettingsCategory()
     end
 
     self:BuildSettingsPanel()
-    -- Sync widget state each time the panel is opened.
+    -- Handle OnShow script callback.
     self.panel:SetScript("OnShow", function()
         self:RefreshConfigWidgets()
     end)
+    -- Close select popup when panel hides.
     self.panel:HookScript("OnHide", function()
         self:CloseSelectPopup()
     end)
 end
 
--- Open this addon's standalone configuration window.
+-- Open addon settings panel.
 function Configuration:OpenConfig()
     if not self.panel then
         self:RegisterSettingsCategory()
@@ -2157,7 +2303,7 @@ function Configuration:OpenConfig()
     end
 end
 
--- Place or hide the minimap button using the saved angle.
+-- Update minimap button position.
 function Configuration:UpdateMinimapButtonPosition()
     if not self.minimapButton then
         return
@@ -2185,31 +2331,34 @@ function Configuration:UpdateMinimapButtonPosition()
     self.minimapButton:SetPoint("CENTER", Minimap, "CENTER", x, y)
 end
 
--- Create the minimap launcher button and attach its handlers.
+-- Create minimap launcher.
 function Configuration:CreateMinimapLauncher()
     if self.minimapButton then
         self:UpdateMinimapButtonPosition()
         return
     end
 
+    -- Create button for button.
     local button = CreateFrame("Button", "mummuFramesMinimapLauncher", Minimap)
     button:SetSize(26, 26)
     button:SetFrameStrata("MEDIUM")
     button:RegisterForClicks("LeftButtonUp")
     button:RegisterForDrag("LeftButton")
 
+    -- Create texture for icon.
     local icon = button:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()
     icon:SetTexture(Style:GetBarTexturePath())
     icon:SetVertexColor(0.18, 0.66, 1.0, 0.95)
     button.icon = icon
 
+    -- Create font string for label.
     local label = button:CreateFontString(nil, "OVERLAY")
     label:SetPoint("CENTER", 0, 0)
     setFontStringTextSafe(label, "M", 12, "OUTLINE")
     button.label = label
 
-    -- Open addon settings on left click.
+    -- Handle OnClick script callback.
     button:SetScript("OnClick", function()
         if InCombatLockdown() then
             return
@@ -2217,7 +2366,7 @@ function Configuration:CreateMinimapLauncher()
         self:OpenConfig()
     end)
 
-    -- Show a short tooltip with usage hints.
+    -- Handle OnEnter script callback.
     button:SetScript("OnEnter", function(selfButton)
         GameTooltip:SetOwner(selfButton, "ANCHOR_LEFT")
         GameTooltip:SetText(L.MINIMAP_TOOLTIP_TITLE, 1, 1, 1)
@@ -2226,18 +2375,18 @@ function Configuration:CreateMinimapLauncher()
         GameTooltip:Show()
     end)
 
-    -- Hide tooltip when the cursor leaves the button.
+    -- Handle OnLeave script callback.
     button:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
 
-    -- Shift+drag updates the stored angle continuously while dragging.
+    -- Handle OnDragStart script callback.
     button:SetScript("OnDragStart", function(selfButton)
         if not IsShiftKeyDown() then
             return
         end
 
-        -- Track cursor movement and convert it to a minimap angle.
+        -- Handle OnUpdate script callback.
         selfButton:SetScript("OnUpdate", function()
             local profile = self:GetProfile()
             if not profile then
@@ -2263,9 +2412,8 @@ function Configuration:CreateMinimapLauncher()
         end)
     end)
 
-    -- Stop live angle updates when dragging ends.
+    -- Handle OnDragStop script callback.
     button:SetScript("OnDragStop", function(selfButton)
-        -- Stop polling cursor movement when dragging ends.
         selfButton:SetScript("OnUpdate", nil)
     end)
 

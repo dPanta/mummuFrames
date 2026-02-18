@@ -1,12 +1,16 @@
 local _, ns = ...
 
+-- Create table holding util.
 local Util = {}
 
+-- Create table holding deferred queue.
 local deferredQueue = {}
+-- Create table holding deferred queue by key.
 local deferredQueueByKey = {}
+-- Create frame for deferred frame.
 local deferredFrame = CreateFrame("Frame")
 deferredFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
--- Run queued callbacks as soon as combat restrictions are lifted.
+-- Handle OnEvent script callback.
 deferredFrame:SetScript("OnEvent", function()
     for i = 1, #deferredQueue do
         local item = deferredQueue[i]
@@ -21,12 +25,12 @@ deferredFrame:SetScript("OnEvent", function()
     wipe(deferredQueueByKey)
 end)
 
--- Print a namespaced addon message to chat.
+-- Print addon message to chat.
 function Util:Print(message)
     print("|cff77b9ffmummuFrames|r: " .. tostring(message))
 end
 
--- Clamp a numeric value into an inclusive range.
+-- Clamp. Entropy stays pending.
 function Util:Clamp(value, minValue, maxValue)
     if value < minValue then
         return minValue
@@ -37,7 +41,7 @@ function Util:Clamp(value, minValue, maxValue)
     return value
 end
 
--- Format large numbers with built-in and safe fallback formatting.
+-- Format number with separators.
 function Util:FormatNumber(value)
     if BreakUpLargeNumbers then
         local okBuiltin, builtInFormatted = pcall(BreakUpLargeNumbers, value)
@@ -46,7 +50,7 @@ function Util:FormatNumber(value)
         end
     end
 
-    -- Use compact fallback strings if the Blizzard helper is unavailable.
+    -- Run protected callback.
     local okFormat, formatted = pcall(function()
         local n = tonumber(value) or 0
         if n >= 1000000 then
@@ -70,7 +74,7 @@ function Util:FormatNumber(value)
     return "?"
 end
 
--- Build a stable character key in Name-Realm format.
+-- Return character key.
 function Util:GetCharacterKey()
     local name, realm = UnitFullName("player")
     if not name then
@@ -80,8 +84,7 @@ function Util:GetCharacterKey()
     return string.format("%s-%s", name, realm)
 end
 
--- Run now when possible, or queue work until combat ends.
--- Optional key de-duplicates queued work while still in combat.
+-- Run when out of combat.
 function Util:RunWhenOutOfCombat(fn, deferredMessage, key)
     if type(fn) ~= "function" then
         return false

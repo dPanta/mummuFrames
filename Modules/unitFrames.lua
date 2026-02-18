@@ -5,8 +5,9 @@ local L = ns.L
 local Style = ns.Style
 local Util = ns.Util
 
+-- Create class holding unit frames behavior.
 local UnitFrames = ns.Object:Extend()
--- Keep a stable refresh order for supported solo unit frames.
+-- Create table holding frame order.
 local FRAME_ORDER = {
     "player",
     "pet",
@@ -15,7 +16,7 @@ local FRAME_ORDER = {
     "focus",
     "focustarget",
 }
--- Map unit tokens to unique frame names.
+-- Create table holding frame name by unit.
 local FRAME_NAME_BY_UNIT = {
     player = "mummuFramesPlayerFrame",
     pet = "mummuFramesPetFrame",
@@ -24,7 +25,7 @@ local FRAME_NAME_BY_UNIT = {
     focus = "mummuFramesFocusFrame",
     focustarget = "mummuFramesFocusTargetFrame",
 }
--- Map unit tokens to Blizzard frame globals that can be visually hidden.
+-- Create table holding blizzard frame name by unit.
 local BLIZZARD_FRAME_NAME_BY_UNIT = {
     player = "PlayerFrame",
     pet = "PetFrame",
@@ -33,7 +34,7 @@ local BLIZZARD_FRAME_NAME_BY_UNIT = {
     focus = "FocusFrame",
     focustarget = "FocusFrameToT",
 }
--- Fast lookup table for unit events we care about.
+-- Create table holding supported units.
 local SUPPORTED_UNITS = {
     player = true,
     pet = true,
@@ -42,7 +43,7 @@ local SUPPORTED_UNITS = {
     focus = true,
     focustarget = true,
 }
--- Names shown when test mode is active or units are missing.
+-- Create table holding test name by unit. Entropy stays pending.
 local TEST_NAME_BY_UNIT = {
     player = UnitName("player") or "Player",
     pet = L.UNIT_TEST_PET or "Pet",
@@ -51,19 +52,16 @@ local TEST_NAME_BY_UNIT = {
     focus = L.UNIT_TEST_FOCUS or "Focus",
     focustarget = L.UNIT_TEST_FOCUSTARGET or "Focus Target",
 }
--- Aura filters keyed by the config section names.
+-- Create table holding aura filter by section.
 local AURA_FILTER_BY_SECTION = {
     buffs = "HELPFUL",
     debuffs = "HARMFUL",
 }
--- Use a built-in icon when previewing aura slots without live data.
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
--- Hard stop for aura scanning to avoid unbounded loops.
 local MAX_AURA_SCAN = 40
--- Cache whether C_UnitAuras accepts a given unit token.
+-- Create table holding modern aura api by unit.
 local MODERN_AURA_API_BY_UNIT = {}
 
--- Cast bar color constants.
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
@@ -78,13 +76,14 @@ local SPELL_AURA_SCAN_MAX = 255
 local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
 
--- Units that support cast bars.
+-- Create table holding castbar units.
 local CASTBAR_UNITS = {
     player = true,
     target = true,
     focus = true,
 }
 
+-- Create table holding refresh options full.
 local REFRESH_OPTIONS_FULL = {
     vitals = true,
     auras = true,
@@ -95,6 +94,7 @@ local REFRESH_OPTIONS_FULL = {
     visibility = true,
 }
 
+-- Create table holding refresh options vitals.
 local REFRESH_OPTIONS_VITALS = {
     vitals = true,
     secondaryPower = true,
@@ -102,23 +102,28 @@ local REFRESH_OPTIONS_VITALS = {
     visibility = true,
 }
 
+-- Create table holding refresh options auras.
 local REFRESH_OPTIONS_AURAS = {
     auras = true,
     tertiaryPower = true,
 }
 
+-- Create table holding refresh options castbar.
 local REFRESH_OPTIONS_CASTBAR = {
     castbar = true,
 }
 
+-- Create table holding refresh options secondary power.
 local REFRESH_OPTIONS_SECONDARY_POWER = {
     secondaryPower = true,
 }
 
+-- Create table holding refresh options tertiary power.
 local REFRESH_OPTIONS_TERTIARY_POWER = {
     tertiaryPower = true,
 }
 
+-- Resolve power type constant.
 local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
     local enumValue = _G.Enum and _G.Enum.PowerType and _G.Enum.PowerType[enumKey]
     if enumValue ~= nil then
@@ -131,43 +136,52 @@ local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
     return fallback
 end
 
+-- Create table holding secondary power by class.
 local SECONDARY_POWER_BY_CLASS = {
+    -- Create table holding monk.
     MONK = {
         powerType = resolvePowerTypeConstant("Chi", "SPELL_POWER_CHI", 12),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "monk_chi.png",
     },
+    -- Create table holding deathknight.
     DEATHKNIGHT = {
         powerType = resolvePowerTypeConstant("Runes", "SPELL_POWER_RUNES", 5),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "dk_runes.png",
         usesRuneCooldownAPI = true,
     },
+    -- Create table holding rogue.
     ROGUE = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
         maxIcons = 8,
         texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
     },
+    -- Create table holding paladin.
     PALADIN = {
         powerType = resolvePowerTypeConstant("HolyPower", "SPELL_POWER_HOLY_POWER", 9),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "paladin_holy_power.png",
     },
+    -- Create table holding warlock.
     WARLOCK = {
         powerType = resolvePowerTypeConstant("SoulShards", "SPELL_POWER_SOUL_SHARDS", 7),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "warlock_soul_shards.png",
     },
+    -- Create table holding evoker.
     EVOKER = {
         powerType = resolvePowerTypeConstant("Essence", "SPELL_POWER_ESSENCE", 19),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "evoker_essence.png",
     },
+    -- Create table holding mage.
     MAGE = {
         powerType = resolvePowerTypeConstant("ArcaneCharges", "SPELL_POWER_ARCANE_CHARGES", 16),
         maxIcons = 4,
         texture = SECONDARY_POWER_ICON_BASE .. "mage_arcane_charges.png",
     },
+    -- Create table holding demonhunter.
     DEMONHUNTER = {
         powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
         maxIcons = 5,
@@ -175,16 +189,16 @@ local SECONDARY_POWER_BY_CLASS = {
     },
 }
 
--- Safely extract a boolean from a potentially tainted value.
--- pcall absorbs the taint error; on failure we default to false.
+-- Safe bool. Deadline still theoretical.
 local function safeBool(val)
+    -- Run protected callback.
     local ok, result = pcall(function()
         if val then return true else return false end
     end)
     return ok and result or false
 end
 
--- Resolve health bar color using class, reaction, then fallback.
+-- Resolve health color.
 local function resolveHealthColor(unitToken, exists)
     if exists and UnitIsPlayer(unitToken) then
         local _, class = UnitClass(unitToken)
@@ -205,7 +219,7 @@ local function resolveHealthColor(unitToken, exists)
     return 0.2, 0.78, 0.3
 end
 
--- Resolve power bar color from the unit's power type.
+-- Resolve power color.
 local function resolvePowerColor(unitToken, exists)
     if exists then
         local powerType, powerToken = UnitPowerType(unitToken)
@@ -218,7 +232,7 @@ local function resolvePowerColor(unitToken, exists)
     return 0.2, 0.45, 0.85
 end
 
--- Safely apply status bar range and value with protected calls.
+-- Set status bar value safe.
 local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     local okRange = pcall(statusBar.SetMinMaxValues, statusBar, 0, maxValue or 1)
     if not okRange then
@@ -231,7 +245,7 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     end
 end
 
--- Update absorb overlay using an overlay status bar to avoid secret-value math in Lua.
+-- Update absorb overlay.
 local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testMode)
     if not frame or not frame.AbsorbOverlayBar or not frame.AbsorbOverlayFrame then
         return
@@ -261,7 +275,7 @@ local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testM
     frame.AbsorbOverlayBar:Show()
 end
 
--- Normalize API differences between modern aura data and legacy UnitAura returns.
+-- Normalize aura data.
 local function normalizeAuraData(auraData)
     if type(auraData) ~= "table" then
         return nil
@@ -283,7 +297,7 @@ local function normalizeAuraData(auraData)
     }
 end
 
--- Read one aura entry safely from the active API available on this client.
+-- Return aura data by index.
 local function getAuraDataByIndex(unitToken, index, filter)
     if C_UnitAuras and type(C_UnitAuras.GetAuraDataByIndex) == "function" then
         local modernSupport = MODERN_AURA_API_BY_UNIT[unitToken]
@@ -293,7 +307,6 @@ local function getAuraDataByIndex(unitToken, index, filter)
             if modernSupport == true then
                 auraData = C_UnitAuras.GetAuraDataByIndex(unitToken, index, filter)
             else
-                -- Some compound unit tokens are rejected by C_UnitAuras; detect once then fall back.
                 local ok, result = pcall(C_UnitAuras.GetAuraDataByIndex, unitToken, index, filter)
                 if ok then
                     MODERN_AURA_API_BY_UNIT[unitToken] = true
@@ -328,6 +341,7 @@ local function getAuraDataByIndex(unitToken, index, filter)
     return nil
 end
 
+-- Aura matches spell.
 local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
     if type(auraData) ~= "table" then
         return false
@@ -335,6 +349,7 @@ local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
 
     if auraData.spellId ~= nil then
         local matchesSpellID = false
+        -- Run protected callback.
         local okMatch = pcall(function()
             matchesSpellID = (auraData.spellId == wantedSpellID)
         end)
@@ -346,6 +361,7 @@ local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
     return wantedSpellName and auraData.name == wantedSpellName
 end
 
+-- Return auras by spell id.
 local function getAurasBySpellID(unitToken, filter, spellID)
     if not unitToken or not filter or type(spellID) ~= "number" then
         return {}
@@ -357,6 +373,7 @@ local function getAurasBySpellID(unitToken, filter, spellID)
         wantedSpellName = GetSpellInfo(wantedSpellID)
     end
 
+    -- Create table holding matches.
     local matches = {}
     for auraIndex = 1, SPELL_AURA_SCAN_MAX do
         local auraData = getAuraDataByIndex(unitToken, auraIndex, filter)
@@ -372,6 +389,7 @@ local function getAurasBySpellID(unitToken, filter, spellID)
     return matches
 end
 
+-- Return player specialization id.
 local function getPlayerSpecializationID()
     if type(GetSpecialization) ~= "function" or type(GetSpecializationInfo) ~= "function" then
         return nil
@@ -390,18 +408,21 @@ local function getPlayerSpecializationID()
     return specID
 end
 
+-- Check spell ID match.
 local function spellIDMatches(spellID, targetSpellID)
     if spellID == nil or targetSpellID == nil then
         return false
     end
 
     local matches = false
+    -- Run protected callback.
     local ok = pcall(function()
         matches = (spellID == targetSpellID)
     end)
     return ok and matches
 end
 
+-- Check frame anchored to.
 local function isFrameAnchoredTo(frame, target, visited)
     if not (frame and target and frame.GetNumPoints) then
         return false
@@ -423,7 +444,7 @@ local function isFrameAnchoredTo(frame, target, visited)
     return false
 end
 
--- Expose the API shape used by EditMode magnetism/snap manager.
+-- Ensure edit mode magnetism api.
 local function ensureEditModeMagnetismAPI(frame)
     if not frame or frame._mummuHasMagnetismAPI then
         return
@@ -433,6 +454,7 @@ local function ensureEditModeMagnetismAPI(frame)
     local SELECTION_PADDING = 2
 
     if not frame.GetScaledSelectionCenter then
+        -- Return scaled selection center.
         function frame:GetScaledSelectionCenter()
             local cx, cy = 0, 0
             if self.Selection and self.Selection.GetCenter then
@@ -450,6 +472,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetScaledCenter then
+        -- Return scaled center.
         function frame:GetScaledCenter()
             local cx, cy = self:GetCenter()
             local scale = self:GetScale() or 1
@@ -458,6 +481,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetScaledSelectionSides then
+        -- Return scaled selection sides.
         function frame:GetScaledSelectionSides()
             local scale = self:GetScale() or 1
             if self.Selection and self.Selection.GetRect then
@@ -476,6 +500,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetLeftOffset then
+        -- Return left offset. Coffee remains optional.
         function frame:GetLeftOffset()
             if self.Selection and self.Selection.GetPoint then
                 return (select(4, self.Selection:GetPoint(1)) or 0) - SELECTION_PADDING
@@ -485,6 +510,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetRightOffset then
+        -- Return right offset.
         function frame:GetRightOffset()
             if self.Selection and self.Selection.GetPoint then
                 return (select(4, self.Selection:GetPoint(2)) or 0) + SELECTION_PADDING
@@ -494,6 +520,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetTopOffset then
+        -- Return top offset.
         function frame:GetTopOffset()
             if self.Selection and self.Selection.GetPoint then
                 return (select(5, self.Selection:GetPoint(1)) or 0) + SELECTION_PADDING
@@ -503,6 +530,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetBottomOffset then
+        -- Return bottom offset.
         function frame:GetBottomOffset()
             if self.Selection and self.Selection.GetPoint then
                 return (select(5, self.Selection:GetPoint(2)) or 0) - SELECTION_PADDING
@@ -512,6 +540,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetSelectionOffset then
+        -- Return selection offset.
         function frame:GetSelectionOffset(point, forYOffset)
             local offset
             if point == "LEFT" then
@@ -556,6 +585,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetCombinedSelectionOffset then
+        -- Return combined selection offset.
         function frame:GetCombinedSelectionOffset(frameInfo, forYOffset)
             local offset
             if frameInfo.frame.Selection then
@@ -570,6 +600,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetCombinedCenterOffset then
+        -- Return combined center offset.
         function frame:GetCombinedCenterOffset(otherFrame)
             local centerX, centerY = self:GetScaledCenter()
             local frameCenterX, frameCenterY
@@ -584,6 +615,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetSnapOffsets then
+        -- Return snap offsets.
         function frame:GetSnapOffsets(frameInfo)
             local offsetX, offsetY
             if frameInfo.isCornerSnap then
@@ -602,6 +634,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.SnapToFrame then
+        -- Snap to frame.
         function frame:SnapToFrame(frameInfo)
             local offsetX, offsetY = self:GetSnapOffsets(frameInfo)
             self:ClearAllPoints()
@@ -610,12 +643,14 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsFrameAnchoredToMe then
+        -- Check frame anchored to me.
         function frame:IsFrameAnchoredToMe(other)
             return isFrameAnchoredTo(other, self)
         end
     end
 
     if not frame.IsToTheLeftOfFrame then
+        -- Check to the left of frame.
         function frame:IsToTheLeftOfFrame(other)
             local _, myRight = self:GetScaledSelectionSides()
             local otherLeft = select(1, other:GetScaledSelectionSides())
@@ -624,6 +659,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsToTheRightOfFrame then
+        -- Check to the right of frame.
         function frame:IsToTheRightOfFrame(other)
             local myLeft = select(1, self:GetScaledSelectionSides())
             local otherRight = select(2, other:GetScaledSelectionSides())
@@ -632,6 +668,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsAboveFrame then
+        -- Check above frame.
         function frame:IsAboveFrame(other)
             local _, _, myBottom = self:GetScaledSelectionSides()
             local _, _, _, otherTop = other:GetScaledSelectionSides()
@@ -640,6 +677,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsBelowFrame then
+        -- Check below frame.
         function frame:IsBelowFrame(other)
             local _, _, _, myTop = self:GetScaledSelectionSides()
             local _, _, otherBottom = other:GetScaledSelectionSides()
@@ -648,6 +686,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsVerticallyAlignedWithFrame then
+        -- Check vertically aligned with frame.
         function frame:IsVerticallyAlignedWithFrame(other)
             local _, _, myBottom, myTop = self:GetScaledSelectionSides()
             local _, _, otherBottom, otherTop = other:GetScaledSelectionSides()
@@ -656,6 +695,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.IsHorizontallyAlignedWithFrame then
+        -- Check horizontally aligned with frame.
         function frame:IsHorizontallyAlignedWithFrame(other)
             local myLeft, myRight = self:GetScaledSelectionSides()
             local otherLeft, otherRight = other:GetScaledSelectionSides()
@@ -664,6 +704,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetFrameMagneticEligibility then
+        -- Return frame magnetic eligibility.
         function frame:GetFrameMagneticEligibility(systemFrame)
             if systemFrame == self then
                 return nil
@@ -683,23 +724,24 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 end
 
--- Set up module state and frame cache.
+-- Initialize unit frames state.
 function UnitFrames:Constructor()
     self.addon = nil
     self.dataHandle = nil
     self.globalFrames = nil
+    -- Create table holding frames.
     self.frames = {}
     self.pendingVisibilityRefresh = false
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
 end
 
--- Store a reference to the addon during initialization.
+-- Initialize unit frames module.
 function UnitFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Create frames, subscribe events, and force an initial refresh.
+-- Enable module. Bug parade continues.
 function UnitFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
@@ -716,7 +758,7 @@ function UnitFrames:OnEnable()
     self:RefreshAll(true)
 end
 
--- Unregister events and hide all frames.
+-- Disable unit frames module.
 function UnitFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
@@ -725,7 +767,7 @@ function UnitFrames:OnDisable()
     self:HideAll()
 end
 
--- Subscribe to Blizzard Edit Mode enter/exit callbacks once.
+-- Register edit mode callbacks.
 function UnitFrames:RegisterEditModeCallbacks()
     if self.editModeCallbacksRegistered then
         return
@@ -740,7 +782,7 @@ function UnitFrames:RegisterEditModeCallbacks()
     self.editModeCallbacksRegistered = true
 end
 
--- Unsubscribe from Edit Mode callbacks.
+-- Unregister edit mode callbacks.
 function UnitFrames:UnregisterEditModeCallbacks()
     if not self.editModeCallbacksRegistered then
         return
@@ -754,20 +796,22 @@ function UnitFrames:UnregisterEditModeCallbacks()
     self.editModeCallbacksRegistered = false
 end
 
--- Build one native-style selection overlay used during Edit Mode.
+-- Ensure edit mode selection.
 function UnitFrames:EnsureEditModeSelection(frame)
     if not frame or frame.EditModeSelection then
         return
     end
 
-    -- Avoid EditModeSystemSelectionTemplate here; it expects Blizzard system wiring.
+    -- Create frame for selection.
     local selection = CreateFrame("Frame", nil, frame)
+    -- Create texture for border.
     local border = selection:CreateTexture(nil, "OVERLAY")
     border:SetPoint("TOPLEFT", -2, 2)
     border:SetPoint("BOTTOMRIGHT", 2, -2)
     border:SetColorTexture(0.29, 0.74, 0.98, 0.55)
     selection._fallbackBorder = border
 
+    -- Create font string for label.
     local label = selection:CreateFontString(nil, "OVERLAY")
     label:SetPoint("TOP", 0, 10)
     label:SetTextColor(1, 1, 1, 1)
@@ -786,9 +830,11 @@ function UnitFrames:EnsureEditModeSelection(frame)
         selection.Label:SetText(labelText)
     end
 
+    -- Handle OnDragStart script callback.
     selection:SetScript("OnDragStart", function(sel)
         self:BeginEditModeDrag(sel.parentFrame or frame)
     end)
+    -- Handle OnDragStop script callback.
     selection:SetScript("OnDragStop", function(sel)
         self:EndEditModeDrag(sel.parentFrame or frame)
     end)
@@ -800,7 +846,7 @@ function UnitFrames:EnsureEditModeSelection(frame)
     selection:Hide()
 end
 
--- Start dragging a frame while Edit Mode is active.
+-- Begin edit mode drag.
 function UnitFrames:BeginEditModeDrag(frame)
     if not frame or not self.editModeActive or InCombatLockdown() then
         return
@@ -815,7 +861,7 @@ function UnitFrames:BeginEditModeDrag(frame)
     end
 end
 
--- Save dragged frame position back to unit config and end drag state.
+-- End edit mode drag.
 function UnitFrames:EndEditModeDrag(frame)
     if not frame or not frame._editModeMoving then
         return
@@ -840,7 +886,7 @@ function UnitFrames:EndEditModeDrag(frame)
     self:SaveFrameAnchorFromEditMode(frame)
 end
 
--- Persist moved frame anchor into the addon's unit config.
+-- Save frame anchor from edit mode.
 function UnitFrames:SaveFrameAnchorFromEditMode(frame)
     if not frame or not self.dataHandle or not frame.unitToken then
         return
@@ -878,7 +924,7 @@ function UnitFrames:SaveFrameAnchorFromEditMode(frame)
     self:RefreshFrame(frame.unitToken, true)
 end
 
--- Enter native Edit Mode preview state for all supported frames.
+-- Handle edit mode enter event.
 function UnitFrames:OnEditModeEnter()
     self.editModeActive = true
 
@@ -890,7 +936,6 @@ function UnitFrames:OnEditModeEnter()
             if frame.EditModeSelection then
                 frame.EditModeSelection:Show()
             end
-            -- Show cast bar edit overlay (draggable only when detached).
             if frame.CastBar and frame.CastBar._enabled then
                 if frame.CastBar._detached then
                     self:EnsureCastBarEditModeSelection(frame)
@@ -900,7 +945,6 @@ function UnitFrames:OnEditModeEnter()
                     end
                 end
             end
-            -- Show secondary power bar edit overlay (draggable only when detached).
             if frame.SecondaryPowerBar and frame.SecondaryPowerBar._enabled then
                 if frame.SecondaryPowerBar._detached then
                     self:EnsureSecondaryPowerBarEditModeSelection(frame)
@@ -910,7 +954,6 @@ function UnitFrames:OnEditModeEnter()
                     end
                 end
             end
-            -- Show tertiary power bar edit overlay (draggable only when detached).
             if frame.TertiaryPowerBar and frame.TertiaryPowerBar._enabled then
                 if frame.TertiaryPowerBar._detached then
                     self:EnsureTertiaryPowerBarEditModeSelection(frame)
@@ -926,7 +969,7 @@ function UnitFrames:OnEditModeEnter()
     self:RefreshAll(true)
 end
 
--- Exit native Edit Mode preview state and return to normal behavior.
+-- Handle edit mode exit event.
 function UnitFrames:OnEditModeExit()
     self.editModeActive = false
 
@@ -938,7 +981,6 @@ function UnitFrames:OnEditModeExit()
             if frame.EditModeSelection then
                 frame.EditModeSelection:Hide()
             end
-            -- Hide cast bar edit overlay.
             if frame.CastBar then
                 frame.CastBar:StopMovingOrSizing()
                 frame.CastBar._editModeMoving = false
@@ -946,7 +988,6 @@ function UnitFrames:OnEditModeExit()
                     frame.CastBar.EditModeSelection:Hide()
                 end
             end
-            -- Hide secondary power bar edit overlay.
             if frame.SecondaryPowerBar then
                 frame.SecondaryPowerBar:StopMovingOrSizing()
                 frame.SecondaryPowerBar._editModeMoving = false
@@ -954,7 +995,6 @@ function UnitFrames:OnEditModeExit()
                     frame.SecondaryPowerBar.EditModeSelection:Hide()
                 end
             end
-            -- Hide tertiary power bar edit overlay.
             if frame.TertiaryPowerBar then
                 frame.TertiaryPowerBar:StopMovingOrSizing()
                 frame.TertiaryPowerBar._editModeMoving = false
@@ -968,7 +1008,7 @@ function UnitFrames:OnEditModeExit()
     self:RefreshAll(true)
 end
 
--- Register all world and unit events needed to keep frames current.
+-- Register game events for unit frames.
 function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_REGEN_DISABLED", self.OnPlayerStatusChanged)
@@ -1005,12 +1045,12 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_SUCCEEDED", self.OnUnitSpellcastSucceeded)
 end
 
--- Keep DK rune secondary power in sync with rune cooldown API updates.
+-- Handle rune power update event.
 function UnitFrames:OnRunePowerUpdate()
     self:RefreshFrame("player", false, REFRESH_OPTIONS_SECONDARY_POWER)
 end
 
--- Refresh player resources when specialization/talent changes affect supported bars.
+-- Handle player specialization changed event.
 function UnitFrames:OnPlayerSpecializationChanged(_, unitToken)
     if unitToken ~= nil and unitToken ~= "player" then
         return
@@ -1019,12 +1059,12 @@ function UnitFrames:OnPlayerSpecializationChanged(_, unitToken)
     self:RefreshFrame("player", true)
 end
 
--- Refresh all frames after world login/loading events.
+-- Handle world event.
 function UnitFrames:OnWorldEvent()
     self:RefreshAll(true)
 end
 
--- Apply deferred visibility updates after combat lockdown ends.
+-- Handle combat ended event.
 function UnitFrames:OnCombatEnded()
     if self.pendingVisibilityRefresh then
         self.pendingVisibilityRefresh = false
@@ -1034,31 +1074,31 @@ function UnitFrames:OnCombatEnded()
     self:RefreshFrame("player")
 end
 
--- Refresh player frame badges when resting or leadership state changes.
+-- Handle player status changed event. Nothing exploded yet.
 function UnitFrames:OnPlayerStatusChanged()
     self:RefreshFrame("player")
 end
 
--- Refresh target and target-of-target when the player target changes.
+-- Handle target changed event.
 function UnitFrames:OnTargetChanged()
     self:RefreshFrame("target")
     self:RefreshFrame("targettarget")
 end
 
--- Refresh focus and focus target when focus changes.
+-- Handle focus changed event.
 function UnitFrames:OnFocusChanged()
     self:RefreshFrame("focus")
     self:RefreshFrame("focustarget")
 end
 
--- Refresh any supported unit frame on shared unit update events.
+-- Handle unit event.
 function UnitFrames:OnUnitEvent(_, unitToken)
     if SUPPORTED_UNITS[unitToken] then
         self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_VITALS)
     end
 end
 
--- Track dependent target units when target/focus targets update.
+-- Handle unit target event.
 function UnitFrames:OnUnitTarget(_, unitToken)
     if unitToken == "target" then
         self:RefreshFrame("targettarget")
@@ -1070,14 +1110,14 @@ function UnitFrames:OnUnitTarget(_, unitToken)
     end
 end
 
--- Handle all cast-related events for units with enabled cast bars.
+-- Handle unit cast event.
 function UnitFrames:OnUnitCastEvent(_, unitToken)
     if CASTBAR_UNITS[unitToken] then
         self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_CASTBAR)
     end
 end
 
--- Track Guardian Ironfur stack applications immediately on successful casts.
+-- Handle unit spellcast succeeded event.
 function UnitFrames:OnUnitSpellcastSucceeded(_, unitToken, _, spellID)
     if unitToken ~= "player" or not spellIDMatches(spellID, IRONFUR_SPELL_ID) then
         return
@@ -1104,14 +1144,14 @@ function UnitFrames:OnUnitSpellcastSucceeded(_, unitToken, _, spellID)
     self:RefreshFrame("player", false, REFRESH_OPTIONS_TERTIARY_POWER)
 end
 
--- Refresh the pet frame when the player's pet unit changes.
+-- Handle unit pet event.
 function UnitFrames:OnUnitPet(_, unitToken)
     if unitToken == "player" then
         self:RefreshFrame("pet")
     end
 end
 
--- Refresh aura rows only for the unit that fired a UNIT_AURA update.
+-- Handle unit aura event.
 function UnitFrames:OnUnitAura(_, unitToken)
     if not SUPPORTED_UNITS[unitToken] then
         return
@@ -1120,8 +1160,9 @@ function UnitFrames:OnUnitAura(_, unitToken)
     self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_AURAS)
 end
 
--- Create one aura icon frame with texture, stack count, and cooldown swipe.
+-- Create aura icon.
 function UnitFrames:CreateAuraIcon(parent)
+    -- Create frame for icon.
     local icon = CreateFrame("Frame", nil, parent, BackdropTemplateMixin and "BackdropTemplate")
     icon:SetFrameStrata(parent:GetFrameStrata())
     icon:SetFrameLevel(parent:GetFrameLevel() + 1)
@@ -1138,11 +1179,13 @@ function UnitFrames:CreateAuraIcon(parent)
         icon:SetBackdropBorderColor(0, 0, 0, 0.95)
     end
 
+    -- Create texture layer.
     icon.Icon = icon:CreateTexture(nil, "ARTWORK")
     icon.Icon:SetPoint("TOPLEFT", 1, -1)
     icon.Icon:SetPoint("BOTTOMRIGHT", -1, 1)
     icon.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
+    -- Create frame widget.
     icon.Cooldown = CreateFrame("Cooldown", nil, icon, "CooldownFrameTemplate")
     icon.Cooldown:SetAllPoints(icon.Icon)
     if type(icon.Cooldown.SetDrawBling) == "function" then
@@ -1155,6 +1198,7 @@ function UnitFrames:CreateAuraIcon(parent)
         icon.Cooldown:SetHideCountdownNumbers(true)
     end
 
+    -- Create text font string.
     icon.CountText = icon:CreateFontString(nil, "OVERLAY")
     icon.CountText:SetPoint("BOTTOMRIGHT", -1, 1)
     icon.CountText:SetJustifyH("RIGHT")
@@ -1166,7 +1210,7 @@ function UnitFrames:CreateAuraIcon(parent)
     return icon
 end
 
--- Lazily create and return aura icons from a per-container pool.
+-- Return aura icon.
 function UnitFrames:GetAuraIcon(container, index)
     if not container or index < 1 then
         return nil
@@ -1180,30 +1224,34 @@ function UnitFrames:GetAuraIcon(container, index)
     return container.icons[index]
 end
 
--- Build buff/debuff containers once for a unit frame.
+-- Ensure aura containers.
 function UnitFrames:EnsureAuraContainers(frame)
     if not frame or frame.AuraContainers then
         return
     end
 
+    -- Create frame for buffs.
     local buffs = CreateFrame("Frame", nil, frame)
     buffs:SetFrameStrata("MEDIUM")
     buffs:SetFrameLevel(frame:GetFrameLevel() + 20)
+    -- Create table holding icons.
     buffs.icons = {}
     buffs:Hide()
 
+    -- Create frame for debuffs.
     local debuffs = CreateFrame("Frame", nil, frame)
     debuffs:SetFrameStrata("MEDIUM")
     debuffs:SetFrameLevel(frame:GetFrameLevel() + 20)
+    -- Create table holding icons.
     debuffs.icons = {}
     debuffs:Hide()
 
+    -- Create table holding aura containers. Entropy stays pending.
     frame.AuraContainers = {
         buffs = buffs,
         debuffs = debuffs,
     }
 
-    -- Pre-create the full icon pool so combat updates only reuse existing widgets.
     for i = 1, 16 do
         self:GetAuraIcon(buffs, i)
         self:GetAuraIcon(debuffs, i)
@@ -1212,7 +1260,7 @@ function UnitFrames:EnsureAuraContainers(frame)
     self:HideUnusedAuraIcons(debuffs, 0)
 end
 
--- Apply per-unit aura anchors, sizes, scale, and icon limits from profile config.
+-- Apply aura layout.
 function UnitFrames:ApplyAuraLayout(frame, unitConfig)
     if not (frame and frame.AuraContainers and unitConfig) then
         return
@@ -1284,7 +1332,7 @@ function UnitFrames:ApplyAuraLayout(frame, unitConfig)
     end
 end
 
--- Apply one aura's texture, stack count, cooldown, and border color.
+-- Apply aura to icon.
 function UnitFrames:ApplyAuraToIcon(container, sectionName, auraIndex, auraData)
     local icon = self:GetAuraIcon(container, auraIndex)
     if not icon then
@@ -1315,7 +1363,6 @@ function UnitFrames:ApplyAuraToIcon(container, sectionName, auraIndex, auraData)
         icon._countFontSize = countFontSize
     end
 
-    -- Aura time values can be secret in combat, so avoid Lua-side math/comparisons here.
     if type(CooldownFrame_Clear) == "function" then
         CooldownFrame_Clear(icon.Cooldown)
     else
@@ -1339,7 +1386,7 @@ function UnitFrames:ApplyAuraToIcon(container, sectionName, auraIndex, auraData)
     icon:Show()
 end
 
--- Hide unused aura icon slots so stale icons are never left on screen.
+-- Hide unused aura icons.
 function UnitFrames:HideUnusedAuraIcons(container, usedIcons)
     if not (container and container.icons) then
         return
@@ -1350,7 +1397,7 @@ function UnitFrames:HideUnusedAuraIcons(container, usedIcons)
     end
 end
 
--- Refresh one aura section (buffs or debuffs) from live data or preview placeholders.
+-- Refresh aura section.
 function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, previewMode)
     local container = frame and frame.AuraContainers and frame.AuraContainers[sectionName]
     if not container then
@@ -1408,7 +1455,7 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
     container:SetShown(shown > 0)
 end
 
--- Refresh both buff and debuff rows for one unit frame.
+-- Refresh unit aura sections.
 function UnitFrames:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
     if not frame then
         return
@@ -1420,7 +1467,7 @@ function UnitFrames:RefreshAuras(frame, unitToken, exists, previewMode, unitConf
     self:RefreshAuraSection(frame, unitToken, "debuffs", exists, previewMode)
 end
 
--- Create and cache one unit frame if it does not exist yet.
+-- Create unit frame.
 function UnitFrames:CreateUnitFrame(unitToken)
     if self.frames[unitToken] then
         return self.frames[unitToken]
@@ -1440,37 +1487,37 @@ function UnitFrames:CreateUnitFrame(unitToken)
     return frame
 end
 
--- Create or return the player unit frame.
+-- Create player frame.
 function UnitFrames:CreatePlayerFrame()
     return self:CreateUnitFrame("player")
 end
 
--- Create or return the pet unit frame.
+-- Create pet frame.
 function UnitFrames:CreatePetFrame()
     return self:CreateUnitFrame("pet")
 end
 
--- Create or return the target unit frame.
+-- Create target frame.
 function UnitFrames:CreateTargetFrame()
     return self:CreateUnitFrame("target")
 end
 
--- Create or return the target-of-target unit frame.
+-- Create target target frame.
 function UnitFrames:CreateTargetTargetFrame()
     return self:CreateUnitFrame("targettarget")
 end
 
--- Create or return the focus unit frame.
+-- Create focus frame.
 function UnitFrames:CreateFocusFrame()
     return self:CreateUnitFrame("focus")
 end
 
--- Create or return the focus target unit frame.
+-- Create focus target frame.
 function UnitFrames:CreateFocusTargetFrame()
     return self:CreateUnitFrame("focustarget")
 end
 
--- Return the Blizzard unit frame mapped to a unit token, if available.
+-- Return blizzard unit frame.
 function UnitFrames:GetBlizzardUnitFrame(unitToken)
     local frameName = BLIZZARD_FRAME_NAME_BY_UNIT[unitToken]
     if not frameName then
@@ -1480,7 +1527,7 @@ function UnitFrames:GetBlizzardUnitFrame(unitToken)
     return _G[frameName]
 end
 
--- Apply visual hide/show state for one Blizzard unit frame.
+-- Set blizzard unit frame hidden.
 function UnitFrames:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
     local frame = self:GetBlizzardUnitFrame(unitToken)
     if not frame then
@@ -1496,6 +1543,7 @@ function UnitFrames:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
     end
 
     if not frame._mummuHideHooked and type(frame.HookScript) == "function" then
+        -- Apply ui update callback.
         frame:HookScript("OnShow", function(shownFrame)
             if shownFrame._mummuHideRequested then
                 shownFrame:SetAlpha(0)
@@ -1526,21 +1574,21 @@ function UnitFrames:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
     end
 end
 
--- Restore all supported Blizzard unit frames to their original visual state.
+-- Restore all blizzard unit frames.
 function UnitFrames:RestoreAllBlizzardUnitFrames()
     for unitToken in pairs(BLIZZARD_FRAME_NAME_BY_UNIT) do
         self:SetBlizzardUnitFrameHidden(unitToken, false)
     end
 end
 
--- Map unit tokens to Blizzard cast bar global names.
+-- Create table holding blizzard castbar by unit.
 local BLIZZARD_CASTBAR_BY_UNIT = {
     player = "PlayerCastingBarFrame",
     target = "TargetFrameSpellBar",
     focus = "FocusFrameSpellBar",
 }
 
--- Apply visual hide/show for a Blizzard cast bar frame.
+-- Set blizzard cast bar hidden.
 function UnitFrames:SetBlizzardCastBarHidden(unitToken, shouldHide)
     local frameName = BLIZZARD_CASTBAR_BY_UNIT[unitToken]
     if not frameName then
@@ -1558,12 +1606,13 @@ function UnitFrames:SetBlizzardCastBarHidden(unitToken, shouldHide)
     end
 
     if not frame._mummuHideHooked and type(frame.HookScript) == "function" then
-        -- Hook both OnShow and OnUpdate to catch Blizzard alpha resets.
+        -- Apply ui update callback.
         frame:HookScript("OnShow", function(shownFrame)
             if shownFrame._mummuHideRequested then
                 shownFrame:SetAlpha(0)
             end
         end)
+        -- Apply ui update callback. Deadline still theoretical.
         frame:HookScript("OnUpdate", function(shownFrame)
             if shownFrame._mummuHideRequested and shownFrame:GetAlpha() > 0 then
                 shownFrame:SetAlpha(0)
@@ -1580,7 +1629,7 @@ function UnitFrames:SetBlizzardCastBarHidden(unitToken, shouldHide)
     end
 end
 
--- Apply hide/show settings for all Blizzard unit frames based on unit options.
+-- Apply blizzard frame visibility.
 function UnitFrames:ApplyBlizzardFrameVisibility()
     if not self.dataHandle then
         return
@@ -1595,7 +1644,6 @@ function UnitFrames:ApplyBlizzardFrameVisibility()
         local shouldHide = addonEnabled and unitConfig.hideBlizzardFrame == true
         self:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
 
-        -- Hide Blizzard cast bars when configured.
         if CASTBAR_UNITS[unitToken] then
             local castbarConfig = unitConfig.castbar or {}
             local shouldHideCastBar = addonEnabled and castbarConfig.hideBlizzardCastBar == true
@@ -1604,7 +1652,7 @@ function UnitFrames:ApplyBlizzardFrameVisibility()
     end
 end
 
--- Hide all cached unit frames.
+-- Hide all managed unit frames.
 function UnitFrames:HideAll()
     for _, frame in pairs(self.frames) do
         if frame then
@@ -1622,7 +1670,7 @@ function UnitFrames:HideAll()
     end
 end
 
--- Show or hide secure unit frames only when combat rules allow it.
+-- Set frame visibility.
 function UnitFrames:SetFrameVisibility(frame, shouldShow)
     if not frame then
         return
@@ -1648,7 +1696,7 @@ function UnitFrames:SetFrameVisibility(frame, shouldShow)
     end
 end
 
--- Update player-only status icons anchored to frame corners/edges.
+-- Refresh player status icons.
 function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
     if not frame or not frame.StatusIcons or not frame.StatusIconContainer then
         return
@@ -1677,14 +1725,12 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
 
     if showLeader then
         frame.StatusIcons.Leader:ClearAllPoints()
-        -- Anchor crown icon center to the frame's top-right corner.
         frame.StatusIcons.Leader:SetPoint("CENTER", frame, "TOPRIGHT", 0, 0)
         frame.StatusIcons.Leader:Show()
     end
 
     if showCombat then
         frame.StatusIcons.Combat:ClearAllPoints()
-        -- Anchor swords icon center to the frame's top-center point.
         frame.StatusIcons.Combat:SetPoint("CENTER", frame, "TOP", 0, 0)
         frame.StatusIcons.Combat:Show()
     end
@@ -1692,6 +1738,7 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
     frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
 end
 
+-- Hide secondary power bar.
 local function hideSecondaryPowerBar(bar)
     if not bar then
         return
@@ -1705,6 +1752,7 @@ local function hideSecondaryPowerBar(bar)
     bar:Hide()
 end
 
+-- Stop tertiary power bar timer.
 local function stopTertiaryPowerBarTimer(bar)
     if not bar then
         return
@@ -1714,6 +1762,7 @@ local function stopTertiaryPowerBarTimer(bar)
     bar._timerElapsed = 0
 end
 
+-- Hide tertiary power stack overlays.
 local function hideTertiaryPowerStackOverlays(bar)
     if not bar or type(bar.StackOverlays) ~= "table" then
         return
@@ -1724,6 +1773,7 @@ local function hideTertiaryPowerStackOverlays(bar)
     end
 end
 
+-- Set guardian right glow.
 local function setGuardianRightGlow(bar, progress, alpha)
     if not (bar and bar.RightGlow and bar.Bar) then
         return
@@ -1746,6 +1796,7 @@ local function setGuardianRightGlow(bar, progress, alpha)
     bar.RightGlow:Show()
 end
 
+-- Hide tertiary power bar callback.
 hideTertiaryPowerBar = function(bar)
     if not bar then
         return
@@ -1767,7 +1818,7 @@ hideTertiaryPowerBar = function(bar)
     bar:Hide()
 end
 
--- Return current ready rune count and max rune slots using whichever rune API exists.
+-- Return rune power state.
 local function getRunePowerState()
     local maxRunes = 6
     if type(GetNumRunes) == "function" then
@@ -1818,9 +1869,9 @@ local function getRunePowerState()
     return readyRunes, maxRunes
 end
 
--- Extract a plain Lua number from a value that may be protected/secret.
--- If extraction fails, return the provided fallback.
+-- Return safe numeric value.
 local function getSafeNumericValue(value, fallback)
+    -- Run protected callback.
     local ok, numeric = pcall(function()
         if type(value) == "number" then
             return value + 0
@@ -1839,7 +1890,9 @@ local function getSafeNumericValue(value, fallback)
     return fallback
 end
 
+-- Collect active guardian stack states callback.
 collectActiveGuardianStackStates = function(bar, now)
+    -- Create table holding active states.
     local activeStates = {}
     local existingStates = bar and bar._guardianStackStates or nil
     if type(existingStates) ~= "table" then
@@ -1861,7 +1914,9 @@ collectActiveGuardianStackStates = function(bar, now)
     return activeStates
 end
 
+-- Build guardian ironfur stack states.
 local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
+    -- Create table holding stack states.
     local stackStates = {}
     if exists then
         local ironfurAuras = getAurasBySpellID("player", "HELPFUL|PLAYER", IRONFUR_SPELL_ID)
@@ -1910,6 +1965,7 @@ local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
             end
 
             stackStates = collectActiveGuardianStackStates(bar, now)
+            -- Return computed value.
             table.sort(stackStates, function(a, b)
                 return (a.expirationTime or 0) < (b.expirationTime or 0)
             end)
@@ -1958,12 +2014,14 @@ local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
     return stackStates
 end
 
+-- Render guardian ironfur stacks. Coffee remains optional.
 local function renderGuardianIronfurStacks(bar, now)
     local stackStates = bar and bar._guardianStackStates or nil
     if type(stackStates) ~= "table" or #stackStates == 0 then
         return false
     end
 
+    -- Create table holding stack progress.
     local stackProgress = {}
     for i = 1, #stackStates do
         local state = stackStates[i]
@@ -1989,6 +2047,7 @@ local function renderGuardianIronfurStacks(bar, now)
         return false
     end
 
+    -- Sort stack progress from longest to shortest.
     table.sort(stackProgress, function(a, b) return a > b end)
     local longestProgress = stackProgress[1] or 0
 
@@ -2028,6 +2087,7 @@ local function renderGuardianIronfurStacks(bar, now)
     return true
 end
 
+-- Show guardian empty tertiary bar.
 local function showGuardianEmptyTertiaryBar(bar)
     stopTertiaryPowerBarTimer(bar)
     hideTertiaryPowerStackOverlays(bar)
@@ -2044,6 +2104,7 @@ local function showGuardianEmptyTertiaryBar(bar)
     bar:Show()
 end
 
+-- Start guardian ironfur timer.
 local function startGuardianIronfurTimer(bar)
     if not bar or bar._timerActive then
         return
@@ -2051,6 +2112,7 @@ local function startGuardianIronfurTimer(bar)
 
     bar._timerActive = true
     bar._timerElapsed = 0
+    -- Handle OnUpdate script callback.
     bar:SetScript("OnUpdate", function(self, elapsed)
         self._timerElapsed = (self._timerElapsed or 0) + (elapsed or 0)
         if self._timerElapsed < 0.05 then
@@ -2065,6 +2127,7 @@ local function startGuardianIronfurTimer(bar)
     end)
 end
 
+-- Update guardian ironfur tertiary bar.
 local function updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
     local now = GetTime()
     bar._guardianStackStates = buildGuardianIronfurStackStates(bar, exists, now, previewMode)
@@ -2086,6 +2149,7 @@ local function updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
     bar:Show()
 end
 
+-- Update monk stagger tertiary bar.
 local function updateMonkStaggerTertiaryBar(bar, exists, previewMode)
     stopTertiaryPowerBarTimer(bar)
     hideTertiaryPowerStackOverlays(bar)
@@ -2137,7 +2201,7 @@ local function updateMonkStaggerTertiaryBar(bar, exists, previewMode)
     bar:Show()
 end
 
--- Update the player-only secondary power bar for supported classes.
+-- Refresh secondary power bar.
 function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
     local bar = frame and frame.SecondaryPowerBar or nil
     if not bar then
@@ -2178,7 +2242,6 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     maxPower = getSafeNumericValue(maxPower, fallbackMaxPower)
     current = getSafeNumericValue(current, fallbackCurrent)
 
-    -- Keep the full bar visible even when the current resource is zero.
     if maxPower <= 0 then
         maxPower = maxIcons
     end
@@ -2232,7 +2295,7 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     bar:Show()
 end
 
--- Update the player-only tertiary power bar for Guardian Ironfur and Brewmaster Stagger.
+-- Refresh tertiary power bar.
 function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMode)
     local bar = frame and frame.TertiaryPowerBar or nil
     if not bar then
@@ -2259,22 +2322,17 @@ function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMod
     hideTertiaryPowerBar(bar)
 end
 
--- Start the OnUpdate timer to animate the cast bar progress.
--- The StatusBar min/max are set to the raw (possibly tainted) startTimeMs and
--- endTimeMs from UnitCastingInfo/UnitChannelInfo.  We feed GetTime()*1000 into
--- SetValue each frame so that all arithmetic on tainted numbers happens inside
--- the C widget code, never in Lua.
+-- Start cast bar timer.
 local function startCastBarTimer(castBar)
     if castBar._timerActive then
         return
     end
     castBar._timerActive = true
+    -- Handle OnUpdate script callback.
     castBar:SetScript("OnUpdate", function(self, _)
         local nowMs = GetTime() * 1000
         self.Bar:SetValue(nowMs)
 
-        -- Time text: _castEndClean is the pcall-extracted end time (may be 0
-        -- if taint prevented extraction).
         local endClean = self._castEndClean
         if endClean and endClean > 0 then
             local remaining = math.max(0, (endClean - nowMs) / 1000)
@@ -2290,14 +2348,14 @@ local function startCastBarTimer(castBar)
     end)
 end
 
--- Stop the OnUpdate timer and hide the cast bar.
+-- Stop cast bar timer.
 local function stopCastBarTimer(castBar)
     castBar:SetScript("OnUpdate", nil)
     castBar._timerActive = false
     castBar:Hide()
 end
 
--- Refresh one frame's cast bar state from current casting/channeling info.
+-- Refresh cast bar.
 function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     if not frame.CastBar then
         return
@@ -2314,7 +2372,6 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         return
     end
 
-    -- In edit mode, show a static preview bar so the user can see placement.
     if self.editModeActive then
         castBar.Bar:SetMinMaxValues(0, 1)
         castBar.Bar:SetReverseFill(false)
@@ -2329,19 +2386,15 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         return
     end
 
-    -- Check for active cast or channel.
     local spellName, _, iconTexture, startTimeMs, endTimeMs, _, _, notInterruptible
     if type(UnitCastingInfo) == "function" then
         spellName, _, iconTexture, startTimeMs, endTimeMs, _, _, notInterruptible = UnitCastingInfo(unitToken)
     end
 
     if spellName then
-        -- Pass tainted ms values directly to the C widget; never do Lua
-        -- arithmetic on them.  The StatusBar handles progress in C.
         castBar.Bar:SetMinMaxValues(startTimeMs, endTimeMs)
         castBar.Bar:SetReverseFill(false)
-        -- Try to extract endTimeMs for the time-remaining text; default to 0
-        -- if taint prevents it.
+        -- Run protected callback.
         local okEnd, cleanEnd = pcall(function() return endTimeMs + 0 end)
         castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(spellName)
@@ -2358,16 +2411,15 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         return
     end
 
-    -- Check for channel.
     local channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible
     if type(UnitChannelInfo) == "function" then
         channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible = UnitChannelInfo(unitToken)
     end
 
     if channelName then
-        -- Channels: reverse fill so the bar drains from right to left.
         castBar.Bar:SetMinMaxValues(channelStartMs, channelEndMs)
         castBar.Bar:SetReverseFill(true)
+        -- Run protected callback.
         local okEnd, cleanEnd = pcall(function() return channelEndMs + 0 end)
         castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(channelName)
@@ -2384,23 +2436,25 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         return
     end
 
-    -- No active cast or channel.
     stopCastBarTimer(castBar)
 end
 
--- Build one edit-mode drag overlay for detached widget elements.
+-- Ensure detached element edit mode selection.
 function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, borderColor, onDragStop)
     if not element or element.EditModeSelection then
         return
     end
 
+    -- Create frame for selection.
     local selection = CreateFrame("Frame", nil, element)
+    -- Create texture for border.
     local border = selection:CreateTexture(nil, "OVERLAY")
     border:SetPoint("TOPLEFT", -2, 2)
     border:SetPoint("BOTTOMRIGHT", 2, -2)
     border:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4] or 0.55)
     selection._fallbackBorder = border
 
+    -- Create font string for label.
     local label = selection:CreateFontString(nil, "OVERLAY")
     label:SetPoint("TOP", 0, 10)
     label:SetTextColor(1, 1, 1, 1)
@@ -2415,6 +2469,7 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
     selection:SetFrameStrata("DIALOG")
     selection:SetFrameLevel(element:GetFrameLevel() + 30)
 
+    -- Handle OnDragStart script callback. Bug parade continues.
     selection:SetScript("OnDragStart", function()
         if not self.editModeActive or InCombatLockdown() then
             return
@@ -2424,6 +2479,7 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
         element._editModeMoving = true
     end)
 
+    -- Handle OnDragStop script callback.
     selection:SetScript("OnDragStop", function()
         if not element._editModeMoving then
             return
@@ -2439,6 +2495,7 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
     selection:Hide()
 end
 
+-- Return detached element offsets.
 local function getDetachedElementOffsets(element)
     local centerX, centerY = element:GetCenter()
     local parentX, parentY = UIParent:GetCenter()
@@ -2468,7 +2525,7 @@ local function getDetachedElementOffsets(element)
     return offsetX, offsetY
 end
 
--- Create an Edit Mode selection overlay for a detached cast bar.
+-- Ensure cast bar edit mode selection.
 function UnitFrames:EnsureCastBarEditModeSelection(frame)
     if not frame or not frame.CastBar then
         return
@@ -2479,11 +2536,12 @@ function UnitFrames:EnsureCastBarEditModeSelection(frame)
         frame.CastBar,
         labelText,
         { 0.98, 0.74, 0.29, 0.55 },
+        -- Save updated position.
         function() self:SaveCastBarAnchorFromEditMode(frame) end
     )
 end
 
--- Persist moved cast bar position into the addon's unit config.
+-- Save cast bar anchor from edit mode.
 function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
     if not frame or not frame.CastBar or not self.dataHandle or not frame.unitToken then
         return
@@ -2499,7 +2557,7 @@ function UnitFrames:SaveCastBarAnchorFromEditMode(frame)
     self:RefreshFrame(frame.unitToken, true)
 end
 
--- Create an Edit Mode selection overlay for a detached secondary power bar.
+-- Ensure secondary power bar edit mode selection.
 function UnitFrames:EnsureSecondaryPowerBarEditModeSelection(frame)
     if not frame or not frame.SecondaryPowerBar then
         return
@@ -2510,11 +2568,12 @@ function UnitFrames:EnsureSecondaryPowerBarEditModeSelection(frame)
         frame.SecondaryPowerBar,
         labelText,
         { 0.38, 0.85, 0.62, 0.55 },
+        -- Save updated position.
         function() self:SaveSecondaryPowerBarAnchorFromEditMode(frame) end
     )
 end
 
--- Persist moved secondary power bar position into the addon's unit config.
+-- Save secondary power bar anchor from edit mode.
 function UnitFrames:SaveSecondaryPowerBarAnchorFromEditMode(frame)
     if not frame or not frame.SecondaryPowerBar or not self.dataHandle or not frame.unitToken then
         return
@@ -2530,7 +2589,7 @@ function UnitFrames:SaveSecondaryPowerBarAnchorFromEditMode(frame)
     self:RefreshFrame(frame.unitToken, true)
 end
 
--- Create an Edit Mode selection overlay for a detached tertiary power bar.
+-- Ensure tertiary power bar edit mode selection.
 function UnitFrames:EnsureTertiaryPowerBarEditModeSelection(frame)
     if not frame or not frame.TertiaryPowerBar then
         return
@@ -2541,11 +2600,12 @@ function UnitFrames:EnsureTertiaryPowerBarEditModeSelection(frame)
         frame.TertiaryPowerBar,
         labelText,
         { 0.89, 0.55, 0.27, 0.55 },
+        -- Save updated position.
         function() self:SaveTertiaryPowerBarAnchorFromEditMode(frame) end
     )
 end
 
--- Persist moved tertiary power bar position into the addon's unit config.
+-- Save tertiary power bar anchor from edit mode.
 function UnitFrames:SaveTertiaryPowerBarAnchorFromEditMode(frame)
     if not frame or not frame.TertiaryPowerBar or not self.dataHandle or not frame.unitToken then
         return
@@ -2561,13 +2621,13 @@ function UnitFrames:SaveTertiaryPowerBarAnchorFromEditMode(frame)
     self:RefreshFrame(frame.unitToken, true)
 end
 
--- Refresh every supported frame, or hide all when addon is disabled.
+-- Refresh all managed unit frames.
 function UnitFrames:RefreshAll(forceLayout)
     self:ApplyBlizzardFrameVisibility()
 
     local profile = self.dataHandle:GetProfile()
     if profile.enabled == false and not self.editModeActive then
-        -- Defer hide operations when combat lockdown blocks frame updates.
+        -- Return computed value.
         Util:RunWhenOutOfCombat(function()
             self:HideAll()
         end, L.CONFIG_DEFERRED_APPLY, "unitframes_hide_all")
@@ -2579,8 +2639,7 @@ function UnitFrames:RefreshAll(forceLayout)
     end
 end
 
--- Refresh one frame's layout, values, colors, and visibility.
--- refreshOptions defaults to full refresh and can selectively skip expensive work.
+-- Refresh one managed unit frame.
 function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     local frame = self.frames[unitToken]
     if not frame then
@@ -2589,7 +2648,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
 
     local options = refreshOptions or REFRESH_OPTIONS_FULL
 
-    -- Skip drawing for units disabled in profile settings.
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
     if unitConfig.enabled == false and not self.editModeActive then
         if options.castbar and frame.CastBar then
@@ -2616,7 +2674,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     local previewMode = testMode or self.editModeActive
     local exists = UnitExists(unitToken)
 
-    -- Hide missing non-player units unless test mode is enabled.
     if options.visibility and not exists and not previewMode and unitToken ~= "player" then
         if options.castbar and frame.CastBar then
             stopCastBarTimer(frame.CastBar)
@@ -2638,7 +2695,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
         local power
         local maxPower
 
-        -- Read live unit data when available, otherwise use placeholders.
         if exists then
             name = UnitName(unitToken) or unitToken
             health = UnitHealth(unitToken)
@@ -2662,7 +2718,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
         setStatusBarValueSafe(frame.PowerBar, power, maxPower)
         updateAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
 
-        -- Re-apply a fallback font object if another addon strips font data.
         if not frame.NameText:GetFont() and GameFontHighlightSmall then
             frame.NameText:SetFontObject(GameFontHighlightSmall)
         end

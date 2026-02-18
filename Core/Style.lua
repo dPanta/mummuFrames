@@ -1,6 +1,8 @@
 local _, ns = ...
 
+-- Create table holding style.
 local Style = {}
+-- Create table holding font validation cache.
 local fontValidationCache = {}
 local availableFontsCache = nil
 local availableBarTexturesCache = nil
@@ -11,6 +13,7 @@ local lsmCallbacksRegistered = false
 Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
 
+-- Normalize media path. Bug parade continues.
 local function normalizeMediaPath(path)
     if type(path) ~= "string" then
         return nil
@@ -18,6 +21,7 @@ local function normalizeMediaPath(path)
     return string.lower(string.gsub(path, "/", "\\"))
 end
 
+-- Return cached LibSharedMedia handle.
 local function getLSM()
     if lsm then
         return lsm
@@ -34,13 +38,12 @@ local function getLSM()
     end
 
     if lsm and not lsmCallbacksRegistered and type(lsm.RegisterCallback) == "function" then
+        -- Invalidate media caches.
         local function invalidateMediaCaches()
             availableFontsCache = nil
             availableBarTexturesCache = nil
         end
 
-        -- LibSharedMedia embeds CallbackHandler methods on itself with signature:
-        -- RegisterCallback(eventName, method[, arg])
         lsm:RegisterCallback("LibSharedMedia_Registered", invalidateMediaCaches)
         lsm:RegisterCallback("LibSharedMedia_SetGlobal", invalidateMediaCaches)
         lsmCallbacksRegistered = true
@@ -49,7 +52,7 @@ local function getLSM()
     return lsm
 end
 
--- Read style settings from the active profile when available.
+-- Return profile style.
 local function getProfileStyle()
     local addon = _G.mummuFrames
     if not addon or type(addon.GetModule) ~= "function" then
@@ -65,13 +68,13 @@ local function getProfileStyle()
     return profile and profile.style or nil
 end
 
--- Return whether pixel-perfect layout is enabled in profile style.
+-- Check pixel perfect enabled.
 function Style:IsPixelPerfectEnabled()
     local style = getProfileStyle()
     return not (style and style.pixelPerfect == false)
 end
 
--- Return the UI pixel size at the current effective scale.
+-- Return pixel size.
 function Style:GetPixelSize()
     local scale = 1
     if UIParent and type(UIParent.GetEffectiveScale) == "function" then
@@ -83,14 +86,14 @@ function Style:GetPixelSize()
     return 1 / scale
 end
 
--- Snap a numeric value to the current UI pixel grid.
+-- Snap value to pixel grid.
 function Style:Snap(value)
     local n = tonumber(value) or 0
     local pixel = self:GetPixelSize()
     return math.floor((n / pixel) + 0.5) * pixel
 end
 
--- Build one hidden font string used to probe whether font files are usable.
+-- Ensure font probe.
 local function ensureFontProbe()
     if fontProbe then
         return fontProbe
@@ -98,18 +101,20 @@ local function ensureFontProbe()
 
     local holder = UIParent
     if not holder then
+        -- Create frame widget.
         holder = CreateFrame("Frame")
         holder:Hide()
     end
 
     if holder and type(holder.CreateFontString) == "function" then
+        -- Create text font string.
         fontProbe = holder:CreateFontString(nil, "OVERLAY")
     end
 
     return fontProbe
 end
 
--- Return whether a font path can be loaded by WoW's SetFont API.
+-- Check font path usable.
 function Style:IsFontPathUsable(fontPath)
     if type(fontPath) ~= "string" or fontPath == "" then
         return false
@@ -125,6 +130,7 @@ function Style:IsFontPathUsable(fontPath)
         return false
     end
 
+    -- Try assigning font path with flags.
     local function tryAssign(flags)
         local ok, setResult = pcall(probe.SetFont, probe, fontPath, 12, flags)
         if not ok or setResult == false then
@@ -134,13 +140,12 @@ function Style:IsFontPathUsable(fontPath)
         return type(assigned) == "string" and assigned ~= ""
     end
 
-    -- Some custom fonts fail with outline flags but work with plain rendering.
     local usable = tryAssign("OUTLINE") or tryAssign("")
     fontValidationCache[fontPath] = usable
     return usable
 end
 
--- Return discovered addon fonts from the generated catalog.
+-- Return available fonts.
 function Style:GetAvailableFonts(forceRefresh)
     if forceRefresh then
         availableFontsCache = nil
@@ -150,10 +155,13 @@ function Style:GetAvailableFonts(forceRefresh)
         return availableFontsCache
     end
 
+    -- Create table holding available.
     local available = {}
+    -- Create table holding seen paths.
     local seenPaths = {}
     local catalog = ns.FontCatalog and ns.FontCatalog.list or {}
 
+    -- Add font option.
     local function addFontOption(key, label, path)
         if type(path) ~= "string" or path == "" then
             return
@@ -192,6 +200,7 @@ function Style:GetAvailableFonts(forceRefresh)
         if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
             local fontTable = lsmRef:HashTable("font")
             if type(fontTable) == "table" then
+                -- Create table holding names.
                 names = {}
                 for name in pairs(fontTable) do
                     names[#names + 1] = name
@@ -221,7 +230,7 @@ function Style:GetAvailableFonts(forceRefresh)
     return availableFontsCache
 end
 
--- Return discovered status bar textures from the addon and LibSharedMedia.
+-- Return available bar textures.
 function Style:GetAvailableBarTextures(forceRefresh)
     if forceRefresh then
         availableBarTexturesCache = nil
@@ -231,9 +240,12 @@ function Style:GetAvailableBarTextures(forceRefresh)
         return availableBarTexturesCache
     end
 
+    -- Create table holding available.
     local available = {}
+    -- Create table holding seen paths.
     local seenPaths = {}
 
+    -- Add texture option. Nothing exploded yet.
     local function addTextureOption(key, label, path)
         if type(path) ~= "string" or path == "" then
             return
@@ -266,6 +278,7 @@ function Style:GetAvailableBarTextures(forceRefresh)
         if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
             local textureTable = lsmRef:HashTable("statusbar")
             if type(textureTable) == "table" then
+                -- Create table holding names.
                 names = {}
                 for name in pairs(textureTable) do
                     names[#names + 1] = name
@@ -287,7 +300,7 @@ function Style:GetAvailableBarTextures(forceRefresh)
     return availableBarTexturesCache
 end
 
--- Return the preferred fallback font path for this addon.
+-- Return default font path.
 function Style:GetDefaultFontPath()
     local available = self:GetAvailableFonts()
     for i = 1, #available do
@@ -303,7 +316,7 @@ function Style:GetDefaultFontPath()
     return self.DEFAULT_FONT
 end
 
--- Return the preferred fallback bar texture path for this addon.
+-- Return default bar texture path.
 function Style:GetDefaultBarTexturePath()
     local available = self:GetAvailableBarTextures()
     for i = 1, #available do
@@ -319,7 +332,7 @@ function Style:GetDefaultBarTexturePath()
     return self.DEFAULT_BAR_TEXTURE
 end
 
--- Return the configured font path, or the addon default.
+-- Return font path.
 function Style:GetFontPath()
     local style = getProfileStyle()
     local configuredPath = style and style.fontPath or nil
@@ -330,7 +343,7 @@ function Style:GetFontPath()
     return self:GetDefaultFontPath()
 end
 
--- Return the configured bar texture path, or the addon default.
+-- Return bar texture path.
 function Style:GetBarTexturePath()
     local style = getProfileStyle()
     local configuredPath = style and style.barTexturePath or nil
@@ -341,7 +354,7 @@ function Style:GetBarTexturePath()
     return self:GetDefaultBarTexturePath()
 end
 
--- Apply font settings with safe fallbacks if a font fails to load.
+-- Apply font with fallback paths.
 function Style:ApplyFont(fontString, size, flags)
     if not fontString then
         return
@@ -359,6 +372,7 @@ function Style:ApplyFont(fontString, size, flags)
     end
     local resolvedFlags = (flags == nil) and defaultFlags or flags
 
+    -- Normalize font path slashes and case.
     local function normalizePath(path)
         if type(path) ~= "string" then
             return nil
@@ -366,11 +380,13 @@ function Style:ApplyFont(fontString, size, flags)
         return string.lower(string.gsub(path, "/", "\\"))
     end
 
+    -- Check font assigned.
     local function hasFontAssigned()
         local fontPath = fontString:GetFont()
         return type(fontPath) == "string" and fontPath ~= ""
     end
 
+    -- Try set font.
     local function trySetFont(path, flagsOverride)
         if type(path) ~= "string" or path == "" then
             return false
@@ -381,7 +397,6 @@ function Style:ApplyFont(fontString, size, flags)
         end
         local beforePath = normalizePath(fontString:GetFont())
         local ok, setResult = pcall(fontString.SetFont, fontString, path, resolvedSize, flagsToUse)
-        -- Some clients return nil on success; only explicit false means failure.
         if not ok or setResult == false then
             return false
         end
@@ -396,10 +411,10 @@ function Style:ApplyFont(fontString, size, flags)
             return true
         end
 
-        -- Some clients normalize/redirect path internally; accept only if it actually changed.
         return assignedPath ~= beforePath
     end
 
+    -- Try set font with fallback flags.
     local function trySetFontWithFallbackFlags(path)
         if trySetFont(path, resolvedFlags) then
             return true
@@ -411,14 +426,11 @@ function Style:ApplyFont(fontString, size, flags)
     end
 
     if not trySetFontWithFallbackFlags(self:GetFontPath()) then
-        -- Fall back to Blizzard's standard font first.
         if not trySetFontWithFallbackFlags(STANDARD_TEXT_FONT) then
-            -- Final fallback uses a known built-in font path.
             trySetFontWithFallbackFlags("Fonts\\FRIZQT__.TTF")
         end
     end
 
-    -- If file-based font paths failed, force a built-in font object.
     if not hasFontAssigned() then
         local fallbackObject = GameFontNormal or SystemFont_Shadow_Med1
         if fallbackObject then
@@ -432,7 +444,7 @@ function Style:ApplyFont(fontString, size, flags)
     end
 end
 
--- Apply the status bar texture and force non-tiled rendering.
+-- Apply status bar texture.
 function Style:ApplyStatusBarTexture(statusBar)
     if not statusBar then
         return
@@ -446,8 +458,9 @@ function Style:ApplyStatusBarTexture(statusBar)
     end
 end
 
--- Create a subtle background texture for a frame.
+-- Create background texture layer.
 function Style:CreateBackground(frame, r, g, b, a)
+    -- Create texture for bg.
     local bg = frame:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(r or 0.06, g or 0.06, b or 0.07, a or 0.88)

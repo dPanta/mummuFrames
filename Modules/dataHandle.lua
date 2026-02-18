@@ -4,8 +4,10 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 
+-- Create class holding data handle behavior.
 local DataHandle = ns.Object:Extend()
 local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
+-- Create table holding name text units.
 local NAME_TEXT_UNITS = {
     player = true,
     pet = true,
@@ -15,7 +17,7 @@ local NAME_TEXT_UNITS = {
     focustarget = true,
 }
 
--- Build default config values for a single unit frame.
+-- New unit defaults.
 local function newUnitDefaults(point, relativePoint, x, y, width, height)
     return {
         enabled = true,
@@ -31,6 +33,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         hideBlizzardFrame = false,
         showNameText = true,
         showHealthText = true,
+        -- Create table holding castbar.
         castbar = {
             enabled = true,
             detached = false,
@@ -41,6 +44,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
+        -- Create table holding secondary power. Entropy stays pending.
         secondaryPower = {
             enabled = true,
             detached = false,
@@ -48,6 +52,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
+        -- Create table holding tertiary power.
         tertiaryPower = {
             enabled = true,
             detached = false,
@@ -55,8 +60,10 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
+        -- Create table holding aura.
         aura = {
             enabled = true,
+            -- Create table holding buffs.
             buffs = {
                 enabled = true,
                 source = "all",
@@ -68,6 +75,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
                 scale = 1,
                 max = 8,
             },
+            -- Create table holding debuffs.
             debuffs = {
                 anchorPoint = "TOPRIGHT",
                 relativePoint = "BOTTOMRIGHT",
@@ -81,18 +89,23 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
     }
 end
 
--- Store global and per-character defaults for the saved database.
+-- Create table holding defaults.
 local DEFAULTS = {
+    -- Create table holding global.
     global = {
         version = 1,
+        -- Create table holding profiles.
         profiles = {
+            -- Create table holding default.
             Default = {
                 enabled = true,
                 testMode = false,
+                -- Create table holding minimap.
                 minimap = {
                     hide = false,
                     angle = 220,
                 },
+                -- Create table holding style.
                 style = {
                     fontPath = DEFAULT_FONT_PATH,
                     fontSize = 12,
@@ -100,6 +113,7 @@ local DEFAULTS = {
                     pixelPerfect = true,
                     barTexturePath = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga",
                 },
+                -- Create table holding units.
                 units = {
                     player = newUnitDefaults("CENTER", "CENTER", -260, -220, 240, 46),
                     pet = newUnitDefaults("CENTER", "CENTER", -260, -275, 170, 32),
@@ -107,6 +121,7 @@ local DEFAULTS = {
                     targettarget = newUnitDefaults("CENTER", "CENTER", 260, -275, 170, 32),
                     focus = newUnitDefaults("CENTER", "CENTER", 0, -275, 200, 38),
                     focustarget = newUnitDefaults("CENTER", "CENTER", 0, -320, 160, 30),
+                    -- Create table holding party.
                     party = {
                         enabled = true,
                         point = "LEFT",
@@ -117,8 +132,10 @@ local DEFAULTS = {
                         height = 34,
                         spacing = 24,
                         fontSize = 11,
+                        -- Create table holding aura.
                         aura = {
                             enabled = true,
+                            -- Create table holding buffs.
                             buffs = {
                                 enabled = true,
                                 source = "all",
@@ -130,6 +147,7 @@ local DEFAULTS = {
                                 scale = 1,
                                 max = 6,
                             },
+                            -- Create table holding debuffs.
                             debuffs = {
                                 anchorPoint = "TOPRIGHT",
                                 relativePoint = "BOTTOMRIGHT",
@@ -141,6 +159,7 @@ local DEFAULTS = {
                             },
                         },
                     },
+                    -- Create table holding raid.
                     raid = {
                         enabled = true,
                         point = "TOPLEFT",
@@ -153,8 +172,10 @@ local DEFAULTS = {
                         spacingX = 5,
                         spacingY = 6,
                         fontSize = 10,
+                        -- Create table holding aura.
                         aura = {
                             enabled = true,
+                            -- Create table holding buffs.
                             buffs = {
                                 enabled = true,
                                 source = "all",
@@ -166,6 +187,7 @@ local DEFAULTS = {
                                 scale = 1,
                                 max = 3,
                             },
+                            -- Create table holding debuffs.
                             debuffs = {
                                 anchorPoint = "TOPRIGHT",
                                 relativePoint = "BOTTOMRIGHT",
@@ -184,7 +206,7 @@ local DEFAULTS = {
     char = {},
 }
 
--- Fill missing values in a table from a defaults table recursively.
+-- Merge defaults. Deadline still theoretical.
 local function mergeDefaults(target, defaults)
     for key, value in pairs(defaults) do
         if type(value) == "table" then
@@ -198,8 +220,9 @@ local function mergeDefaults(target, defaults)
     end
 end
 
--- Split a dot path like "a.b.c" into a list of keys.
+-- Split dotted configuration path.
 local function splitPath(path)
+    -- Create table holding parts.
     local parts = {}
     for token in string.gmatch(path, "[^%.]+") do
         table.insert(parts, token)
@@ -207,20 +230,24 @@ local function splitPath(path)
     return parts
 end
 
--- Set up module state.
+-- Initialize data handle state.
 function DataHandle:Constructor()
     self.addon = nil
     self.db = nil
+    -- Create table holding profile defaults applied.
     self._profileDefaultsApplied = {}
+    -- Create table holding unit defaults applied by profile.
     self._unitDefaultsAppliedByProfile = {}
 end
 
--- Initialize and merge saved variables with defaults.
+-- Initialize data module storage.
 function DataHandle:OnInitialize(addonRef)
     self.addon = addonRef
     mummuFramesDB = mummuFramesDB or {}
     mergeDefaults(mummuFramesDB, DEFAULTS)
+    -- Create table holding profile defaults applied.
     self._profileDefaultsApplied = {}
+    -- Create table holding unit defaults applied by profile.
     self._unitDefaultsAppliedByProfile = {}
 
     local defaultFontPath = DEFAULT_FONT_PATH
@@ -228,7 +255,6 @@ function DataHandle:OnInitialize(addonRef)
         defaultFontPath = Style:GetDefaultFontPath()
     end
 
-    -- Migrate missing/invalid style settings to safe defaults.
     local profiles = mummuFramesDB.global and mummuFramesDB.global.profiles
     if type(profiles) == "table" then
         for _, profile in pairs(profiles) do
@@ -251,7 +277,6 @@ function DataHandle:OnInitialize(addonRef)
                 if type(profile.units) == "table" then
                     for unitToken, unitConfig in pairs(profile.units) do
                         if NAME_TEXT_UNITS[unitToken] and type(unitConfig) == "table" and unitConfig.showNameText == false then
-                            -- Keep names visible by default; there is currently no name-visibility toggle in the UI.
                             unitConfig.showNameText = true
                         end
                     end
@@ -263,12 +288,12 @@ function DataHandle:OnInitialize(addonRef)
     self.db = mummuFramesDB
 end
 
--- Return the raw addon database table.
+-- Return addon database table.
 function DataHandle:GetDB()
     return self.db
 end
 
--- Return per-character settings, creating them when needed.
+-- Return character settings.
 function DataHandle:GetCharacterSettings()
     local charKey = Util:GetCharacterKey()
     self.db.char[charKey] = self.db.char[charKey] or {
@@ -277,7 +302,7 @@ function DataHandle:GetCharacterSettings()
     return self.db.char[charKey]
 end
 
--- Return the active profile and ensure it has defaults.
+-- Return current profile table.
 function DataHandle:GetProfile()
     local charSettings = self:GetCharacterSettings()
     local profileName = charSettings.activeProfile or "Default"
@@ -297,13 +322,14 @@ function DataHandle:GetProfile()
     return profile
 end
 
--- Return one unit config and ensure unit-level defaults exist.
+-- Return unit config.
 function DataHandle:GetUnitConfig(unitToken)
     local profile = self:GetProfile()
     local charSettings = self:GetCharacterSettings()
     local profileName = charSettings.activeProfile or "Default"
     local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
     if type(unitDefaultsApplied) ~= "table" then
+        -- Create table holding unit defaults applied.
         unitDefaultsApplied = {}
         self._unitDefaultsAppliedByProfile[profileName] = unitDefaultsApplied
     end
@@ -326,7 +352,7 @@ function DataHandle:GetUnitConfig(unitToken)
     return profile.units[unitToken]
 end
 
--- Set a unit config value, including nested keys using dot paths.
+-- Set unit config.
 function DataHandle:SetUnitConfig(unitToken, key, value)
     local unitConfig = self:GetUnitConfig(unitToken)
     local profileName = (self:GetCharacterSettings().activeProfile or "Default")
@@ -334,7 +360,6 @@ function DataHandle:SetUnitConfig(unitToken, key, value)
         return
     end
 
-    -- Walk nested tables when the key uses dot notation.
     if string.find(key, "%.") then
         local parts = splitPath(key)
         local cursor = unitConfig

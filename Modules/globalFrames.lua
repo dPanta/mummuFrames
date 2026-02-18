@@ -4,6 +4,7 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 
+-- Create class holding global frames behavior.
 local GlobalFrames = ns.Object:Extend()
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
@@ -12,13 +13,12 @@ local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
 local SECONDARY_POWER_MAX_ICONS = 10
 local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
 local TERTIARY_POWER_HEIGHT_BONUS = 5
--- Cropped UVs to remove large transparent padding from 1024x1024 source PNGs.
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
 local RESTING_ICON_ASPECT = 424 / 793
 local LEADER_ICON_ASPECT = 432 / 793
 
--- Show the default Blizzard unit tooltip for this frame.
+-- Show unit tooltip.
 local function showUnitTooltip(frame)
     if not frame then
         return
@@ -29,7 +29,6 @@ local function showUnitTooltip(frame)
         return
     end
 
-    -- Use Blizzard's unit-frame tooltip helper when possible, but fall back safely.
     if type(UnitFrame_OnEnter) == "function" then
         local ok = pcall(UnitFrame_OnEnter, frame)
         if ok then
@@ -47,7 +46,7 @@ local function showUnitTooltip(frame)
     GameTooltip:Show()
 end
 
--- Hide tooltip on mouse leave.
+-- Hide unit tooltip.
 local function hideUnitTooltip(frame)
     if not frame then
         return
@@ -61,24 +60,26 @@ local function hideUnitTooltip(frame)
     GameTooltip:Hide()
 end
 
--- Set up module state.
+-- Initialize global frames state.
 function GlobalFrames:Constructor()
     self.addon = nil
 end
 
--- Store a reference to the addon during initialization.
+-- Initialize global frames module.
 function GlobalFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Build a styled status bar with a dark background.
+-- Create status bar. Coffee remains optional.
 function GlobalFrames:CreateStatusBar(parent)
+    -- Create statusbar for bar.
     local bar = CreateFrame("StatusBar", nil, parent)
     bar:SetMinMaxValues(0, 1)
     bar:SetValue(1)
 
     Style:ApplyStatusBarTexture(bar)
 
+    -- Create texture for bg.
     local bg = bar:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(0, 0, 0, 0.55)
@@ -87,16 +88,19 @@ function GlobalFrames:CreateStatusBar(parent)
     return bar
 end
 
--- Create small player-only status badges shown above the frame.
+-- Create player status icons.
 function GlobalFrames:CreatePlayerStatusIcons(frame)
+    -- Create frame for container.
     local container = CreateFrame("Frame", nil, frame)
     container:SetFrameStrata("HIGH")
     container:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 1, 2)
     container:SetSize(52, 14)
     container:Hide()
 
+    -- Create frame for resting.
     local resting = CreateFrame("Frame", nil, container)
     resting:SetSize(14, 14)
+    -- Create texture layer.
     resting.Icon = resting:CreateTexture(nil, "ARTWORK")
     resting.Icon:SetAllPoints()
     resting.Icon:SetTexture(RESTING_ICON_TEXTURE)
@@ -108,8 +112,10 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     )
     resting:Hide()
 
+    -- Create frame for leader.
     local leader = CreateFrame("Frame", nil, container)
     leader:SetSize(14, 14)
+    -- Create texture layer.
     leader.Icon = leader:CreateTexture(nil, "ARTWORK")
     leader.Icon:SetAllPoints()
     leader.Icon:SetTexture(LEADER_ICON_TEXTURE)
@@ -121,14 +127,17 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     )
     leader:Hide()
 
+    -- Create frame for combat.
     local combat = CreateFrame("Frame", nil, container)
     combat:SetSize(14, 14)
+    -- Create texture layer.
     combat.Icon = combat:CreateTexture(nil, "ARTWORK")
     combat.Icon:SetAllPoints()
     combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
     combat:Hide()
 
     frame.StatusIconContainer = container
+    -- Create table holding status icons.
     frame.StatusIcons = {
         Resting = resting,
         Leader = leader,
@@ -136,8 +145,9 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     }
 end
 
--- Create the player-only secondary power icon row.
+-- Create secondary power bar.
 function GlobalFrames:CreateSecondaryPowerBar(frame)
+    -- Create frame for bar.
     local bar = CreateFrame("Frame", nil, frame)
     bar:SetFrameStrata("MEDIUM")
     bar:SetFrameLevel(frame:GetFrameLevel() + 20)
@@ -145,8 +155,10 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     bar:SetClampedToScreen(true)
     bar:Hide()
 
+    -- Create table holding icons.
     bar.Icons = {}
     for i = 1, SECONDARY_POWER_MAX_ICONS do
+        -- Create texture for icon.
         local icon = bar:CreateTexture(nil, "ARTWORK")
         icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         icon:Hide()
@@ -156,8 +168,9 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     frame.SecondaryPowerBar = bar
 end
 
--- Create the player-only tertiary power bar (overlapping status-bar layers).
+-- Create tertiary power bar.
 function GlobalFrames:CreateTertiaryPowerBar(frame)
+    -- Create frame for container.
     local container = CreateFrame("Frame", nil, frame)
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(frame:GetFrameLevel() + 19)
@@ -166,21 +179,25 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     container:Hide()
 
     local borderSize = 1
+    -- Create texture for border top.
     local borderTop = container:CreateTexture(nil, "BORDER")
     borderTop:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderTop:SetHeight(borderSize)
     borderTop:SetColorTexture(0.2, 0.2, 0.2, 1)
+    -- Create texture for border bottom.
     local borderBottom = container:CreateTexture(nil, "BORDER")
     borderBottom:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
     borderBottom:SetHeight(borderSize)
     borderBottom:SetColorTexture(0.2, 0.2, 0.2, 1)
+    -- Create texture for border left. Bug parade continues.
     local borderLeft = container:CreateTexture(nil, "BORDER")
     borderLeft:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderLeft:SetWidth(borderSize)
     borderLeft:SetColorTexture(0.2, 0.2, 0.2, 1)
+    -- Create texture for border right.
     local borderRight = container:CreateTexture(nil, "BORDER")
     borderRight:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
@@ -194,6 +211,7 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     bar:SetValue(0)
     bar:SetStatusBarColor(0.32, 0.68, 0.29, 0.95)
 
+    -- Create statusbar for overlay bar.
     local overlayBar = CreateFrame("StatusBar", nil, container)
     overlayBar:SetAllPoints(bar)
     overlayBar:SetFrameStrata(container:GetFrameStrata())
@@ -203,11 +221,13 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     overlayBar:SetStatusBarColor(0.95, 0.85, 0.36, 0.55)
     Style:ApplyStatusBarTexture(overlayBar)
 
+    -- Create font string for value text.
     local valueText = bar:CreateFontString(nil, "OVERLAY", nil, 7)
     valueText:SetPoint("RIGHT", bar, "RIGHT", -3, 0)
     valueText:SetJustifyH("RIGHT")
     valueText:SetDrawLayer("OVERLAY", 7)
 
+    -- Create texture for right glow.
     local rightGlow = bar:CreateTexture(nil, "OVERLAY", nil, 6)
     rightGlow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
     rightGlow:SetBlendMode("ADD")
@@ -220,9 +240,11 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     container.OverlayBar = overlayBar
     container.ValueText = valueText
     container.RightGlow = rightGlow
+    -- Create table holding stack overlays.
     container.StackOverlays = {}
     for i = 1, TERTIARY_POWER_MAX_STACK_OVERLAYS do
         local overlaySubLevel = -9 + i -- Keeps stack overlays inside valid sublevel range [-8, 7].
+        -- Create texture for overlay.
         local overlay = bar:CreateTexture(nil, "OVERLAY", nil, overlaySubLevel)
         overlay:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
         overlay:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 0, 0)
@@ -234,31 +256,35 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     frame.TertiaryPowerBar = container
 end
 
--- Create the cast bar widget attached to a unit frame.
+-- Create cast bar.
 function GlobalFrames:CreateCastBar(frame)
+    -- Create frame for container.
     local container = CreateFrame("Frame", nil, UIParent)
     container:SetSize(200, 20)
     container:SetFrameStrata("MEDIUM")
     container:SetClampedToScreen(true)
     container:Hide()
 
-    -- Class-colored border (1px frame).
     local borderSize = 1
+    -- Create texture for border top.
     local borderTop = container:CreateTexture(nil, "BORDER")
     borderTop:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderTop:SetHeight(borderSize)
     borderTop:SetColorTexture(1, 1, 1, 1)
+    -- Create texture for border bottom.
     local borderBottom = container:CreateTexture(nil, "BORDER")
     borderBottom:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
     borderBottom:SetHeight(borderSize)
     borderBottom:SetColorTexture(1, 1, 1, 1)
+    -- Create texture for border left.
     local borderLeft = container:CreateTexture(nil, "BORDER")
     borderLeft:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderLeft:SetWidth(borderSize)
     borderLeft:SetColorTexture(1, 1, 1, 1)
+    -- Create texture for border right.
     local borderRight = container:CreateTexture(nil, "BORDER")
     borderRight:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
@@ -270,6 +296,7 @@ function GlobalFrames:CreateCastBar(frame)
 
     local inset = borderSize
     local iconSize = 20
+    -- Create texture layer.
     container.Icon = container:CreateTexture(nil, "ARTWORK")
     container.Icon:SetPoint("TOPLEFT", container, "TOPLEFT", inset, -inset)
     container.Icon:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", inset, inset)
@@ -284,10 +311,12 @@ function GlobalFrames:CreateCastBar(frame)
     bar:SetStatusBarColor(0.29, 0.52, 0.90, 1)
     container.Bar = bar
 
+    -- Create text font string.
     container.SpellText = bar:CreateFontString(nil, "OVERLAY")
     container.SpellText:SetDrawLayer("OVERLAY", 7)
     container.SpellText:SetJustifyH("LEFT")
 
+    -- Create text font string.
     container.TimeText = bar:CreateFontString(nil, "OVERLAY")
     container.TimeText:SetDrawLayer("OVERLAY", 7)
     container.TimeText:SetJustifyH("RIGHT")
@@ -297,9 +326,9 @@ function GlobalFrames:CreateCastBar(frame)
     frame.CastBar = container
 end
 
--- Create the base secure unit frame container and core widgets.
+-- Create unit frame base.
 function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height)
-    -- Secure unit button template is required for click-target behavior.
+    -- Create button for frame.
     local frame = CreateFrame("Button", name, parent or UIParent, "SecureUnitButtonTemplate")
     frame.unitToken = unitToken
 
@@ -319,21 +348,24 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.HealthBar = self:CreateStatusBar(frame)
     frame.PowerBar = self:CreateStatusBar(frame)
 
-    -- Create text on the health bar so it always renders above bar textures.
+    -- Create text font string.
     frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.NameText:SetDrawLayer("OVERLAY", 7)
     frame.NameText:SetJustifyH("LEFT")
 
+    -- Create text font string.
     frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.HealthText:SetDrawLayer("OVERLAY", 7)
     frame.HealthText:SetJustifyH("RIGHT")
 
+    -- Create frame widget. Nothing exploded yet.
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
     frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
     frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
     frame.AbsorbOverlayFrame:Hide()
 
+    -- Create frame widget.
     frame.AbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.AbsorbOverlayFrame)
     frame.AbsorbOverlayBar:SetAllPoints(frame.AbsorbOverlayFrame)
     frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
@@ -358,7 +390,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     return frame
 end
 
--- Apply profile-driven layout, fonts, and visibility options.
+-- Apply style settings to unit frame.
 function GlobalFrames:ApplyStyle(frame, unitToken)
     local dataHandle = self.addon:GetModule("dataHandle")
     if not dataHandle or not frame then
@@ -392,7 +424,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     end
     fontSize = math.floor(fontSize + 0.5)
 
-    -- Position and size changes are skipped during combat lockdown.
     if not InCombatLockdown() then
         frame:SetSize(width, height)
         frame:ClearAllPoints()
@@ -451,7 +482,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     Style:ApplyFont(frame.NameText, fontSize, "OUTLINE")
     Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
 
-    -- Force fallback font objects if a skin removes per-string fonts.
     if not frame.NameText:GetFont() and GameFontHighlightSmall then
         frame.NameText:SetFontObject(GameFontHighlightSmall)
     end
@@ -459,7 +489,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.HealthText:SetFontObject(GameFontHighlightSmall)
     end
 
-    -- Keep text readable on top of colored bars.
     frame.NameText:SetTextColor(1, 1, 1, 1)
     frame.HealthText:SetTextColor(1, 1, 1, 1)
     frame.NameText:SetShadowColor(0, 0, 0, 0)
@@ -479,7 +508,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local leaderWidth = math.max(1, math.floor((leaderHeight * LEADER_ICON_ASPECT) + 0.5))
 
         frame.StatusIconContainer:ClearAllPoints()
-        -- Container center matches the unit frame top-left corner.
         frame.StatusIconContainer:SetPoint("CENTER", frame, "TOPLEFT", 0, 0)
         frame.StatusIconContainer:SetSize(restingWidth + leaderWidth + badgeSpacing, iconSize)
         frame.StatusIconSpacing = badgeSpacing
@@ -585,7 +613,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.TertiaryPowerBar._detached = tpDetached
     end
 
-    -- Cast bar layout for player and target.
     if frame.CastBar then
         local castbarConfig = unitConfig.castbar or {}
         local cbEnabled = castbarConfig.enabled ~= false
@@ -623,7 +650,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             frame.CastBar:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -border)
         end
 
-        -- Dark gray border.
         local cbBorderInset = 1
         if frame.CastBar.BorderTextures then
             for _, tex in ipairs(frame.CastBar.BorderTextures) do
@@ -631,13 +657,11 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             end
         end
 
-        -- Icon visibility.
         local cbShowIcon = castbarConfig.showIcon ~= false
         frame.CastBar.Icon:SetShown(cbShowIcon)
         local innerHeight = cbHeight - cbBorderInset * 2
         frame.CastBar.Icon:SetWidth(cbShowIcon and math.max(1, innerHeight) or 0)
 
-        -- Re-anchor bar based on icon visibility.
         frame.CastBar.Bar:ClearAllPoints()
         if cbShowIcon then
             frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar.Icon, "TOPRIGHT", 1, 0)
@@ -646,7 +670,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         end
         frame.CastBar.Bar:SetPoint("BOTTOMRIGHT", frame.CastBar, "BOTTOMRIGHT", -cbBorderInset, cbBorderInset)
 
-        -- Update bar texture and fonts.
         Style:ApplyStatusBarTexture(frame.CastBar.Bar)
 
         local cbTextInset = pixelPerfect and Style:Snap(4) or 4

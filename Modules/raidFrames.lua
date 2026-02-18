@@ -2,27 +2,28 @@ local _, ns = ...
 
 local addon = _G.mummuFrames
 
+-- Create class holding raid frames behavior.
 local RaidFrames = ns.Object:Extend()
 
--- Set up module state.
+-- Initialize raid frames state.
 function RaidFrames:Constructor()
     self.addon = nil
 end
 
--- Store a reference to the addon during initialization.
+-- Initialize raid frames module.
 function RaidFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Enable hook placeholder for future raid frame logic.
+-- Enable raid frames module.
 function RaidFrames:OnEnable()
 end
 
--- Disable hook placeholder for future raid frame cleanup.
+-- Disable raid frames module.
 function RaidFrames:OnDisable()
 end
 
--- Placeholder constructor until raid frames are implemented.
+-- Create raid frames.
 function RaidFrames:CreateRaidFrames()
     return nil, "not yet enabled"
 end
