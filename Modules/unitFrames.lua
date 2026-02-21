@@ -129,8 +129,6 @@ for i = 1, #IMPORTANT_PARTY_BUFF_SPELL_IDS do
 end
 local importantPartyBuffSpellSetCache = nil
 local importantPartyBuffSpellSetCacheRevision = nil
-local activeTrackedPartyHealerSpellSetCache = nil
-local activeTrackedPartyHealerSpellSetCacheRevision = nil
 local function addZero(value)
     return value + 0
 end
@@ -466,8 +464,11 @@ local function getImportantPartyBuffSpellSet(dataHandle)
     end
 
     local profile = dataHandle:GetProfile()
-    local partyHealerConfig = profile and profile.partyHealer or nil
-    local customSpells = partyHealerConfig and partyHealerConfig.customSpells or nil
+    local healerConfig = nil
+    if profile then
+        healerConfig = profile.loveHealers or profile.partyHealer or profile.raidHealer
+    end
+    local customSpells = healerConfig and healerConfig.customSpells or nil
     if type(customSpells) ~= "table" then
         return spellSet
     end
@@ -491,6 +492,30 @@ local function getImportantPartyBuffSpellSet(dataHandle)
 end
 
 local normalizeSpellID
+local function getSafeNumericValue(value)
+    local numeric = nil
+    if type(value) == "number" then
+        local okDirect, direct = pcall(addZero, value)
+        if okDirect and type(direct) == "number" then
+            numeric = direct
+        end
+    end
+
+    if numeric == nil then
+        local coerced = tonumber(value)
+        if type(coerced) == "number" then
+            local okCoerced, normalized = pcall(addZero, coerced)
+            if okCoerced and type(normalized) == "number" then
+                numeric = normalized
+            end
+        end
+    end
+
+    if type(numeric) == "number" then
+        return numeric
+    end
+    return nil
+end
 
 -- Return whether aura should be shown when using important-party-buffs filter.
 local function isImportantPartyBuffAura(auraData, importantSpellSet)
@@ -508,15 +533,23 @@ end
 
 -- Return normalized spell id.
 normalizeSpellID = function(value)
-    local numeric = tonumber(value)
+    local numeric = getSafeNumericValue(value)
     if not numeric then
         return nil
     end
 
     local okRound, rounded = pcall(roundToNearestInteger, numeric)
-    if not okRound or type(rounded) ~= "number" or rounded <= 0 then
+    if not okRound or type(rounded) ~= "number" then
         return nil
     end
+
+    local okPositive, isPositive = pcall(function(v)
+        return v > 0
+    end, rounded)
+    if not okPositive or not isPositive then
+        return nil
+    end
+
     return rounded
 end
 
@@ -531,28 +564,8 @@ local function getActiveTrackedPartyHealerSpellSet(addonRef)
         return nil
     end
 
-    local healerRevision = nil
-    if type(partyFrames.GetHealerCacheRevision) == "function" then
-        local okRevision, revision = pcall(partyFrames.GetHealerCacheRevision, partyFrames)
-        if okRevision and type(revision) == "number" then
-            healerRevision = revision
-        end
-    end
-
-    if
-        healerRevision ~= nil
-        and type(activeTrackedPartyHealerSpellSetCache) == "table"
-        and activeTrackedPartyHealerSpellSetCacheRevision == healerRevision
-    then
-        return activeTrackedPartyHealerSpellSetCache
-    end
-
     local okSet, spellSet = pcall(partyFrames.GetActiveTrackedHealerSpellSet, partyFrames)
     if okSet and type(spellSet) == "table" then
-        if healerRevision ~= nil then
-            activeTrackedPartyHealerSpellSetCache = spellSet
-            activeTrackedPartyHealerSpellSetCacheRevision = healerRevision
-        end
         return spellSet
     end
 
@@ -1810,6 +1823,8 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
         importantSpellSet = getImportantPartyBuffSpellSet(self.dataHandle)
     end
     if sectionName == "buffs" and frame and frame._mummuIsPartyFrame then
+        excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
+    elseif sectionName == "buffs" and frame and frame._mummuIsRaidFrame then
         excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
     end
 

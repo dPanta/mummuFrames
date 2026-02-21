@@ -168,15 +168,20 @@ local DEFAULTS = {
                     -- Create table holding raid.
                     raid = {
                         enabled = true,
+                        hideBlizzardFrame = false,
                         point = "TOPLEFT",
                         relativePoint = "TOPLEFT",
                         x = 22,
                         y = -190,
                         width = 92,
                         height = 28,
-                        columns = 8,
                         spacingX = 5,
                         spacingY = 6,
+                        groupSpacing = 12,
+                        groupLayout = "vertical",
+                        sortBy = "group",
+                        sortDirection = "asc",
+                        testSize = 20,
                         fontSize = 10,
                         -- Create table holding aura.
                         aura = {
@@ -184,7 +189,7 @@ local DEFAULTS = {
                             -- Create table holding buffs.
                             buffs = {
                                 enabled = true,
-                                source = "all",
+                                source = "important",
                                 anchorPoint = "TOPLEFT",
                                 relativePoint = "BOTTOMLEFT",
                                 x = 0,
@@ -207,7 +212,52 @@ local DEFAULTS = {
                     },
                 },
                 -- Create table holding party healer tracking.
+                loveHealers = {
+                    enabled = true,
+                    groups = {
+                        hots = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 },
+                        },
+                        absorbs = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 },
+                        },
+                        externals = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 },
+                        },
+                    },
+                    spells = {},
+                    customSpells = {},
+                },
                 partyHealer = {
+                    enabled = true,
+                    groups = {
+                        hots = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 },
+                        },
+                        absorbs = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 },
+                        },
+                        externals = {
+                            style = "icon",
+                            size = 14,
+                            color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 },
+                        },
+                    },
+                    spells = {},
+                    customSpells = {},
+                },
+                -- Create table holding raid healer tracking.
+                raidHealer = {
                     enabled = true,
                     groups = {
                         hots = {
@@ -582,6 +632,28 @@ function DataHandle:OnInitialize(addonRef)
                             end
                             profile._partyBuffSourceImportantMigrated = true
                         end
+                    end
+
+                    local raidConfig = profile.units.raid
+                    if type(raidConfig) == "table" then
+                        raidConfig.aura = raidConfig.aura or {}
+                        raidConfig.aura.buffs = raidConfig.aura.buffs or {}
+                        if profile._raidBuffSourceImportantMigrated ~= true then
+                            if raidConfig.aura.buffs.source == nil or raidConfig.aura.buffs.source == "all" then
+                                raidConfig.aura.buffs.source = "important"
+                            end
+                            profile._raidBuffSourceImportantMigrated = true
+                        end
+                    end
+                end
+
+                if type(profile.loveHealers) ~= "table" then
+                    if type(profile.partyHealer) == "table" then
+                        profile.loveHealers = deepCopy(profile.partyHealer)
+                    elseif type(profile.raidHealer) == "table" then
+                        profile.loveHealers = deepCopy(profile.raidHealer)
+                    else
+                        profile.loveHealers = deepCopy(DEFAULTS.global.profiles.Default.loveHealers)
                     end
                 end
             end

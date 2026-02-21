@@ -11,6 +11,7 @@ local Configuration = ns.Object:Extend()
 -- Create table holding unit tab order.
 local UNIT_TAB_ORDER = {
     "party",
+    "raid",
     "player",
     "pet",
     "target",
@@ -22,6 +23,7 @@ local UNIT_TAB_ORDER = {
 -- Create table holding unit tab labels.
 local UNIT_TAB_LABELS = {
     party = L.CONFIG_TAB_PARTY or "Party",
+    raid = L.CONFIG_TAB_RAID or "Raid",
     player = L.CONFIG_TAB_PLAYER or "Player",
     pet = L.CONFIG_TAB_PET or "Pet",
     target = L.CONFIG_TAB_TARGET or "Target",
@@ -139,6 +141,26 @@ local PARTY_HEALER_SPELL_STYLE_OPTIONS = {
     { key = "group", label = L.CONFIG_PARTY_HEALER_STYLE_GROUP or "Use group style" },
     { key = "icon", label = L.CONFIG_PARTY_HEALER_STYLE_ICON or "Icon" },
     { key = "rectangle", label = L.CONFIG_PARTY_HEALER_STYLE_RECTANGLE or "Colored rectangle" },
+}
+local RAID_GROUP_LAYOUT_OPTIONS = {
+    { key = "vertical", label = L.CONFIG_RAID_GROUP_LAYOUT_VERTICAL or "Vertical groups" },
+    { key = "horizontal", label = L.CONFIG_RAID_GROUP_LAYOUT_HORIZONTAL or "Horizontal groups" },
+}
+local RAID_SORT_OPTIONS = {
+    { key = "group", label = L.CONFIG_RAID_SORT_GROUP or "Raid group" },
+    { key = "name", label = L.CONFIG_RAID_SORT_NAME or "Name" },
+    { key = "role", label = L.CONFIG_RAID_SORT_ROLE or "Role" },
+}
+local RAID_SORT_DIRECTION_OPTIONS = {
+    { key = "asc", label = L.CONFIG_RAID_SORT_ASC or "Ascending" },
+    { key = "desc", label = L.CONFIG_RAID_SORT_DESC or "Descending" },
+}
+local RAID_TEST_SIZE_OPTIONS = {
+    { key = 5, label = L.CONFIG_RAID_TEST_SIZE_5 or "5" },
+    { key = 10, label = L.CONFIG_RAID_TEST_SIZE_10 or "10" },
+    { key = 20, label = L.CONFIG_RAID_TEST_SIZE_20 or "20" },
+    { key = 30, label = L.CONFIG_RAID_TEST_SIZE_30 or "30" },
+    { key = 40, label = L.CONFIG_RAID_TEST_SIZE_40 or "40" },
 }
 local CONFIG_WINDOW_WIDTH = 860
 local CONFIG_WINDOW_HEIGHT = 700
@@ -682,6 +704,7 @@ function Configuration:Constructor()
         unitPages = {},
         tabs = {},
         partyHealer = nil,
+        raidHealer = nil,
         profiles = nil,
     }
     -- Create table holding tab pages.
@@ -691,6 +714,8 @@ function Configuration:Constructor()
     self._refreshScheduled = false
     self._partyHealerSelectedSpellID = nil
     self._partyHealerSelectedGroup = "hots"
+    self._raidHealerSelectedSpellID = nil
+    self._raidHealerSelectedGroup = "hots"
     self._profilesSelectedName = nil
 end
 
@@ -760,8 +785,16 @@ function Configuration:GetPartyHealerConfig()
         return nil
     end
 
-    profile.partyHealer = profile.partyHealer or {}
-    local config = profile.partyHealer
+    if type(profile.loveHealers) ~= "table" then
+        if type(profile.partyHealer) == "table" then
+            profile.loveHealers = profile.partyHealer
+        elseif type(profile.raidHealer) == "table" then
+            profile.loveHealers = profile.raidHealer
+        else
+            profile.loveHealers = {}
+        end
+    end
+    local config = profile.loveHealers
     if config.enabled == nil then
         config.enabled = true
     end
@@ -842,6 +875,84 @@ function Configuration:GetSelectedPartyHealerGroupConfig()
         selectedGroup = "hots"
     end
     self._partyHealerSelectedGroup = selectedGroup
+
+    config.groups[selectedGroup] = config.groups[selectedGroup] or {}
+    local groupConfig = config.groups[selectedGroup]
+    local defaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroup] or PARTY_HEALER_GROUP_DEFAULTS.hots
+
+    if type(groupConfig.style) ~= "string" or groupConfig.style == "" then
+        groupConfig.style = defaults.style
+    end
+    groupConfig.size = Util:Clamp(tonumber(groupConfig.size) or defaults.size, 6, 48)
+    groupConfig.color = groupConfig.color or {}
+    groupConfig.color.r = clampColorComponent(groupConfig.color.r, defaults.color.r)
+    groupConfig.color.g = clampColorComponent(groupConfig.color.g, defaults.color.g)
+    groupConfig.color.b = clampColorComponent(groupConfig.color.b, defaults.color.b)
+    groupConfig.color.a = clampColorComponent(groupConfig.color.a, defaults.color.a)
+    return selectedGroup, groupConfig
+end
+
+-- Return raid healer config.
+function Configuration:GetRaidHealerConfig()
+    return self:GetPartyHealerConfig()
+end
+
+-- Return available raid healer spells for current talents/spec.
+function Configuration:GetRaidHealerAvailableSpells()
+    local raidFrames = self.addon:GetModule("raidFrames")
+    if raidFrames and type(raidFrames.GetAvailableHealerSpells) == "function" then
+        local spells = raidFrames:GetAvailableHealerSpells()
+        if type(spells) == "table" then
+            return spells
+        end
+    end
+    return {}
+end
+
+-- Return selected spell entry for raid healer page.
+function Configuration:GetSelectedRaidHealerSpellEntry()
+    local spells = self:GetRaidHealerAvailableSpells()
+    if #spells == 0 then
+        self._raidHealerSelectedSpellID = nil
+        return nil
+    end
+
+    local selectedSpellID = tonumber(self._raidHealerSelectedSpellID)
+    for i = 1, #spells do
+        if spells[i].spellID == selectedSpellID then
+            return spells[i]
+        end
+    end
+
+    self._raidHealerSelectedSpellID = spells[1].spellID
+    return spells[1]
+end
+
+-- Return selected spell config table for raid healer.
+function Configuration:GetSelectedRaidHealerSpellConfig()
+    local config = self:GetRaidHealerConfig()
+    local spellEntry = self:GetSelectedRaidHealerSpellEntry()
+    if not config or not spellEntry then
+        return nil
+    end
+
+    local key = tostring(spellEntry.spellID)
+    config.spells[key] = config.spells[key] or {}
+    return config.spells[key], spellEntry
+end
+
+-- Return selected group key and config table for raid healer.
+function Configuration:GetSelectedRaidHealerGroupConfig()
+    local config = self:GetRaidHealerConfig()
+    if not config then
+        return nil, nil
+    end
+
+    local selectedGroup = self._raidHealerSelectedGroup
+    if selectedGroup ~= "hots" and selectedGroup ~= "absorbs" and selectedGroup ~= "externals" then
+        selectedGroup = "hots"
+    end
+    self._raidHealerSelectedGroup = selectedGroup
 
     config.groups[selectedGroup] = config.groups[selectedGroup] or {}
     local groupConfig = config.groups[selectedGroup]
@@ -1543,7 +1654,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             local entries = {}
             for i = 1, #BUFF_SOURCE_OPTIONS do
                 local option = BUFF_SOURCE_OPTIONS[i]
-                if not (unitToken ~= "party" and option.key == "important") then
+                if not (unitToken ~= "party" and unitToken ~= "raid" and option.key == "important") then
                     entries[#entries + 1] = {
                         value = option.key,
                         label = option.label,
@@ -1565,7 +1676,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             if buffsConfig.source == "self" then
                 return "self"
             end
-            if unitToken == "party" and buffsConfig.source == "important" then
+            if (unitToken == "party" or unitToken == "raid") and buffsConfig.source == "important" then
                 return "important"
             end
             return "all"
@@ -1649,6 +1760,220 @@ function Configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
         -- Return computed value.
         function()
             return BUFF_POSITION_PRESETS[2].label
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid group layout dropdown.
+function Configuration:InitializeRaidGroupLayoutDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #RAID_GROUP_LAYOUT_OPTIONS do
+                local option = RAID_GROUP_LAYOUT_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return "vertical"
+            end
+            local raidConfig = dataHandle:GetUnitConfig("raid")
+            return (raidConfig.groupLayout == "horizontal") and "horizontal" or "vertical"
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+            dataHandle:SetUnitConfig("raid", "groupLayout", option.value == "horizontal" and "horizontal" or "vertical")
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            for i = 1, #RAID_GROUP_LAYOUT_OPTIONS do
+                if RAID_GROUP_LAYOUT_OPTIONS[i].key == value then
+                    return RAID_GROUP_LAYOUT_OPTIONS[i].label
+                end
+            end
+            return RAID_GROUP_LAYOUT_OPTIONS[1].label
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid sort dropdown.
+function Configuration:InitializeRaidSortDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #RAID_SORT_OPTIONS do
+                local option = RAID_SORT_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return "group"
+            end
+            local raidConfig = dataHandle:GetUnitConfig("raid")
+            local sortBy = raidConfig.sortBy
+            if sortBy ~= "name" and sortBy ~= "role" then
+                sortBy = "group"
+            end
+            return sortBy
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+            dataHandle:SetUnitConfig("raid", "sortBy", option.value)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            for i = 1, #RAID_SORT_OPTIONS do
+                if RAID_SORT_OPTIONS[i].key == value then
+                    return RAID_SORT_OPTIONS[i].label
+                end
+            end
+            return RAID_SORT_OPTIONS[1].label
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid sort direction dropdown.
+function Configuration:InitializeRaidSortDirectionDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #RAID_SORT_DIRECTION_OPTIONS do
+                local option = RAID_SORT_DIRECTION_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return "asc"
+            end
+            local raidConfig = dataHandle:GetUnitConfig("raid")
+            return (raidConfig.sortDirection == "desc") and "desc" or "asc"
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+            dataHandle:SetUnitConfig("raid", "sortDirection", option.value == "desc" and "desc" or "asc")
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            for i = 1, #RAID_SORT_DIRECTION_OPTIONS do
+                if RAID_SORT_DIRECTION_OPTIONS[i].key == value then
+                    return RAID_SORT_DIRECTION_OPTIONS[i].label
+                end
+            end
+            return RAID_SORT_DIRECTION_OPTIONS[1].label
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid test size dropdown.
+function Configuration:InitializeRaidTestSizeDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #RAID_TEST_SIZE_OPTIONS do
+                local option = RAID_TEST_SIZE_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return 20
+            end
+            local raidConfig = dataHandle:GetUnitConfig("raid")
+            local size = tonumber(raidConfig.testSize) or 20
+            size = Util:Clamp(size, 1, 40)
+            size = math.floor(size + 0.5)
+            return size
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+            local numeric = tonumber(option.value) or 20
+            numeric = Util:Clamp(math.floor(numeric + 0.5), 1, 40)
+            dataHandle:SetUnitConfig("raid", "testSize", numeric)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            local numeric = tonumber(value) or 20
+            for i = 1, #RAID_TEST_SIZE_OPTIONS do
+                if tonumber(RAID_TEST_SIZE_OPTIONS[i].key) == numeric then
+                    return RAID_TEST_SIZE_OPTIONS[i].label
+                end
+            end
+            return tostring(numeric)
         end
     )
 
@@ -1898,6 +2223,245 @@ function Configuration:InitializePartyHealerGroupStyleDropdown(dropdown)
     self:RefreshSelectControlText(dropdown, false)
 end
 
+-- Initialize raid healer spell dropdown.
+function Configuration:InitializeRaidHealerSpellDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            local spells = self:GetRaidHealerAvailableSpells()
+            for i = 1, #spells do
+                local spell = spells[i]
+                local customSuffix = spell.isCustom and (" - " .. (L.CONFIG_PARTY_HEALER_CUSTOM_TAG or "Custom")) or ""
+                entries[#entries + 1] = {
+                    value = spell.spellID,
+                    label = string.format(
+                        "%s (%s)%s",
+                        spell.name or tostring(spell.spellID),
+                        getPartyHealerGroupLabel(spell.group),
+                        customSuffix
+                    ),
+                    icon = spell.icon,
+                    spellID = spell.spellID,
+                    group = spell.group,
+                }
+            end
+            return entries
+        end,
+        function()
+            local spellEntry = self:GetSelectedRaidHealerSpellEntry()
+            return spellEntry and spellEntry.spellID or nil
+        end,
+        function(option)
+            self._raidHealerSelectedSpellID = tonumber(option.value)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RefreshConfigWidgets()
+            self:RequestUnitFrameRefresh()
+        end,
+        420,
+        L.CONFIG_PARTY_HEALER_NO_SPELLS or "No tracked spells available for current spec/talents.",
+        function(value)
+            local spellID = tonumber(value)
+            local spells = self:GetRaidHealerAvailableSpells()
+            for i = 1, #spells do
+                if spells[i].spellID == spellID then
+                    local customSuffix = spells[i].isCustom and (" - " .. (L.CONFIG_PARTY_HEALER_CUSTOM_TAG or "Custom"))
+                        or ""
+                    return string.format(
+                        "%s (%s)%s",
+                        spells[i].name or tostring(spellID),
+                        getPartyHealerGroupLabel(spells[i].group),
+                        customSuffix
+                    )
+                end
+            end
+            return spellID and ("Spell " .. tostring(spellID)) or (L.CONFIG_PARTY_HEALER_NO_SPELLS or "No spells")
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, true)
+end
+
+-- Initialize raid healer group dropdown.
+function Configuration:InitializeRaidHealerGroupDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #PARTY_HEALER_GROUP_OPTIONS do
+                local option = PARTY_HEALER_GROUP_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local groupKey = self._raidHealerSelectedGroup
+            if groupKey ~= "hots" and groupKey ~= "absorbs" and groupKey ~= "externals" then
+                groupKey = "hots"
+            end
+            return groupKey
+        end,
+        function(option)
+            self._raidHealerSelectedGroup = option.value
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RefreshConfigWidgets()
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            return getPartyHealerGroupLabel(value)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid healer spell anchor dropdown.
+function Configuration:InitializeRaidHealerAnchorDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #PARTY_HEALER_ANCHOR_OPTIONS do
+                local option = PARTY_HEALER_ANCHOR_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+            return (spellConfig and spellConfig.anchorPoint) or "CENTER"
+        end,
+        function(option)
+            local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+            if not spellConfig then
+                return
+            end
+            spellConfig.anchorPoint = option.value
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            return getPartyHealerAnchorLabel(value)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid healer spell style dropdown.
+function Configuration:InitializeRaidHealerSpellStyleDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #PARTY_HEALER_SPELL_STYLE_OPTIONS do
+                local option = PARTY_HEALER_SPELL_STYLE_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+            local style = spellConfig and spellConfig.style or "group"
+            if style ~= "group" and style ~= "icon" and style ~= "rectangle" then
+                style = "group"
+            end
+            return style
+        end,
+        function(option)
+            local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+            if not spellConfig then
+                return
+            end
+            spellConfig.style = option.value
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            return getPartyHealerStyleLabel(value, true)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize raid healer group style dropdown.
+function Configuration:InitializeRaidHealerGroupStyleDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #PARTY_HEALER_GROUP_STYLE_OPTIONS do
+                local option = PARTY_HEALER_GROUP_STYLE_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local _, groupConfig = self:GetSelectedRaidHealerGroupConfig()
+            local style = groupConfig and groupConfig.style or "icon"
+            if style ~= "icon" and style ~= "rectangle" then
+                style = "icon"
+            end
+            return style
+        end,
+        function(option)
+            local _, groupConfig = self:GetSelectedRaidHealerGroupConfig()
+            if not groupConfig then
+                return
+            end
+            groupConfig.style = option.value
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            return getPartyHealerStyleLabel(value, false)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
 -- Refresh enabled states for party healer controls.
 function Configuration:RefreshPartyHealerControlStates()
     local widgets = self.widgets and self.widgets.partyHealer
@@ -1942,12 +2506,61 @@ function Configuration:RefreshPartyHealerControlStates()
     self:SetButtonEnabled(widgets.removeCustomButton, enabled and canRemoveCustom)
 end
 
+-- Refresh enabled states for raid healer controls.
+function Configuration:RefreshRaidHealerControlStates()
+    local widgets = self.widgets and self.widgets.raidHealer
+    if not widgets then
+        return
+    end
+
+    local config = self:GetRaidHealerConfig()
+    local spellEntry = self:GetSelectedRaidHealerSpellEntry()
+    local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+    local hasSpell = spellConfig ~= nil
+    local enabled = config and config.enabled ~= false
+    local raidFrames = self.addon and self.addon:GetModule("raidFrames") or nil
+    local canRemoveCustom = false
+    if spellEntry and raidFrames and type(raidFrames.IsCustomHealerSpell) == "function" then
+        canRemoveCustom = raidFrames:IsCustomHealerSpell(spellEntry.spellID) == true
+    end
+
+    if widgets.spellEnabled then
+        if enabled and hasSpell and type(widgets.spellEnabled.Enable) == "function" then
+            widgets.spellEnabled:Enable()
+        elseif type(widgets.spellEnabled.Disable) == "function" then
+            widgets.spellEnabled:Disable()
+        end
+        widgets.spellEnabled:SetAlpha((enabled and hasSpell) and 1 or 0.55)
+    end
+
+    self:SetSelectControlEnabled(widgets.spellDropdown, enabled)
+    self:SetSelectControlEnabled(widgets.spellAnchorDropdown, enabled and hasSpell)
+    self:SetSelectControlEnabled(widgets.spellStyleDropdown, enabled and hasSpell)
+    self:SetNumericControlEnabled(widgets.spellX, enabled and hasSpell)
+    self:SetNumericControlEnabled(widgets.spellY, enabled and hasSpell)
+    self:SetNumericControlEnabled(widgets.spellSize, enabled and hasSpell)
+    self:SetColorControlEnabled(widgets.spellColor, enabled and hasSpell)
+
+    self:SetSelectControlEnabled(widgets.groupDropdown, enabled)
+    self:SetSelectControlEnabled(widgets.groupStyleDropdown, enabled)
+    self:SetNumericControlEnabled(widgets.groupSize, enabled)
+    self:SetColorControlEnabled(widgets.groupColor, enabled)
+    self:SetEditBoxEnabled(widgets.customInput, enabled)
+    self:SetButtonEnabled(widgets.addCustomButton, enabled)
+    self:SetButtonEnabled(widgets.removeCustomButton, enabled and canRemoveCustom)
+end
+
 -- Request unit frame refresh.
 function Configuration:RequestUnitFrameRefresh(immediate)
     local unitFrames = self.addon:GetModule("unitFrames")
     local partyFrames = self.addon:GetModule("partyFrames")
-    if not unitFrames and not partyFrames then
+    local raidFrames = self.addon:GetModule("raidFrames")
+    if not unitFrames and not partyFrames and not raidFrames then
         return
+    end
+
+    if partyFrames and type(partyFrames.InvalidateHealerSpellCaches) == "function" then
+        partyFrames:InvalidateHealerSpellCaches()
     end
 
     -- Refresh unit frames after debounce.
@@ -1960,6 +2573,9 @@ function Configuration:RequestUnitFrameRefresh(immediate)
             end
             if partyFrames and type(partyFrames.RefreshAll) == "function" then
                 partyFrames:RefreshAll(true)
+            end
+            if raidFrames and type(raidFrames.RefreshAll) == "function" then
+                raidFrames:RefreshAll(true)
             end
         end, L.CONFIG_DEFERRED_APPLY, "config_refresh_all")
     end
@@ -2652,7 +3268,7 @@ function Configuration:BuildPartyHealerPage(page)
     setFontStringTextSafe(
         helpText,
         L.CONFIG_PARTY_HEALER_HELP
-            or "Configure tracked HoTs, absorbs and externals for your current spec/talents. Only available spells are listed.",
+            or "Configure tracked HoTs, absorbs and externals for party and raid frames. Only available spells are listed.",
         11
     )
     helpText:SetTextColor(0.82, 0.84, 0.9, 0.95)
@@ -2665,6 +3281,7 @@ function Configuration:BuildPartyHealerPage(page)
     )
     local spellDropdown = spellControl and spellControl.dropdown or nil
     if spellDropdown then
+        spellDropdown:SetHeight(CONFIG_SELECT_HEIGHT * 2)
         self:InitializePartyHealerSpellDropdown(spellDropdown)
     end
 
@@ -2970,6 +3587,355 @@ function Configuration:BuildPartyHealerPage(page)
     }
 end
 
+-- Build raid healer page.
+function Configuration:BuildRaidHealerPage(page)
+    local enabled = self:CreateCheckbox(
+        "mummuFramesConfigRaidHealerEnabled",
+        page,
+        L.CONFIG_RAID_HEALER_ENABLE or "Enable raid healer tracking",
+        page,
+        0,
+        -6,
+        "TOPLEFT"
+    )
+    enabled:SetScript("OnClick", function(button)
+        local config = self:GetRaidHealerConfig()
+        if not config then
+            return
+        end
+        config.enabled = button:GetChecked() and true or false
+        self:RefreshRaidHealerControlStates()
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local helpText = page:CreateFontString(nil, "ARTWORK")
+    helpText:SetPoint("TOPLEFT", enabled, "BOTTOMLEFT", 4, -8)
+    helpText:SetPoint("RIGHT", page, "RIGHT", -24, 0)
+    helpText:SetJustifyH("LEFT")
+    helpText:SetJustifyV("TOP")
+    Style:ApplyFont(helpText, 11)
+    setFontStringTextSafe(
+        helpText,
+        L.CONFIG_RAID_HEALER_HELP
+            or "Configure tracked HoTs, absorbs and externals for raid frames. Spells are shared with Party Healer.",
+        11
+    )
+    helpText:SetTextColor(0.82, 0.84, 0.9, 0.95)
+
+    local spellControl = createLabeledDropdown(
+        "mummuFramesConfigRaidHealerSpellDropdown",
+        page,
+        L.CONFIG_PARTY_HEALER_SPELL or "Tracked spell",
+        helpText
+    )
+    local spellDropdown = spellControl and spellControl.dropdown or nil
+    if spellDropdown then
+        spellDropdown:SetHeight(CONFIG_SELECT_HEIGHT * 2)
+        self:InitializeRaidHealerSpellDropdown(spellDropdown)
+    end
+
+    local customInputLabel = page:CreateFontString(nil, "ARTWORK")
+    customInputLabel:SetPoint("TOPLEFT", spellDropdown or helpText, "BOTTOMLEFT", 0, -14)
+    setFontStringTextSafe(
+        customInputLabel,
+        L.CONFIG_PARTY_HEALER_CUSTOM_INPUT or "Add custom buff (spell name or spell ID)",
+        12
+    )
+
+    local customInput = createTextEditBox("mummuFramesConfigRaidHealerCustomInput", page, 250)
+    customInput:SetPoint("TOPLEFT", customInputLabel, "BOTTOMLEFT", 0, -6)
+
+    local addCustomButton = CreateFrame("Button", "mummuFramesConfigRaidHealerCustomAddButton", page, "UIPanelButtonTemplate")
+    addCustomButton:SetSize(64, 22)
+    addCustomButton:SetPoint("LEFT", customInput, "RIGHT", 8, 0)
+    if type(addCustomButton.SetText) == "function" then
+        addCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_ADD or "Add")
+    end
+
+    local removeCustomButton = CreateFrame(
+        "Button",
+        "mummuFramesConfigRaidHealerCustomRemoveButton",
+        page,
+        "UIPanelButtonTemplate"
+    )
+    removeCustomButton:SetSize(112, 22)
+    removeCustomButton:SetPoint("TOPLEFT", customInput, "BOTTOMLEFT", 0, -8)
+    if type(removeCustomButton.SetText) == "function" then
+        removeCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_REMOVE or "Remove selected custom")
+    end
+
+    local function addCustomSpellFromInput()
+        local inputText = customInput and customInput:GetText() or nil
+        if type(inputText) ~= "string" then
+            return
+        end
+        inputText = string.match(inputText, "^%s*(.-)%s*$")
+        if not inputText or inputText == "" then
+            return
+        end
+
+        local raidFrames = self.addon:GetModule("raidFrames")
+        if not raidFrames or type(raidFrames.AddCustomHealerSpell) ~= "function" then
+            return
+        end
+
+        local spellID, err = raidFrames:AddCustomHealerSpell(inputText, self._raidHealerSelectedGroup or "hots")
+        if spellID then
+            self._raidHealerSelectedSpellID = spellID
+            customInput:SetText("")
+            self:RefreshConfigWidgets()
+            self:RequestUnitFrameRefresh()
+            return
+        end
+
+        if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
+            local message = L.CONFIG_PARTY_HEALER_CUSTOM_INVALID or "Unable to add custom spell."
+            if err == "unknown_spell" then
+                message = L.CONFIG_PARTY_HEALER_CUSTOM_UNKNOWN or "Unknown spell. Use a valid spell name or spell ID."
+            end
+            UIErrorsFrame:AddMessage(message, 1, 0.2, 0.2)
+        end
+    end
+
+    addCustomButton:SetScript("OnClick", addCustomSpellFromInput)
+    customInput:SetScript("OnEnterPressed", function(editBox)
+        addCustomSpellFromInput()
+        editBox:ClearFocus()
+    end)
+    customInput:SetScript("OnEscapePressed", function(editBox)
+        editBox:ClearFocus()
+    end)
+
+    removeCustomButton:SetScript("OnClick", function()
+        local spellEntry = self:GetSelectedRaidHealerSpellEntry()
+        if not spellEntry then
+            return
+        end
+
+        local raidFrames = self.addon:GetModule("raidFrames")
+        if not raidFrames or type(raidFrames.RemoveCustomHealerSpell) ~= "function" then
+            return
+        end
+
+        local removed = raidFrames:RemoveCustomHealerSpell(spellEntry.spellID)
+        if removed then
+            self._raidHealerSelectedSpellID = nil
+            self:RefreshConfigWidgets()
+            self:RequestUnitFrameRefresh()
+        end
+    end)
+
+    local spellEnabled = self:CreateCheckbox(
+        "mummuFramesConfigRaidHealerSpellEnabled",
+        page,
+        L.CONFIG_PARTY_HEALER_SPELL_ENABLE or "Show selected spell",
+        removeCustomButton,
+        0,
+        -12
+    )
+    spellEnabled:SetScript("OnClick", function(button)
+        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+        if not spellConfig then
+            button:SetChecked(false)
+            return
+        end
+        spellConfig.enabled = button:GetChecked() and true or false
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local spellAnchorControl = createLabeledDropdown(
+        "mummuFramesConfigRaidHealerSpellAnchorDropdown",
+        page,
+        L.CONFIG_PARTY_HEALER_ANCHOR or "Spell anchor",
+        spellEnabled
+    )
+    local spellAnchorDropdown = spellAnchorControl and spellAnchorControl.dropdown or nil
+    if spellAnchorDropdown then
+        self:InitializeRaidHealerAnchorDropdown(spellAnchorDropdown)
+    end
+
+    local spellStyleControl = createLabeledDropdown(
+        "mummuFramesConfigRaidHealerSpellStyleDropdown",
+        page,
+        L.CONFIG_PARTY_HEALER_STYLE or "Spell style",
+        spellAnchorDropdown or spellEnabled
+    )
+    local spellStyleDropdown = spellStyleControl and spellStyleControl.dropdown or nil
+    if spellStyleDropdown then
+        self:InitializeRaidHealerSpellStyleDropdown(spellStyleDropdown)
+    end
+
+    local spellX = self:CreateNumericControl(
+        page,
+        "RaidHealerSpellX",
+        L.CONFIG_PARTY_HEALER_X or "Spell X offset",
+        -200,
+        200,
+        1,
+        spellStyleDropdown or spellAnchorDropdown or spellEnabled,
+        20
+    )
+    self:BindNumericControl(spellX, function(value)
+        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+        if not spellConfig then
+            return
+        end
+        spellConfig.x = tonumber(value) or 0
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local spellY = self:CreateNumericControl(
+        page,
+        "RaidHealerSpellY",
+        L.CONFIG_PARTY_HEALER_Y or "Spell Y offset",
+        -200,
+        200,
+        1,
+        spellX.slider
+    )
+    self:BindNumericControl(spellY, function(value)
+        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+        if not spellConfig then
+            return
+        end
+        spellConfig.y = tonumber(value) or 0
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local spellSize = self:CreateNumericControl(
+        page,
+        "RaidHealerSpellSize",
+        L.CONFIG_PARTY_HEALER_SIZE or "Spell size",
+        6,
+        48,
+        1,
+        spellY.slider
+    )
+    self:BindNumericControl(spellSize, function(value)
+        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
+        if not spellConfig then
+            return
+        end
+        spellConfig.size = math.floor((tonumber(value) or 14) + 0.5)
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local spellColor = createColorControl(
+        page,
+        L.CONFIG_PARTY_HEALER_SPELL_COLOR or "Spell rectangle color",
+        spellSize.slider
+    )
+    if spellColor and spellColor.button then
+        spellColor.button:SetScript("OnClick", function()
+            local config = self:GetRaidHealerConfig()
+            local spellConfig, spellEntry = self:GetSelectedRaidHealerSpellConfig()
+            if not config or not spellConfig then
+                return
+            end
+
+            local groupKey = spellEntry and spellEntry.group or "hots"
+            local groupConfig = config.groups and config.groups[groupKey] or nil
+            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
+            local baseColor = spellConfig.color or (groupConfig and groupConfig.color) or defaults.color
+
+            openColorPicker(baseColor, function(r, g, b, a)
+                spellConfig.color = spellConfig.color or {}
+                spellConfig.color.r = clampColorComponent(r, defaults.color.r)
+                spellConfig.color.g = clampColorComponent(g, defaults.color.g)
+                spellConfig.color.b = clampColorComponent(b, defaults.color.b)
+                spellConfig.color.a = clampColorComponent(a, defaults.color.a)
+                self:SetColorControlValue(spellColor, spellConfig.color)
+                self:RequestUnitFrameRefresh()
+            end)
+        end)
+    end
+
+    local groupControl = createLabeledDropdown(
+        "mummuFramesConfigRaidHealerGroupDropdown",
+        page,
+        L.CONFIG_PARTY_HEALER_GROUP or "Group defaults",
+        spellColor and spellColor.button or spellSize.slider
+    )
+    local groupDropdown = groupControl and groupControl.dropdown or nil
+    if groupDropdown then
+        self:InitializeRaidHealerGroupDropdown(groupDropdown)
+    end
+
+    local groupStyleControl = createLabeledDropdown(
+        "mummuFramesConfigRaidHealerGroupStyleDropdown",
+        page,
+        L.CONFIG_PARTY_HEALER_GROUP_STYLE or "Group style",
+        groupDropdown or (spellColor and spellColor.button) or spellSize.slider
+    )
+    local groupStyleDropdown = groupStyleControl and groupStyleControl.dropdown or nil
+    if groupStyleDropdown then
+        self:InitializeRaidHealerGroupStyleDropdown(groupStyleDropdown)
+    end
+
+    local groupSize = self:CreateNumericControl(
+        page,
+        "RaidHealerGroupSize",
+        L.CONFIG_PARTY_HEALER_GROUP_SIZE or "Group size",
+        6,
+        48,
+        1,
+        groupStyleDropdown or groupDropdown or spellSize.slider,
+        20
+    )
+    self:BindNumericControl(groupSize, function(value)
+        local _, groupConfig = self:GetSelectedRaidHealerGroupConfig()
+        if not groupConfig then
+            return
+        end
+        groupConfig.size = math.floor((tonumber(value) or 14) + 0.5)
+        self:RequestUnitFrameRefresh()
+    end)
+
+    local groupColor = createColorControl(
+        page,
+        L.CONFIG_PARTY_HEALER_GROUP_COLOR or "Group rectangle color",
+        groupSize.slider
+    )
+    if groupColor and groupColor.button then
+        groupColor.button:SetScript("OnClick", function()
+            local groupKey, groupConfig = self:GetSelectedRaidHealerGroupConfig()
+            if not groupConfig then
+                return
+            end
+            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
+            local baseColor = groupConfig.color or defaults.color
+            openColorPicker(baseColor, function(r, g, b, a)
+                groupConfig.color = groupConfig.color or {}
+                groupConfig.color.r = clampColorComponent(r, defaults.color.r)
+                groupConfig.color.g = clampColorComponent(g, defaults.color.g)
+                groupConfig.color.b = clampColorComponent(b, defaults.color.b)
+                groupConfig.color.a = clampColorComponent(a, defaults.color.a)
+                self:SetColorControlValue(groupColor, groupConfig.color)
+                self:RequestUnitFrameRefresh()
+            end)
+        end)
+    end
+
+    self.widgets.raidHealer = {
+        enabled = enabled,
+        spellDropdown = spellDropdown,
+        customInput = customInput,
+        addCustomButton = addCustomButton,
+        removeCustomButton = removeCustomButton,
+        spellEnabled = spellEnabled,
+        spellAnchorDropdown = spellAnchorDropdown,
+        spellStyleDropdown = spellStyleDropdown,
+        spellX = spellX,
+        spellY = spellY,
+        spellSize = spellSize,
+        spellColor = spellColor,
+        groupDropdown = groupDropdown,
+        groupStyleDropdown = groupStyleDropdown,
+        groupSize = groupSize,
+        groupColor = groupColor,
+    }
+end
+
 -- Build unit page.
 function Configuration:BuildUnitPage(page, unitToken)
     local dataHandle = self.addon:GetModule("dataHandle")
@@ -3003,7 +3969,20 @@ function Configuration:BuildUnitPage(page, unitToken)
             dataHandle:SetUnitConfig(unitToken, "hideBlizzardFrame", button:GetChecked() and true or false)
             self:RequestUnitFrameRefresh()
         end)
-    elseif unitToken ~= "party" then
+    elseif unitToken == "raid" then
+        hideBlizzard = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "HideBlizzard",
+            page,
+            L.CONFIG_RAID_HIDE_BLIZZARD or "Hide Blizzard raid frames",
+            enabled,
+            0,
+            -8
+        )
+        hideBlizzard:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "hideBlizzardFrame", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+    else
         hideBlizzard = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "HideBlizzard",
             page,
@@ -3127,7 +4106,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     end
 
     local debuffsPositionControl = nil
-    if unitToken == "party" then
+    if unitToken == "party" or unitToken == "raid" then
         debuffsPositionControl = createLabeledDropdown(
             "mummuFramesConfig" .. unitToken .. "DebuffPositionDropdown",
             page,
@@ -3173,6 +4152,13 @@ function Configuration:BuildUnitPage(page, unitToken)
     end)
 
     local spacing = nil
+    local spacingX = nil
+    local spacingY = nil
+    local groupSpacing = nil
+    local groupLayoutDropdown = nil
+    local sortDropdown = nil
+    local sortDirectionDropdown = nil
+    local testSizeDropdown = nil
     local spacingAnchor = height.slider
     if unitToken == "party" then
         spacing = self:CreateNumericControl(
@@ -3189,36 +4175,127 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RequestUnitFrameRefresh()
         end)
         spacingAnchor = spacing.slider
+    elseif unitToken == "raid" then
+        spacingX = self:CreateNumericControl(
+            page,
+            unitToken .. "SpacingX",
+            L.CONFIG_RAID_SPACING_X or "Horizontal gap",
+            0,
+            80,
+            1,
+            height.slider
+        )
+        self:BindNumericControl(spacingX, function(value)
+            dataHandle:SetUnitConfig(unitToken, "spacingX", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        spacingY = self:CreateNumericControl(
+            page,
+            unitToken .. "SpacingY",
+            L.CONFIG_RAID_SPACING_Y or "Vertical gap",
+            0,
+            80,
+            1,
+            spacingX.slider
+        )
+        self:BindNumericControl(spacingY, function(value)
+            dataHandle:SetUnitConfig(unitToken, "spacingY", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        groupSpacing = self:CreateNumericControl(
+            page,
+            unitToken .. "GroupSpacing",
+            L.CONFIG_RAID_GROUP_SPACING or "Group gap",
+            0,
+            120,
+            1,
+            spacingY.slider
+        )
+        self:BindNumericControl(groupSpacing, function(value)
+            dataHandle:SetUnitConfig(unitToken, "groupSpacing", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        local groupLayoutControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "GroupLayoutDropdown",
+            page,
+            L.CONFIG_RAID_GROUP_LAYOUT or "Group layout",
+            groupSpacing.slider
+        )
+        groupLayoutDropdown = groupLayoutControl and groupLayoutControl.dropdown or nil
+        if groupLayoutDropdown then
+            self:InitializeRaidGroupLayoutDropdown(groupLayoutDropdown)
+        end
+
+        local sortControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "SortDropdown",
+            page,
+            L.CONFIG_RAID_SORT or "Sort by",
+            groupLayoutDropdown or groupSpacing.slider
+        )
+        sortDropdown = sortControl and sortControl.dropdown or nil
+        if sortDropdown then
+            self:InitializeRaidSortDropdown(sortDropdown)
+        end
+
+        local sortDirectionControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "SortDirectionDropdown",
+            page,
+            L.CONFIG_RAID_SORT_DIRECTION or "Sort direction",
+            sortDropdown or groupLayoutDropdown or groupSpacing.slider
+        )
+        sortDirectionDropdown = sortDirectionControl and sortDirectionControl.dropdown or nil
+        if sortDirectionDropdown then
+            self:InitializeRaidSortDirectionDropdown(sortDirectionDropdown)
+        end
+
+        local testSizeControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "TestSizeDropdown",
+            page,
+            L.CONFIG_RAID_TEST_SIZE or "Test raid size",
+            sortDirectionDropdown or sortDropdown or groupLayoutDropdown or groupSpacing.slider
+        )
+        testSizeDropdown = testSizeControl and testSizeControl.dropdown or nil
+        if testSizeDropdown then
+            self:InitializeRaidTestSizeDropdown(testSizeDropdown)
+        end
+        spacingAnchor = testSizeDropdown or sortDirectionDropdown or sortDropdown or groupLayoutDropdown or groupSpacing.slider
     end
 
-    local powerHeight = self:CreateNumericControl(
-        page,
-        unitToken .. "PowerHeight",
-        L.CONFIG_UNIT_POWER_HEIGHT or "Power bar height",
-        4,
-        60,
-        1,
-        spacingAnchor
-    )
-    -- Resolve value label.
-    self:BindNumericControl(powerHeight, function(value)
-        dataHandle:SetUnitConfig(unitToken, "powerHeight", math.floor((value or 0) + 0.5))
-        self:RequestUnitFrameRefresh()
-    end)
+    local powerHeight = nil
+    local powerOnTop = nil
+    local fontAnchor = spacingAnchor
+    if unitToken ~= "raid" then
+        powerHeight = self:CreateNumericControl(
+            page,
+            unitToken .. "PowerHeight",
+            L.CONFIG_UNIT_POWER_HEIGHT or "Power bar height",
+            4,
+            60,
+            1,
+            spacingAnchor
+        )
+        self:BindNumericControl(powerHeight, function(value)
+            dataHandle:SetUnitConfig(unitToken, "powerHeight", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
 
-    local powerOnTop = self:CreateCheckbox(
-        "mummuFramesConfig" .. unitToken .. "PowerOnTop",
-        page,
-        L.CONFIG_UNIT_POWER_ON_TOP or "Power bar on top",
-        powerHeight.slider,
-        0,
-        -8
-    )
-    -- Handle OnClick script callback.
-    powerOnTop:SetScript("OnClick", function(button)
-        dataHandle:SetUnitConfig(unitToken, "powerOnTop", button:GetChecked() and true or false)
-        self:RequestUnitFrameRefresh()
-    end)
+        powerOnTop = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "PowerOnTop",
+            page,
+            L.CONFIG_UNIT_POWER_ON_TOP or "Power bar on top",
+            powerHeight.slider,
+            0,
+            -8
+        )
+        powerOnTop:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "powerOnTop", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+        fontAnchor = powerOnTop
+    end
 
     local fontSize = self:CreateNumericControl(
         page,
@@ -3227,7 +4304,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         8,
         26,
         1,
-        powerOnTop
+        fontAnchor
     )
     -- Resolve value label.
     self:BindNumericControl(fontSize, function(value)
@@ -3462,6 +4539,13 @@ function Configuration:BuildUnitPage(page, unitToken)
         width = width,
         height = height,
         spacing = spacing,
+        spacingX = spacingX,
+        spacingY = spacingY,
+        groupSpacing = groupSpacing,
+        groupLayoutDropdown = groupLayoutDropdown,
+        sortDropdown = sortDropdown,
+        sortDirectionDropdown = sortDirectionDropdown,
+        testSizeDropdown = testSizeDropdown,
         powerHeight = powerHeight,
         powerOnTop = powerOnTop,
         fontSize = fontSize,
@@ -3825,6 +4909,78 @@ function Configuration:RefreshConfigWidgets()
         self:RefreshPartyHealerControlStates()
     end
 
+    local raidHealerWidgets = self.widgets.raidHealer
+    if raidHealerWidgets then
+        local raidHealerConfig = self:GetRaidHealerConfig()
+        local spellConfig, spellEntry = self:GetSelectedRaidHealerSpellConfig()
+        local selectedGroupKey, selectedGroupConfig = self:GetSelectedRaidHealerGroupConfig()
+
+        if raidHealerWidgets.enabled then
+            raidHealerWidgets.enabled:SetChecked(raidHealerConfig and raidHealerConfig.enabled ~= false)
+        end
+        if raidHealerWidgets.spellDropdown then
+            self:RefreshSelectControlText(raidHealerWidgets.spellDropdown, true)
+        end
+        if raidHealerWidgets.spellEnabled then
+            raidHealerWidgets.spellEnabled:SetChecked(spellConfig and spellConfig.enabled ~= false or false)
+        end
+        if raidHealerWidgets.spellAnchorDropdown then
+            self:RefreshSelectControlText(raidHealerWidgets.spellAnchorDropdown, false)
+        end
+        if raidHealerWidgets.spellStyleDropdown then
+            self:RefreshSelectControlText(raidHealerWidgets.spellStyleDropdown, false)
+        end
+
+        local spellGroupKey = spellEntry and spellEntry.group or "hots"
+        local spellGroupDefaults = PARTY_HEALER_GROUP_DEFAULTS[spellGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
+        local spellGroupConfig = raidHealerConfig
+            and raidHealerConfig.groups
+            and raidHealerConfig.groups[spellGroupKey]
+            or spellGroupDefaults
+
+        if raidHealerWidgets.spellX then
+            self:SetNumericControlValue(raidHealerWidgets.spellX, spellConfig and spellConfig.x or 0)
+        end
+        if raidHealerWidgets.spellY then
+            self:SetNumericControlValue(raidHealerWidgets.spellY, spellConfig and spellConfig.y or 0)
+        end
+        if raidHealerWidgets.spellSize then
+            self:SetNumericControlValue(
+                raidHealerWidgets.spellSize,
+                spellConfig and spellConfig.size or (spellGroupConfig and spellGroupConfig.size) or spellGroupDefaults.size
+            )
+        end
+        if raidHealerWidgets.spellColor then
+            self:SetColorControlValue(
+                raidHealerWidgets.spellColor,
+                spellConfig and spellConfig.color or (spellGroupConfig and spellGroupConfig.color) or spellGroupDefaults.color
+            )
+        end
+
+        if raidHealerWidgets.groupDropdown then
+            self:RefreshSelectControlText(raidHealerWidgets.groupDropdown, false)
+        end
+        if raidHealerWidgets.groupStyleDropdown then
+            self:RefreshSelectControlText(raidHealerWidgets.groupStyleDropdown, false)
+        end
+        if raidHealerWidgets.groupSize then
+            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
+            self:SetNumericControlValue(
+                raidHealerWidgets.groupSize,
+                selectedGroupConfig and selectedGroupConfig.size or groupDefaults.size
+            )
+        end
+        if raidHealerWidgets.groupColor then
+            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
+            self:SetColorControlValue(
+                raidHealerWidgets.groupColor,
+                selectedGroupConfig and selectedGroupConfig.color or groupDefaults.color
+            )
+        end
+
+        self:RefreshRaidHealerControlStates()
+    end
+
     local dataHandle = self.addon:GetModule("dataHandle")
     for i = 1, #UNIT_TAB_ORDER do
         local unitToken = UNIT_TAB_ORDER[i]
@@ -3866,7 +5022,30 @@ function Configuration:RefreshConfigWidgets()
             if unitWidgets.spacing then
                 self:SetNumericControlValue(unitWidgets.spacing, unitConfig.spacing or 24)
             end
-            self:SetNumericControlValue(unitWidgets.powerHeight, unitConfig.powerHeight or 10)
+            if unitWidgets.spacingX then
+                self:SetNumericControlValue(unitWidgets.spacingX, unitConfig.spacingX or 5)
+            end
+            if unitWidgets.spacingY then
+                self:SetNumericControlValue(unitWidgets.spacingY, unitConfig.spacingY or 6)
+            end
+            if unitWidgets.groupSpacing then
+                self:SetNumericControlValue(unitWidgets.groupSpacing, unitConfig.groupSpacing or 12)
+            end
+            if unitWidgets.groupLayoutDropdown then
+                self:RefreshSelectControlText(unitWidgets.groupLayoutDropdown, false)
+            end
+            if unitWidgets.sortDropdown then
+                self:RefreshSelectControlText(unitWidgets.sortDropdown, false)
+            end
+            if unitWidgets.sortDirectionDropdown then
+                self:RefreshSelectControlText(unitWidgets.sortDirectionDropdown, false)
+            end
+            if unitWidgets.testSizeDropdown then
+                self:RefreshSelectControlText(unitWidgets.testSizeDropdown, false)
+            end
+            if unitWidgets.powerHeight then
+                self:SetNumericControlValue(unitWidgets.powerHeight, unitConfig.powerHeight or 10)
+            end
             if unitWidgets.powerOnTop then
                 unitWidgets.powerOnTop:SetChecked(unitConfig.powerOnTop == true)
             end
@@ -3936,10 +5115,10 @@ function Configuration:BuildTabs(subtitle)
             key = token,
             label = UNIT_TAB_LABELS[token] or token,
         }
-        if token == "party" then
+        if token == "raid" then
             tabs[#tabs + 1] = {
-                key = "partyhealer",
-                label = L.CONFIG_TAB_PARTY_HEALER or "Party Healer",
+                key = "lovehealers",
+                label = L.CONFIG_TAB_LOVE_HEALERS or "Love Healers",
             }
         end
     end
@@ -4013,7 +5192,7 @@ function Configuration:BuildTabs(subtitle)
             self:BuildGlobalPage(content)
         elseif tab.key == "profiles" then
             self:BuildProfilesPage(content)
-        elseif tab.key == "partyhealer" then
+        elseif tab.key == "lovehealers" then
             self:BuildPartyHealerPage(content)
         else
             self:BuildUnitPage(content, tab.key)

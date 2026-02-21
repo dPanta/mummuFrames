@@ -443,8 +443,16 @@ function PartyFrames:GetPartyHealerConfig()
     end
 
     local profile = self.dataHandle:GetProfile()
-    profile.partyHealer = profile.partyHealer or {}
-    local config = profile.partyHealer
+    if type(profile.loveHealers) ~= "table" then
+        if type(profile.partyHealer) == "table" then
+            profile.loveHealers = profile.partyHealer
+        elseif type(profile.raidHealer) == "table" then
+            profile.loveHealers = profile.raidHealer
+        else
+            profile.loveHealers = {}
+        end
+    end
+    local config = profile.loveHealers
 
     if config.enabled == nil then
         config.enabled = true
