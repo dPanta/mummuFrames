@@ -10,7 +10,7 @@ local fontProbe = nil
 local lsm = nil
 local lsmCallbacksRegistered = false
 
-Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\ProductSans-Bold.ttf"
+Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
 
 -- Normalize media path. Bug parade continues.

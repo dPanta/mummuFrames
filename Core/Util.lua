@@ -32,13 +32,43 @@ end
 
 -- Clamp. Entropy stays pending.
 function Util:Clamp(value, minValue, maxValue)
-    if value < minValue then
-        return minValue
+    local function toNumberSafe(input, fallback)
+        if type(input) == "number" then
+            local okDirect, directValue = pcall(function()
+                return input + 0
+            end)
+            if okDirect and type(directValue) == "number" then
+                return directValue
+            end
+        end
+
+        local okTonumber, coerced = pcall(tonumber, input)
+        if okTonumber and type(coerced) == "number" then
+            local okCoerced, numericValue = pcall(function()
+                return coerced + 0
+            end)
+            if okCoerced and type(numericValue) == "number" then
+                return numericValue
+            end
+        end
+
+        return fallback
     end
-    if value > maxValue then
-        return maxValue
+
+    local resolvedMin = toNumberSafe(minValue, 0)
+    local resolvedMax = toNumberSafe(maxValue, resolvedMin)
+    if resolvedMin > resolvedMax then
+        resolvedMin, resolvedMax = resolvedMax, resolvedMin
     end
-    return value
+
+    local resolvedValue = toNumberSafe(value, resolvedMin)
+    if resolvedValue < resolvedMin then
+        return resolvedMin
+    end
+    if resolvedValue > resolvedMax then
+        return resolvedMax
+    end
+    return resolvedValue
 end
 
 -- Format number with separators.

@@ -34,6 +34,13 @@ local BLIZZARD_FRAME_NAME_BY_UNIT = {
     focus = "FocusFrame",
     focustarget = "FocusFrameToT",
 }
+local GLOBAL_HIDE_BLIZZARD_UNITS = {
+    player = true,
+    target = true,
+    targettarget = true,
+    focus = true,
+    focustarget = true,
+}
 -- Create table holding supported units.
 local SUPPORTED_UNITS = {
     player = true,
@@ -61,6 +68,65 @@ local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 local MAX_AURA_SCAN = 40
 -- Create table holding modern aura api by unit.
 local MODERN_AURA_API_BY_UNIT = {}
+-- Create table holding important party buff spell ids.
+local IMPORTANT_PARTY_BUFF_SPELL_IDS = {
+    17, -- Power Word: Shield
+    139, -- Renew
+    774, -- Rejuvenation
+    974, -- Earth Shield
+    1022, -- Blessing of Protection
+    1044, -- Blessing of Freedom
+    5277, -- Evasion
+    102342, -- Ironbark
+    104773, -- Unending Resolve
+    115175, -- Soothing Mist
+    116849, -- Life Cocoon
+    118038, -- Die by the Sword
+    119611, -- Renewing Mist
+    120954, -- Fortifying Brew
+    122278, -- Dampen Harm
+    122783, -- Diffuse Magic
+    124682, -- Enveloping Mist
+    12975, -- Last Stand
+    19236, -- Desperate Prayer
+    22812, -- Barkskin
+    22842, -- Frenzied Regeneration
+    31224, -- Cloak of Shadows
+    33076, -- Prayer of Mending
+    33206, -- Pain Suppression
+    33763, -- Lifebloom
+    3411, -- Intervene
+    45438, -- Ice Block
+    47788, -- Guardian Spirit
+    48438, -- Wild Growth
+    48707, -- Anti-Magic Shell
+    48792, -- Icebound Fortitude
+    51052, -- Anti-Magic Zone
+    61336, -- Survival Instincts
+    61295, -- Riptide
+    642, -- Divine Shield
+    6940, -- Blessing of Sacrifice
+    871, -- Shield Wall
+    98008, -- Spirit Link Totem
+    102351, -- Cenarion Ward
+    186265, -- Aspect of the Turtle
+    194384, -- Atonement
+    194679, -- Rune Tap
+    196555, -- Netherwalk
+    196718, -- Darkness
+    212800, -- Blur
+    223306, -- Bestow Faith
+    264735, -- Survival of the Fittest
+    272679, -- Fortitude of the Bear
+    355941, -- Dream Breath
+    357170, -- Time Dilation
+    364343, -- Echo
+    366155, -- Reversion
+}
+local IMPORTANT_PARTY_BUFF_SPELLS = {}
+for i = 1, #IMPORTANT_PARTY_BUFF_SPELL_IDS do
+    IMPORTANT_PARTY_BUFF_SPELLS[IMPORTANT_PARTY_BUFF_SPELL_IDS[i]] = true
+end
 
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
@@ -336,6 +402,108 @@ local function getAuraDataByIndex(unitToken, index, filter)
                 spellId = spellId,
             }
         end
+    end
+
+    return nil
+end
+
+-- Return important party buff spell set, including custom party healer spells.
+local function getImportantPartyBuffSpellSet(dataHandle)
+    -- Create table holding spell ids.
+    local spellSet = {}
+    for spellID in pairs(IMPORTANT_PARTY_BUFF_SPELLS) do
+        spellSet[spellID] = true
+    end
+
+    if not dataHandle then
+        return spellSet
+    end
+
+    local partyFrames = addon and type(addon.GetModule) == "function" and addon:GetModule("partyFrames") or nil
+    if partyFrames and type(partyFrames.GetAvailableHealerSpells) == "function" then
+        local okAvailable, availableSpells = pcall(partyFrames.GetAvailableHealerSpells, partyFrames)
+        if okAvailable and type(availableSpells) == "table" then
+            for i = 1, #availableSpells do
+                local spellID = availableSpells[i] and tonumber(availableSpells[i].spellID) or nil
+                spellID = spellID and math.floor(spellID + 0.5) or nil
+                if spellID and spellID > 0 then
+                    spellSet[spellID] = true
+                end
+            end
+        end
+    end
+
+    local profile = dataHandle:GetProfile()
+    local partyHealerConfig = profile and profile.partyHealer or nil
+    local customSpells = partyHealerConfig and partyHealerConfig.customSpells or nil
+    if type(customSpells) ~= "table" then
+        return spellSet
+    end
+
+    for key, entry in pairs(customSpells) do
+        local spellID = tonumber(key)
+        if type(entry) == "table" and tonumber(entry.spellID) then
+            spellID = tonumber(entry.spellID)
+        end
+        spellID = spellID and math.floor(spellID + 0.5) or nil
+        if spellID and spellID > 0 then
+            spellSet[spellID] = true
+        end
+    end
+
+    return spellSet
+end
+
+-- Return whether aura should be shown when using important-party-buffs filter.
+local function isImportantPartyBuffAura(auraData, importantSpellSet)
+    if type(auraData) ~= "table" or type(importantSpellSet) ~= "table" then
+        return false
+    end
+
+    local spellID = tonumber(auraData.spellId)
+    if spellID then
+        local okRound, rounded = pcall(function()
+            return math.floor(spellID + 0.5)
+        end)
+        spellID = (okRound and type(rounded) == "number") and rounded or nil
+    end
+    if not spellID then
+        return false
+    end
+
+    return importantSpellSet[spellID] == true
+end
+
+-- Return normalized spell id.
+local function normalizeSpellID(value)
+    local numeric = tonumber(value)
+    if not numeric then
+        return nil
+    end
+
+    local okRound, rounded = pcall(function()
+        return math.floor(numeric + 0.5)
+    end)
+    if not okRound or type(rounded) ~= "number" or rounded <= 0 then
+        return nil
+    end
+    return rounded
+end
+
+-- Return active tracked party healer spell set.
+local function getActiveTrackedPartyHealerSpellSet(addonRef)
+    if not addonRef or type(addonRef.GetModule) ~= "function" then
+        return nil
+    end
+
+    local partyFrames = addonRef:GetModule("partyFrames")
+    if not partyFrames or type(partyFrames.GetActiveTrackedHealerSpellSet) ~= "function" then
+        return nil
+    end
+
+    local okSet, spellSet = pcall(partyFrames.GetActiveTrackedHealerSpellSet, partyFrames)
+    if okSet and type(spellSet) == "table" then
+        return spellSet
     end
 
     return nil
@@ -1328,7 +1496,10 @@ function UnitFrames:ApplyAuraLayout(frame, unitConfig)
         container.maxIcons = maxIcons
         container.growFromRight = growFromRight
         container.enabled = auraEnabled and (sectionConfig.enabled ~= false)
-        container.source = sectionName == "buffs" and (sectionConfig.source == "self" and "self" or "all") or nil
+        container.source = sectionName == "buffs"
+            and (sectionConfig.source == "self" and "self"
+                or (sectionConfig.source == "important" and "important" or "all"))
+            or nil
     end
 end
 
@@ -1419,8 +1590,15 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
     local maxIcons = container.maxIcons or 8
     local shown = 0
     local filter = AURA_FILTER_BY_SECTION[sectionName] or "HELPFUL"
+    local importantSpellSet = nil
+    local excludedSpellSet = nil
     if sectionName == "buffs" and container.source == "self" then
         filter = filter .. "|PLAYER"
+    elseif sectionName == "buffs" and container.source == "important" then
+        importantSpellSet = getImportantPartyBuffSpellSet(self.dataHandle)
+    end
+    if sectionName == "buffs" and frame and frame._mummuIsPartyFrame then
+        excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
     end
 
     if exists then
@@ -1434,8 +1612,12 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
                 break
             end
 
-            shown = shown + 1
-            self:ApplyAuraToIcon(container, sectionName, shown, auraData)
+            local auraSpellID = normalizeSpellID(auraData.spellId)
+            local filteredByTracked = excludedSpellSet and auraSpellID and excludedSpellSet[auraSpellID] == true
+            if not filteredByTracked and (not importantSpellSet or isImportantPartyBuffAura(auraData, importantSpellSet)) then
+                shown = shown + 1
+                self:ApplyAuraToIcon(container, sectionName, shown, auraData)
+            end
         end
     elseif previewMode then
         local previewCount = math.min(maxIcons, sectionName == "buffs" and 3 or 2)
@@ -1637,11 +1819,12 @@ function UnitFrames:ApplyBlizzardFrameVisibility()
 
     local profile = self.dataHandle:GetProfile()
     local addonEnabled = profile and profile.enabled ~= false
+    local hideBlizzardUnitsGlobal = addonEnabled and profile and profile.hideBlizzardUnitFrames == true
 
     for i = 1, #FRAME_ORDER do
         local unitToken = FRAME_ORDER[i]
         local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
-        local shouldHide = addonEnabled and unitConfig.hideBlizzardFrame == true
+        local shouldHide = addonEnabled and (unitConfig.hideBlizzardFrame == true or (hideBlizzardUnitsGlobal and GLOBAL_HIDE_BLIZZARD_UNITS[unitToken] == true))
         self:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
 
         if CASTBAR_UNITS[unitToken] then
@@ -1764,12 +1947,20 @@ end
 
 -- Hide tertiary power stack overlays.
 local function hideTertiaryPowerStackOverlays(bar)
-    if not bar or type(bar.StackOverlays) ~= "table" then
+    if not bar then
         return
     end
 
-    for i = 1, #bar.StackOverlays do
-        bar.StackOverlays[i]:Hide()
+    if type(bar.StackOverlays) == "table" then
+        for i = 1, #bar.StackOverlays do
+            bar.StackOverlays[i]:Hide()
+        end
+    end
+
+    if type(bar.StackRightGlows) == "table" then
+        for i = 1, #bar.StackRightGlows do
+            bar.StackRightGlows[i]:Hide()
+        end
     end
 end
 
@@ -1791,9 +1982,32 @@ local function setGuardianRightGlow(bar, progress, alpha)
     local glowOffsetX = math.floor((barWidth * resolvedProgress) + 0.5)
     bar.RightGlow:ClearAllPoints()
     bar.RightGlow:SetPoint("CENTER", bar.Bar, "LEFT", glowOffsetX, 0)
-    bar.RightGlow:SetSize(math.max(18, math.floor((barHeight * 1.6) + 0.5)), math.max(22, math.floor((barHeight * 2.2) + 0.5)))
-    bar.RightGlow:SetVertexColor(0.66, 0.86, 1.00, resolvedAlpha)
+    bar.RightGlow:SetSize(math.max(22, math.floor((barHeight * 2.2) + 0.5)), math.max(30, math.floor((barHeight * 3.0) + 0.5)))
+    bar.RightGlow:SetVertexColor(0.82, 0.95, 1.00, resolvedAlpha)
     bar.RightGlow:Show()
+end
+
+-- Set guardian stack right glow.
+local function setGuardianStackRightGlow(glow, parentBar, progress, alpha)
+    if not (glow and parentBar) then
+        return
+    end
+
+    local resolvedProgress = Util:Clamp(tonumber(progress) or 0, 0, 1)
+    local resolvedAlpha = Util:Clamp(tonumber(alpha) or 0, 0, 1)
+    if resolvedAlpha <= 0 then
+        glow:Hide()
+        return
+    end
+
+    local barWidth = math.max(1, parentBar:GetWidth() or 1)
+    local barHeight = math.max(1, parentBar:GetHeight() or 1)
+    local glowOffsetX = math.floor((barWidth * resolvedProgress) + 0.5)
+    glow:ClearAllPoints()
+    glow:SetPoint("CENTER", parentBar, "LEFT", glowOffsetX, 0)
+    glow:SetSize(math.max(20, math.floor((barHeight * 2.0) + 0.5)), math.max(27, math.floor((barHeight * 2.8) + 0.5)))
+    glow:SetVertexColor(0.78, 0.93, 1.00, resolvedAlpha)
+    glow:Show()
 end
 
 -- Hide tertiary power bar callback.
@@ -2058,10 +2272,12 @@ local function renderGuardianIronfurStacks(bar, now)
     end
 
     local overlays = bar.StackOverlays or {}
+    local stackGlows = bar.StackRightGlows or {}
     local width = math.max(1, (bar.Bar and bar.Bar:GetWidth()) or bar:GetWidth() or 1)
     local shownStacks = math.min(#stackProgress, #overlays)
     for i = 1, #overlays do
         local overlay = overlays[i]
+        local stackGlow = stackGlows[i]
         if i <= shownStacks then
             local progress = stackProgress[i]
             local overlayWidth = math.max(1, math.floor((width * progress) + 0.5))
@@ -2073,12 +2289,26 @@ local function renderGuardianIronfurStacks(bar, now)
             overlay:SetWidth(overlayWidth)
             overlay:SetColorTexture(0.62 - tintStep, 0.80 - (tintStep * 0.55), 0.95 - (tintStep * 0.25), overlayAlpha)
             overlay:Show()
+
+            if stackGlow then
+                local glowAlpha = Util:Clamp(0.36 + (0.07 * i) + (progress * 0.18), 0.36, 0.96)
+                setGuardianStackRightGlow(stackGlow, bar.Bar, progress, glowAlpha)
+            end
         else
             overlay:Hide()
+            if stackGlow then
+                stackGlow:Hide()
+            end
+        end
+    end
+    for i = (#overlays + 1), #stackGlows do
+        local stackGlow = stackGlows[i]
+        if stackGlow then
+            stackGlow:Hide()
         end
     end
 
-    setGuardianRightGlow(bar, longestProgress, 0.35 + (longestProgress * 0.25))
+    setGuardianRightGlow(bar, longestProgress, 0.62 + (longestProgress * 0.28))
 
     if bar.ValueText then
         bar.ValueText:SetText(string.format("%dx", #stackProgress))
@@ -2626,7 +2856,8 @@ function UnitFrames:RefreshAll(forceLayout)
     self:ApplyBlizzardFrameVisibility()
 
     local profile = self.dataHandle:GetProfile()
-    if profile.enabled == false and not self.editModeActive then
+    local testMode = profile and profile.testMode == true
+    if profile.enabled == false and not self.editModeActive and not testMode then
         -- Return computed value.
         Util:RunWhenOutOfCombat(function()
             self:HideAll()
@@ -2648,8 +2879,10 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
 
     local options = refreshOptions or REFRESH_OPTIONS_FULL
 
+    local profile = self.dataHandle:GetProfile()
+    local testMode = profile and profile.testMode == true
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
-    if unitConfig.enabled == false and not self.editModeActive then
+    if unitConfig.enabled == false and not self.editModeActive and not testMode then
         if options.castbar and frame.CastBar then
             stopCastBarTimer(frame.CastBar)
         end
@@ -2669,8 +2902,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
         self.globalFrames:ApplyStyle(frame, unitToken)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local testMode = profile and profile.testMode == true
     local previewMode = testMode or self.editModeActive
     local exists = UnitExists(unitToken)
 

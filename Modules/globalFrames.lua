@@ -242,6 +242,7 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     container.RightGlow = rightGlow
     -- Create table holding stack overlays.
     container.StackOverlays = {}
+    container.StackRightGlows = {}
     for i = 1, TERTIARY_POWER_MAX_STACK_OVERLAYS do
         local overlaySubLevel = -9 + i -- Keeps stack overlays inside valid sublevel range [-8, 7].
         -- Create texture for overlay.
@@ -251,6 +252,17 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
         overlay:SetWidth(0)
         overlay:Hide()
         container.StackOverlays[i] = overlay
+
+        -- Create texture for stack right-edge glow.
+        local glowSubLevel = overlaySubLevel + 1
+        local stackGlow = bar:CreateTexture(nil, "OVERLAY", nil, glowSubLevel)
+        stackGlow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        stackGlow:SetBlendMode("ADD")
+        stackGlow:SetVertexColor(0.74, 0.91, 1.00, 0.42)
+        stackGlow:SetPoint("CENTER", bar, "RIGHT", 0, 0)
+        stackGlow:SetSize(24, 30)
+        stackGlow:Hide()
+        container.StackRightGlows[i] = stackGlow
     end
 
     frame.TertiaryPowerBar = container
