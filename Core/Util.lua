@@ -2,6 +2,40 @@ local _, ns = ...
 
 -- Create table holding util.
 local Util = {}
+-- Return input plus zero.
+local function addZero(input)
+    return input + 0
+end
+
+-- Return safe numeric conversion.
+local function toNumberSafe(input, fallback)
+    if type(input) == "number" then
+        local okDirect, directValue = pcall(addZero, input)
+        if okDirect and type(directValue) == "number" then
+            return directValue
+        end
+    end
+
+    local okTonumber, coerced = pcall(tonumber, input)
+    if okTonumber and type(coerced) == "number" then
+        local okCoerced, numericValue = pcall(addZero, coerced)
+        if okCoerced and type(numericValue) == "number" then
+            return numericValue
+        end
+    end
+
+    return fallback
+end
+local function formatAbbrevNumber(value)
+    local n = tonumber(value) or 0
+    if n >= 1000000 then
+        return string.format("%.1fm", n / 1000000)
+    end
+    if n >= 1000 then
+        return string.format("%.1fk", n / 1000)
+    end
+    return tostring(math.floor(n + 0.5))
+end
 
 -- Create table holding deferred queue.
 local deferredQueue = {}
@@ -32,29 +66,6 @@ end
 
 -- Clamp. Entropy stays pending.
 function Util:Clamp(value, minValue, maxValue)
-    local function toNumberSafe(input, fallback)
-        if type(input) == "number" then
-            local okDirect, directValue = pcall(function()
-                return input + 0
-            end)
-            if okDirect and type(directValue) == "number" then
-                return directValue
-            end
-        end
-
-        local okTonumber, coerced = pcall(tonumber, input)
-        if okTonumber and type(coerced) == "number" then
-            local okCoerced, numericValue = pcall(function()
-                return coerced + 0
-            end)
-            if okCoerced and type(numericValue) == "number" then
-                return numericValue
-            end
-        end
-
-        return fallback
-    end
-
     local resolvedMin = toNumberSafe(minValue, 0)
     local resolvedMax = toNumberSafe(maxValue, resolvedMin)
     if resolvedMin > resolvedMax then
@@ -81,16 +92,7 @@ function Util:FormatNumber(value)
     end
 
     -- Run protected callback.
-    local okFormat, formatted = pcall(function()
-        local n = tonumber(value) or 0
-        if n >= 1000000 then
-            return string.format("%.1fm", n / 1000000)
-        end
-        if n >= 1000 then
-            return string.format("%.1fk", n / 1000)
-        end
-        return tostring(math.floor(n + 0.5))
-    end)
+    local okFormat, formatted = pcall(formatAbbrevNumber, value)
 
     if okFormat and formatted then
         return formatted

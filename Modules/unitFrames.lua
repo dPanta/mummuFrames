@@ -127,6 +127,22 @@ local IMPORTANT_PARTY_BUFF_SPELLS = {}
 for i = 1, #IMPORTANT_PARTY_BUFF_SPELL_IDS do
     IMPORTANT_PARTY_BUFF_SPELLS[IMPORTANT_PARTY_BUFF_SPELL_IDS[i]] = true
 end
+local importantPartyBuffSpellSetCache = nil
+local importantPartyBuffSpellSetCacheRevision = nil
+local activeTrackedPartyHealerSpellSetCache = nil
+local activeTrackedPartyHealerSpellSetCacheRevision = nil
+local function addZero(value)
+    return value + 0
+end
+local function roundToNearestInteger(value)
+    return math.floor(value + 0.5)
+end
+local function valuesEqual(left, right)
+    return left == right
+end
+local function boolFromValue(value)
+    return value and true or false
+end
 
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
@@ -172,6 +188,9 @@ local REFRESH_OPTIONS_VITALS = {
 local REFRESH_OPTIONS_AURAS = {
     auras = true,
     tertiaryPower = true,
+}
+local REFRESH_OPTIONS_AURAS_ONLY = {
+    auras = true,
 }
 
 -- Create table holding refresh options castbar.
@@ -257,10 +276,7 @@ local SECONDARY_POWER_BY_CLASS = {
 
 -- Safe bool. Deadline still theoretical.
 local function safeBool(val)
-    -- Run protected callback.
-    local ok, result = pcall(function()
-        if val then return true else return false end
-    end)
+    local ok, result = pcall(boolFromValue, val)
     return ok and result or false
 end
 
@@ -409,6 +425,23 @@ end
 
 -- Return important party buff spell set, including custom party healer spells.
 local function getImportantPartyBuffSpellSet(dataHandle)
+    local partyFrames = addon and type(addon.GetModule) == "function" and addon:GetModule("partyFrames") or nil
+    local healerRevision = nil
+    if partyFrames and type(partyFrames.GetHealerCacheRevision) == "function" then
+        local okRevision, revision = pcall(partyFrames.GetHealerCacheRevision, partyFrames)
+        if okRevision and type(revision) == "number" then
+            healerRevision = revision
+        end
+    end
+
+    if
+        healerRevision ~= nil
+        and type(importantPartyBuffSpellSetCache) == "table"
+        and importantPartyBuffSpellSetCacheRevision == healerRevision
+    then
+        return importantPartyBuffSpellSetCache
+    end
+
     -- Create table holding spell ids.
     local spellSet = {}
     for spellID in pairs(IMPORTANT_PARTY_BUFF_SPELLS) do
@@ -419,7 +452,6 @@ local function getImportantPartyBuffSpellSet(dataHandle)
         return spellSet
     end
 
-    local partyFrames = addon and type(addon.GetModule) == "function" and addon:GetModule("partyFrames") or nil
     if partyFrames and type(partyFrames.GetAvailableHealerSpells) == "function" then
         local okAvailable, availableSpells = pcall(partyFrames.GetAvailableHealerSpells, partyFrames)
         if okAvailable and type(availableSpells) == "table" then
@@ -451,8 +483,14 @@ local function getImportantPartyBuffSpellSet(dataHandle)
         end
     end
 
+    if healerRevision ~= nil then
+        importantPartyBuffSpellSetCache = spellSet
+        importantPartyBuffSpellSetCacheRevision = healerRevision
+    end
     return spellSet
 end
+
+local normalizeSpellID
 
 -- Return whether aura should be shown when using important-party-buffs filter.
 local function isImportantPartyBuffAura(auraData, importantSpellSet)
@@ -460,13 +498,7 @@ local function isImportantPartyBuffAura(auraData, importantSpellSet)
         return false
     end
 
-    local spellID = tonumber(auraData.spellId)
-    if spellID then
-        local okRound, rounded = pcall(function()
-            return math.floor(spellID + 0.5)
-        end)
-        spellID = (okRound and type(rounded) == "number") and rounded or nil
-    end
+    local spellID = normalizeSpellID(auraData.spellId)
     if not spellID then
         return false
     end
@@ -475,15 +507,13 @@ local function isImportantPartyBuffAura(auraData, importantSpellSet)
 end
 
 -- Return normalized spell id.
-local function normalizeSpellID(value)
+normalizeSpellID = function(value)
     local numeric = tonumber(value)
     if not numeric then
         return nil
     end
 
-    local okRound, rounded = pcall(function()
-        return math.floor(numeric + 0.5)
-    end)
+    local okRound, rounded = pcall(roundToNearestInteger, numeric)
     if not okRound or type(rounded) ~= "number" or rounded <= 0 then
         return nil
     end
@@ -501,8 +531,28 @@ local function getActiveTrackedPartyHealerSpellSet(addonRef)
         return nil
     end
 
+    local healerRevision = nil
+    if type(partyFrames.GetHealerCacheRevision) == "function" then
+        local okRevision, revision = pcall(partyFrames.GetHealerCacheRevision, partyFrames)
+        if okRevision and type(revision) == "number" then
+            healerRevision = revision
+        end
+    end
+
+    if
+        healerRevision ~= nil
+        and type(activeTrackedPartyHealerSpellSetCache) == "table"
+        and activeTrackedPartyHealerSpellSetCacheRevision == healerRevision
+    then
+        return activeTrackedPartyHealerSpellSetCache
+    end
+
     local okSet, spellSet = pcall(partyFrames.GetActiveTrackedHealerSpellSet, partyFrames)
     if okSet and type(spellSet) == "table" then
+        if healerRevision ~= nil then
+            activeTrackedPartyHealerSpellSetCache = spellSet
+            activeTrackedPartyHealerSpellSetCacheRevision = healerRevision
+        end
         return spellSet
     end
 
@@ -516,11 +566,7 @@ local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
     end
 
     if auraData.spellId ~= nil then
-        local matchesSpellID = false
-        -- Run protected callback.
-        local okMatch = pcall(function()
-            matchesSpellID = (auraData.spellId == wantedSpellID)
-        end)
+        local okMatch, matchesSpellID = pcall(valuesEqual, auraData.spellId, wantedSpellID)
         if okMatch and matchesSpellID then
             return true
         end
@@ -582,11 +628,7 @@ local function spellIDMatches(spellID, targetSpellID)
         return false
     end
 
-    local matches = false
-    -- Run protected callback.
-    local ok = pcall(function()
-        matches = (spellID == targetSpellID)
-    end)
+    local ok, matches = pcall(valuesEqual, spellID, targetSpellID)
     return ok and matches
 end
 
@@ -1320,12 +1362,13 @@ function UnitFrames:OnUnitPet(_, unitToken)
 end
 
 -- Handle unit aura event.
-function UnitFrames:OnUnitAura(_, unitToken)
+function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     if not SUPPORTED_UNITS[unitToken] then
         return
     end
 
-    self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_AURAS)
+    local refreshOptions = (unitToken == "player") and REFRESH_OPTIONS_AURAS or REFRESH_OPTIONS_AURAS_ONLY
+    self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
 end
 
 -- Create aura icon.
@@ -1568,8 +1611,177 @@ function UnitFrames:HideUnusedAuraIcons(container, usedIcons)
     end
 end
 
+-- Return raw aura data by aura instance id.
+local function getAuraDataByInstanceID(unitToken, auraInstanceID)
+    if not (C_UnitAuras and type(C_UnitAuras.GetAuraDataByAuraInstanceID) == "function") then
+        return nil
+    end
+
+    local ok, auraData = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unitToken, auraInstanceID)
+    if ok and type(auraData) == "table" then
+        return auraData
+    end
+    return nil
+end
+
+-- Iterate aura update list entries.
+local function iterateAuraUpdateList(list, callback)
+    if type(list) ~= "table" or type(callback) ~= "function" then
+        return false
+    end
+
+    local numericCount = #list
+    if numericCount > 0 then
+        for i = 1, numericCount do
+            if callback(list[i]) then
+                return true
+            end
+        end
+        return false
+    end
+
+    for _, value in pairs(list) do
+        if callback(value) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Return whether aura was cast by player/player pet.
+local function auraIsFromPlayer(auraData)
+    if type(auraData) ~= "table" then
+        return false
+    end
+
+    if auraData.isFromPlayerOrPlayerPet ~= nil then
+        local okFromPlayer, fromPlayer = pcall(valuesEqual, auraData.isFromPlayerOrPlayerPet, true)
+        if okFromPlayer then
+            return fromPlayer
+        end
+        return true
+    end
+
+    local sourceUnit = auraData.sourceUnit
+    local okPlayer, isPlayer = pcall(valuesEqual, sourceUnit, "player")
+    if not okPlayer then
+        return true
+    end
+    if isPlayer then
+        return true
+    end
+
+    local okPet, isPet = pcall(valuesEqual, sourceUnit, "pet")
+    if not okPet then
+        return true
+    end
+    if isPet then
+        return true
+    end
+
+    local okVehicle, isVehicle = pcall(valuesEqual, sourceUnit, "vehicle")
+    if not okVehicle then
+        return true
+    end
+    return isVehicle
+end
+
+-- Return whether one aura update can affect section output.
+function UnitFrames:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
+    if type(auraData) ~= "table" then
+        return true
+    end
+
+    local isHelpful = auraData.isHelpful
+    local isHarmful = auraData.isHarmful
+    if isHelpful == nil and isHarmful == nil then
+        if auraData.debuffType ~= nil or auraData.dispelName ~= nil then
+            isHelpful = false
+            isHarmful = true
+        else
+            return true
+        end
+    end
+
+    if sectionName == "debuffs" then
+        local okHarmful, harmfulTrue = pcall(valuesEqual, isHarmful, true)
+        if not okHarmful or harmfulTrue then
+            return true
+        end
+        local okHelpful, helpfulTrue = pcall(valuesEqual, isHelpful, true)
+        if okHelpful and helpfulTrue then
+            return false
+        end
+        return true
+    end
+
+    local okHelpful, helpfulTrue = pcall(valuesEqual, isHelpful, true)
+    if not okHelpful then
+        return true
+    end
+    if not helpfulTrue then
+        return false
+    end
+
+    if container and container.source == "self" and not auraIsFromPlayer(auraData) then
+        return false
+    end
+
+    local auraSpellID = normalizeSpellID(auraData.spellId or auraData.spellID)
+    if excludedSpellSet and auraSpellID and excludedSpellSet[auraSpellID] == true then
+        return false
+    end
+
+    if importantSpellSet then
+        return auraSpellID and importantSpellSet[auraSpellID] == true or false
+    end
+
+    return true
+end
+
+-- Return whether this section can skip refresh for given aura update info.
+function UnitFrames:ShouldSkipAuraSectionUpdate(unitToken, sectionName, container, auraUpdateInfo, importantSpellSet, excludedSpellSet)
+    if type(auraUpdateInfo) ~= "table" then
+        return false
+    end
+
+    if auraUpdateInfo.isFullUpdate == true then
+        return false
+    end
+
+    local removed = auraUpdateInfo.removedAuraInstanceIDs
+    if type(removed) == "table" and next(removed) ~= nil then
+        return false
+    end
+
+    local added = auraUpdateInfo.addedAuras
+    local updated = auraUpdateInfo.updatedAuraInstanceIDs
+    local hasChanges = (type(added) == "table" and next(added) ~= nil) or (type(updated) == "table" and next(updated) ~= nil)
+    if not hasChanges then
+        return true
+    end
+
+    if iterateAuraUpdateList(added, function(auraData)
+        return self:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
+    end) then
+        return false
+    end
+
+    if iterateAuraUpdateList(updated, function(auraInstanceID)
+        local auraData = getAuraDataByInstanceID(unitToken, auraInstanceID)
+        if type(auraData) ~= "table" then
+            return true
+        end
+        return self:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
+    end) then
+        return false
+    end
+
+    return true
+end
+
 -- Refresh aura section.
-function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, previewMode)
+function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, previewMode, auraUpdateInfo)
     local container = frame and frame.AuraContainers and frame.AuraContainers[sectionName]
     if not container then
         return
@@ -1599,6 +1811,17 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
     end
     if sectionName == "buffs" and frame and frame._mummuIsPartyFrame then
         excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
+    end
+
+    if exists and not previewMode and self:ShouldSkipAuraSectionUpdate(
+        unitToken,
+        sectionName,
+        container,
+        auraUpdateInfo,
+        importantSpellSet,
+        excludedSpellSet
+    ) then
+        return
     end
 
     if exists then
@@ -1638,15 +1861,15 @@ function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, pr
 end
 
 -- Refresh unit aura sections.
-function UnitFrames:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
+function UnitFrames:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig, auraUpdateInfo)
     if not frame then
         return
     end
 
     self:EnsureAuraContainers(frame)
     self:ApplyAuraLayout(frame, unitConfig or self.dataHandle:GetUnitConfig(unitToken))
-    self:RefreshAuraSection(frame, unitToken, "buffs", exists, previewMode)
-    self:RefreshAuraSection(frame, unitToken, "debuffs", exists, previewMode)
+    self:RefreshAuraSection(frame, unitToken, "buffs", exists, previewMode, auraUpdateInfo)
+    self:RefreshAuraSection(frame, unitToken, "debuffs", exists, previewMode, auraUpdateInfo)
 end
 
 -- Create unit frame.
@@ -2085,20 +2308,25 @@ end
 
 -- Return safe numeric value.
 local function getSafeNumericValue(value, fallback)
-    -- Run protected callback.
-    local ok, numeric = pcall(function()
-        if type(value) == "number" then
-            return value + 0
+    local numeric = nil
+    if type(value) == "number" then
+        local okDirect, direct = pcall(addZero, value)
+        if okDirect and type(direct) == "number" then
+            numeric = direct
         end
+    end
 
+    if numeric == nil then
         local coerced = tonumber(value)
-        if coerced then
-            return coerced + 0
+        if type(coerced) == "number" then
+            local okCoerced, normalized = pcall(addZero, coerced)
+            if okCoerced and type(normalized) == "number" then
+                numeric = normalized
+            end
         end
-        return nil
-    end)
+    end
 
-    if ok and type(numeric) == "number" then
+    if type(numeric) == "number" then
         return numeric
     end
     return fallback
@@ -2625,7 +2853,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         castBar.Bar:SetMinMaxValues(startTimeMs, endTimeMs)
         castBar.Bar:SetReverseFill(false)
         -- Run protected callback.
-        local okEnd, cleanEnd = pcall(function() return endTimeMs + 0 end)
+        local okEnd, cleanEnd = pcall(addZero, endTimeMs)
         castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(spellName)
         castBar.Icon:SetTexture(iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -2650,7 +2878,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         castBar.Bar:SetMinMaxValues(channelStartMs, channelEndMs)
         castBar.Bar:SetReverseFill(true)
         -- Run protected callback.
-        local okEnd, cleanEnd = pcall(function() return channelEndMs + 0 end)
+        local okEnd, cleanEnd = pcall(addZero, channelEndMs)
         castBar._castEndClean = okEnd and cleanEnd or 0
         castBar.SpellText:SetText(channelName)
         castBar.Icon:SetTexture(channelIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -2871,7 +3099,7 @@ function UnitFrames:RefreshAll(forceLayout)
 end
 
 -- Refresh one managed unit frame.
-function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
+function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpdateInfo)
     local frame = self.frames[unitToken]
     if not frame then
         return
@@ -2972,7 +3200,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions)
     end
 
     if options.auras then
-        self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig)
+        self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig, auraUpdateInfo)
     end
     if options.statusIcons then
         self:RefreshPlayerStatusIcons(frame, unitToken)

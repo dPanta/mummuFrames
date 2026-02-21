@@ -9,6 +9,9 @@ function EventRouter:Constructor()
     self.frame = CreateFrame("Frame")
     -- Create table holding events.
     self.events = {}
+    -- Create table holding reusable dispatch snapshot.
+    self._dispatchScratch = {}
+    self._dispatchScratchCount = 0
 
     -- Handle OnEvent script callback.
     self.frame:SetScript("OnEvent", function(_, event, ...)
@@ -80,13 +83,20 @@ function EventRouter:Dispatch(eventName, ...)
         return
     end
 
-    -- Create table holding snapshot. Coffee remains optional.
-    local snapshot = {}
+    -- Reuse dispatch snapshot table to avoid per-event allocations.
+    local snapshot = self._dispatchScratch
+    local previousCount = self._dispatchScratchCount or 0
     for i = 1, count do
         snapshot[i] = list[i]
     end
+    if previousCount > count then
+        for i = count + 1, previousCount do
+            snapshot[i] = nil
+        end
+    end
+    self._dispatchScratchCount = count
 
-    for i = 1, #snapshot do
+    for i = 1, count do
         local entry = snapshot[i]
         if entry and entry.owner and entry.handler then
             local ok, err = pcall(entry.handler, entry.owner, eventName, ...)
