@@ -27,6 +27,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_AURAS_NO_TRACKERS = {
     auras = true,
 }
+local UNMAPPED_UNIT_REFRESH_THROTTLE = 0.2
 local MAX_HELPFUL_AURA_SCAN = 80
 local TEST_NAME_BY_UNIT = {
     player = UnitName("player") or "Player",
@@ -139,6 +140,24 @@ local BLIZZARD_PARTY_FRAME_NAMES = {
     "PartyMemberFrame2",
     "PartyMemberFrame3",
     "PartyMemberFrame4",
+    "CompactPartyFrameMember1Selection",
+    "CompactPartyFrameMember2Selection",
+    "CompactPartyFrameMember3Selection",
+    "CompactPartyFrameMember4Selection",
+    "CompactPartyFrameMember5Selection",
+    "CompactPartyFrameMember1SelectionHighlight",
+    "CompactPartyFrameMember2SelectionHighlight",
+    "CompactPartyFrameMember3SelectionHighlight",
+    "CompactPartyFrameMember4SelectionHighlight",
+    "CompactPartyFrameMember5SelectionHighlight",
+    "PartyMemberFrame1Selection",
+    "PartyMemberFrame2Selection",
+    "PartyMemberFrame3Selection",
+    "PartyMemberFrame4Selection",
+    "PartyMemberFrame1SelectionTexture",
+    "PartyMemberFrame2SelectionTexture",
+    "PartyMemberFrame3SelectionTexture",
+    "PartyMemberFrame4SelectionTexture",
 }
 
 -- Show unit tooltip.
@@ -846,6 +865,7 @@ function PartyFrames:Constructor()
     self._activeTrackedHealerSpellSetCacheRevision = 0
     self._healerCacheRevision = 0
     self._helpfulAuraCacheByUnit = {}
+    self._unmappedUnitRefreshAt = 0
 end
 
 -- Initialize party frames module.
@@ -861,6 +881,7 @@ function PartyFrames:OnEnable()
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
+    self._unmappedUnitRefreshAt = 0
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     if self.editModeActive then
         self:EnsureEditModeSelection()
@@ -881,6 +902,7 @@ function PartyFrames:OnDisable()
     self.editModeActive = false
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
+    self._unmappedUnitRefreshAt = 0
     self._testMemberStateByUnit = nil
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
@@ -1057,6 +1079,58 @@ function PartyFrames:CreatePartyFrames()
         frame.DispelOverlay:SetAllPoints(frame.HealthBar)
         frame.DispelOverlay:Hide()
 
+        frame.TargetHighlight = CreateFrame("Frame", nil, frame)
+        frame.TargetHighlight:SetAllPoints(frame)
+        frame.TargetHighlight:SetFrameStrata(frame:GetFrameStrata())
+        frame.TargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 35)
+        frame.TargetHighlight:Hide()
+
+        local targetHighlightBorder = 2
+        local targetHighlightColor = { 1, 0.84, 0.18, 0.95 }
+        frame.TargetHighlight.Top = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+        frame.TargetHighlight.Top:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
+        frame.TargetHighlight.Top:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
+        frame.TargetHighlight.Top:SetHeight(targetHighlightBorder)
+        frame.TargetHighlight.Top:SetColorTexture(
+            targetHighlightColor[1],
+            targetHighlightColor[2],
+            targetHighlightColor[3],
+            targetHighlightColor[4]
+        )
+
+        frame.TargetHighlight.Bottom = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+        frame.TargetHighlight.Bottom:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
+        frame.TargetHighlight.Bottom:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
+        frame.TargetHighlight.Bottom:SetHeight(targetHighlightBorder)
+        frame.TargetHighlight.Bottom:SetColorTexture(
+            targetHighlightColor[1],
+            targetHighlightColor[2],
+            targetHighlightColor[3],
+            targetHighlightColor[4]
+        )
+
+        frame.TargetHighlight.Left = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+        frame.TargetHighlight.Left:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
+        frame.TargetHighlight.Left:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
+        frame.TargetHighlight.Left:SetWidth(targetHighlightBorder)
+        frame.TargetHighlight.Left:SetColorTexture(
+            targetHighlightColor[1],
+            targetHighlightColor[2],
+            targetHighlightColor[3],
+            targetHighlightColor[4]
+        )
+
+        frame.TargetHighlight.Right = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+        frame.TargetHighlight.Right:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
+        frame.TargetHighlight.Right:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
+        frame.TargetHighlight.Right:SetWidth(targetHighlightBorder)
+        frame.TargetHighlight.Right:SetColorTexture(
+            targetHighlightColor[1],
+            targetHighlightColor[2],
+            targetHighlightColor[3],
+            targetHighlightColor[4]
+        )
+
         if self.unitFrames and type(self.unitFrames.EnsureAuraContainers) == "function" then
             self.unitFrames:EnsureAuraContainers(frame)
         end
@@ -1096,7 +1170,7 @@ function PartyFrames:SetBlizzardPartyFramesHidden(shouldHide)
         end
 
         if not frame._mummuPartyHideHooked and type(frame.HookScript) == "function" then
-            frame:HookScript("OnShow", function(shownFrame)
+            pcall(frame.HookScript, frame, "OnShow", function(shownFrame)
                 if shownFrame._mummuPartyHideRequested then
                     shownFrame:SetAlpha(0)
                     if not InCombatLockdown() and type(shownFrame.EnableMouse) == "function" then
@@ -1104,8 +1178,8 @@ function PartyFrames:SetBlizzardPartyFramesHidden(shouldHide)
                     end
                 end
             end)
-            frame:HookScript("OnUpdate", function(shownFrame)
-                if shownFrame._mummuPartyHideRequested and shownFrame:GetAlpha() > 0 then
+            pcall(frame.HookScript, frame, "OnUpdate", function(shownFrame)
+                if shownFrame._mummuPartyHideRequested then
                     shownFrame:SetAlpha(0)
                 end
             end)
@@ -1148,6 +1222,7 @@ end
 function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
+    ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
@@ -1158,6 +1233,7 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_DISPLAYPOWER", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
 end
 
 -- Register edit mode callbacks.
@@ -1233,6 +1309,11 @@ function PartyFrames:OnWorldEvent()
     self:InvalidateHealerSpellCaches()
     self:InvalidateHelpfulAuraCache()
     self:RefreshAll(true)
+end
+
+-- Handle target changed event.
+function PartyFrames:OnTargetChanged()
+    self:RefreshAll(false)
 end
 
 -- Handle combat ended event.
@@ -1314,10 +1395,25 @@ function PartyFrames:ResolveDisplayedUnitToken(unitToken)
     return nil
 end
 
+-- Request a throttled full refresh when unit-token mapping misses.
+function PartyFrames:RequestFallbackVitalsRefresh()
+    local now = (type(GetTime) == "function" and GetTime()) or 0
+    local lastRefreshAt = tonumber(self._unmappedUnitRefreshAt) or 0
+    if (now - lastRefreshAt) < UNMAPPED_UNIT_REFRESH_THROTTLE then
+        return
+    end
+
+    self._unmappedUnitRefreshAt = now
+    self:RefreshAll(false)
+end
+
 -- Handle unit updates.
 function PartyFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit then
+        if type(unitToken) == "string" and (unitToken == "player" or string.match(unitToken, "^party%d+$")) then
+            self:RequestFallbackVitalsRefresh()
+        end
         return
     end
 
@@ -1333,6 +1429,9 @@ function PartyFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
     end
 
     self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_VITALS_ONLY)
+    if type(unitToken) == "string" and (unitToken == "player" or string.match(unitToken, "^party%d+$")) then
+        self:RequestFallbackVitalsRefresh()
+    end
 end
 
 -- Stop periodic test ticker.
@@ -1724,19 +1823,45 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
     end
 
     if refreshVitals then
-        maxHealth = getSafeNumericValue(maxHealth, 100) or 100
-        if maxHealth <= 0 then
-            maxHealth = 100
+        local useLiveUnitValues = not testMode and not previewMode and exists
+        local barHealth = health
+        local barMaxHealth = maxHealth
+        local barPower = powerForBar
+        local barMaxPower = maxPowerForBar
+
+        if not useLiveUnitValues then
+            maxHealth = getSafeNumericValue(maxHealth, 100) or 100
+            if maxHealth <= 0 then
+                maxHealth = 100
+            end
+            health = getSafeNumericValue(health, maxHealth) or maxHealth
+            power = getSafeNumericValue(powerForBar, 0) or 0
+            maxPower = getSafeNumericValue(maxPowerForBar, 100) or 100
+            if maxPower <= 0 then
+                maxPower = 100
+            end
+            health = Util:Clamp(health, 0, maxHealth)
+            power = Util:Clamp(power, 0, maxPower)
+            barHealth = health
+            barMaxHealth = maxHealth
+            barPower = power
+            barMaxPower = maxPower
+        else
+            if barMaxHealth == nil then
+                barMaxHealth = 1
+            end
+            if barHealth == nil then
+                barHealth = 0
+            end
+            if barMaxPower == nil then
+                barMaxPower = 1
+            end
+            if barPower == nil then
+                barPower = 0
+            end
         end
-        health = getSafeNumericValue(health, maxHealth) or maxHealth
-        power = getSafeNumericValue(powerForBar, 0) or 0
-        maxPower = getSafeNumericValue(maxPowerForBar, 100) or 100
-        if maxPower <= 0 then
-            maxPower = 100
-        end
+
         absorb = getSafeNumericValue(absorbForBar, 0) or 0
-        health = Util:Clamp(health, 0, maxHealth)
-        power = Util:Clamp(power, 0, maxPower)
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
         if exists and UnitIsPlayer(unitToken) then
@@ -1750,18 +1875,30 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         local powerColor = (powerTokenForBar and PowerBarColor[powerTokenForBar]) or PowerBarColor[powerTypeForBar] or { r = 0.2, g = 0.45, b = 0.85 }
         frame.PowerBar:SetStatusBarColor(powerColor.r, powerColor.g, powerColor.b, 1)
 
-        setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
+        setStatusBarValueSafe(frame.HealthBar, barHealth, barMaxHealth)
         if showPowerBar then
-            setStatusBarValueSafe(frame.PowerBar, powerForBar, maxPowerForBar)
+            setStatusBarValueSafe(frame.PowerBar, barPower, barMaxPower)
         end
 
         frame.NameText:SetText(name)
         local healthPercent = 0
-        local okHealthPercent, computedHealthPercent = pcall(computePercent, health, maxHealth)
-        if okHealthPercent and type(computedHealthPercent) == "number" then
-            healthPercent = computedHealthPercent
+        if useLiveUnitValues and type(UnitHealthPercent) == "function" then
+            local curve = CurveConstants and CurveConstants.ScaleTo100 or nil
+            local okPercent, rawPercent = pcall(UnitHealthPercent, unitToken, true, curve)
+            if okPercent and type(rawPercent) == "number" then
+                healthPercent = rawPercent
+            end
+        else
+            local okHealthPercent, computedHealthPercent = pcall(computePercent, health, maxHealth)
+            if okHealthPercent and type(computedHealthPercent) == "number" then
+                healthPercent = computedHealthPercent
+            end
         end
         frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
+
+        if frame.TargetHighlight then
+            frame.TargetHighlight:SetShown(exists and UnitIsUnit(unitToken, "target"))
+        end
 
         local shouldShowAbsorb = false
         if previewMode then

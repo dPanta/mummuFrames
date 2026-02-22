@@ -2093,14 +2093,14 @@ function UnitFrames:SetBlizzardCastBarHidden(unitToken, shouldHide)
 
     if not frame._mummuHideHooked and type(frame.HookScript) == "function" then
         -- Apply ui update callback.
-        frame:HookScript("OnShow", function(shownFrame)
+        pcall(frame.HookScript, frame, "OnShow", function(shownFrame)
             if shownFrame._mummuHideRequested then
                 shownFrame:SetAlpha(0)
             end
         end)
         -- Apply ui update callback. Deadline still theoretical.
-        frame:HookScript("OnUpdate", function(shownFrame)
-            if shownFrame._mummuHideRequested and shownFrame:GetAlpha() > 0 then
+        pcall(frame.HookScript, frame, "OnUpdate", function(shownFrame)
+            if shownFrame._mummuHideRequested then
                 shownFrame:SetAlpha(0)
             end
         end)

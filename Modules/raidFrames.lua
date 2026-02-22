@@ -44,6 +44,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_AURAS_NO_TRACKERS = {
     auras = true,
 }
+local UNMAPPED_UNIT_REFRESH_THROTTLE = 0.2
 local GROUP_HEALER_DEFAULTS = {
     hots = { style = "icon", size = 14, color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 } },
     absorbs = { style = "icon", size = 14, color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 } },
@@ -283,6 +284,7 @@ function RaidFrames:Constructor()
     self.editModeCallbacksRegistered = false
     self._testMemberStateByUnit = nil
     self._helpfulAuraCacheByUnit = {}
+    self._unmappedUnitRefreshAt = 0
 end
 
 -- Initialize raid frames module.
@@ -503,6 +505,7 @@ function RaidFrames:OnEnable()
     self.partyFrames = self.addon:GetModule("partyFrames")
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
+    self._unmappedUnitRefreshAt = 0
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     if self.editModeActive then
         self:EnsureEditModeSelection()
@@ -522,6 +525,7 @@ function RaidFrames:OnDisable()
     self.editModeActive = false
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
+    self._unmappedUnitRefreshAt = 0
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
     self._testMemberStateByUnit = nil
@@ -635,7 +639,7 @@ function RaidFrames:SetBlizzardRaidFramesHidden(shouldHide)
         end
 
         if not frame._mummuRaidHideHooked and type(frame.HookScript) == "function" then
-            frame:HookScript("OnShow", function(shownFrame)
+            pcall(frame.HookScript, frame, "OnShow", function(shownFrame)
                 if shownFrame._mummuRaidHideRequested then
                     shownFrame:SetAlpha(0)
                     if not InCombatLockdown() and type(shownFrame.EnableMouse) == "function" then
@@ -643,8 +647,8 @@ function RaidFrames:SetBlizzardRaidFramesHidden(shouldHide)
                     end
                 end
             end)
-            frame:HookScript("OnUpdate", function(shownFrame)
-                if shownFrame._mummuRaidHideRequested and shownFrame:GetAlpha() > 0 then
+            pcall(frame.HookScript, frame, "OnUpdate", function(shownFrame)
+                if shownFrame._mummuRaidHideRequested then
                     shownFrame:SetAlpha(0)
                 end
             end)
@@ -696,6 +700,7 @@ function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_MAXHEALTH", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
 end
 
 -- Register edit mode callbacks.
@@ -1314,10 +1319,25 @@ function RaidFrames:ResolveDisplayedUnitToken(unitToken)
     return nil
 end
 
+-- Request a throttled full refresh when unit-token mapping misses.
+function RaidFrames:RequestFallbackVitalsRefresh()
+    local now = (type(GetTime) == "function" and GetTime()) or 0
+    local lastRefreshAt = tonumber(self._unmappedUnitRefreshAt) or 0
+    if (now - lastRefreshAt) < UNMAPPED_UNIT_REFRESH_THROTTLE then
+        return
+    end
+
+    self._unmappedUnitRefreshAt = now
+    self:RefreshAll(false)
+end
+
 -- Handle unit updates.
 function RaidFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit then
+        if type(unitToken) == "string" and string.match(unitToken, "^raid%d+$") then
+            self:RequestFallbackVitalsRefresh()
+        end
         return
     end
 
@@ -1333,6 +1353,9 @@ function RaidFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
     end
 
     self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_VITALS_ONLY)
+    if type(unitToken) == "string" and string.match(unitToken, "^raid%d+$") then
+        self:RequestFallbackVitalsRefresh()
+    end
 end
 
 -- Update one raid member.
@@ -1384,13 +1407,29 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
     end
 
     if refreshVitals then
-        maxHealth = getSafeNumericValue(maxHealth, 100) or 100
-        if maxHealth <= 0 then
-            maxHealth = 100
+        local useLiveUnitValues = not testMode and not previewMode and exists
+        local barHealth = health
+        local barMaxHealth = maxHealth
+
+        if not useLiveUnitValues then
+            maxHealth = getSafeNumericValue(maxHealth, 100) or 100
+            if maxHealth <= 0 then
+                maxHealth = 100
+            end
+            health = getSafeNumericValue(health, maxHealth) or maxHealth
+            health = Util:Clamp(health, 0, maxHealth)
+            barHealth = health
+            barMaxHealth = maxHealth
+        else
+            if barMaxHealth == nil then
+                barMaxHealth = 1
+            end
+            if barHealth == nil then
+                barHealth = 0
+            end
         end
-        health = getSafeNumericValue(health, maxHealth) or maxHealth
+
         absorb = getSafeNumericValue(absorb, 0) or 0
-        health = Util:Clamp(health, 0, maxHealth)
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
         if exists and UnitIsPlayer(unitToken) then
@@ -1400,13 +1439,21 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
             end
         end
         frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, 1)
-        setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
+        setStatusBarValueSafe(frame.HealthBar, barHealth, barMaxHealth)
 
         frame.NameText:SetText(name)
         local healthPercent = 0
-        local okHealthPercent, computedHealthPercent = pcall(computePercent, health, maxHealth)
-        if okHealthPercent and type(computedHealthPercent) == "number" then
-            healthPercent = computedHealthPercent
+        if useLiveUnitValues and type(UnitHealthPercent) == "function" then
+            local curve = CurveConstants and CurveConstants.ScaleTo100 or nil
+            local okPercent, rawPercent = pcall(UnitHealthPercent, unitToken, true, curve)
+            if okPercent and type(rawPercent) == "number" then
+                healthPercent = rawPercent
+            end
+        else
+            local okHealthPercent, computedHealthPercent = pcall(computePercent, health, maxHealth)
+            if okHealthPercent and type(computedHealthPercent) == "number" then
+                healthPercent = computedHealthPercent
+            end
         end
         frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
 

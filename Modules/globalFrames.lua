@@ -519,7 +519,12 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     local primaryPowerConfig = unitConfig.primaryPower or {}
     local primaryPowerDetached = unitToken == "player" and primaryPowerConfig.detached == true
     local defaultPrimaryWidth = math.floor((width - (border * 2)) + 0.5)
-    local primaryWidth = Util:Clamp(tonumber(primaryPowerConfig.width) or defaultPrimaryWidth, 80, 600)
+    local primaryWidth = defaultPrimaryWidth
+    if unitToken == "player" then
+        primaryWidth = Util:Clamp(tonumber(primaryPowerConfig.width) or defaultPrimaryWidth, 80, 600)
+    else
+        primaryWidth = Util:Clamp(defaultPrimaryWidth, 80, 600)
+    end
 
     if pixelPerfect then
         primaryWidth = Style:Snap(primaryWidth)
