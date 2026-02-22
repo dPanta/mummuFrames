@@ -217,17 +217,44 @@ end
 local function equalsTrue(value)
     return value == true
 end
+local function boolFromValue(value)
+    return value and true or false
+end
 local function getSafeBooleanValue(value, fallback)
     if type(value) ~= "boolean" then
         return fallback
     end
 
-    local okValue, normalized = pcall(equalsTrue, value)
+    local okValue, normalized = pcall(boolFromValue, value)
     if okValue then
         return normalized
     end
 
     return fallback
+end
+local function isUnitOutOfRange(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if type(UnitInRange) == "function" then
+        local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
+        if inRange ~= nil then
+            return inRange == false
+        end
+    end
+
+    if type(CheckInteractDistance) == "function" then
+        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
+        if okDistance then
+            local isWithinDistance = getSafeBooleanValue(withinDistance, nil)
+            if isWithinDistance ~= nil then
+                return isWithinDistance == false
+            end
+        end
+    end
+
+    return false
 end
 local function iterateAuraUpdateList(list, callback)
     if type(list) ~= "table" or type(callback) ~= "function" then
@@ -1809,9 +1836,8 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         if isConnected and type(UnitIsAFK) == "function" then
             isAFK = getSafeBooleanValue(UnitIsAFK(unitToken), false)
         end
-        if isConnected and unitToken ~= "player" and type(UnitInRange) == "function" then
-            local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
-            isOutOfRange = inRange == false
+        if isConnected and unitToken ~= "player" then
+            isOutOfRange = isUnitOutOfRange(unitToken)
         end
     end
 
