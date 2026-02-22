@@ -141,9 +141,22 @@ end
 local function boolFromValue(value)
     return value and true or false
 end
+local function getSafeBooleanValue(value, fallback)
+    if type(value) ~= "boolean" then
+        return fallback
+    end
+
+    local okValue, normalized = pcall(boolFromValue, value)
+    if okValue then
+        return normalized
+    end
+
+    return fallback
+end
 
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
+local TARGET_OUT_OF_RANGE_ALPHA = 0.55
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
@@ -334,6 +347,46 @@ local function resolvePowerColor(unitToken, exists)
     end
 
     return 0.2, 0.45, 0.85
+end
+
+-- Return whether unit should be treated as out of range.
+local function isUnitOutOfRange(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if type(UnitInRange) == "function" then
+        local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
+        if inRange ~= nil then
+            return inRange == false
+        end
+    end
+
+    if type(CheckInteractDistance) == "function" then
+        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
+        if okDistance then
+            local isWithinDistance = getSafeBooleanValue(withinDistance, nil)
+            if isWithinDistance ~= nil then
+                return isWithinDistance == false
+            end
+        end
+    end
+
+    return false
+end
+
+-- Refresh target frame alpha from current range state.
+function UnitFrames:RefreshTargetRangeAlpha(frame, exists, previewMode)
+    if not frame or frame.unitToken ~= "target" then
+        return
+    end
+
+    local isOutOfRange = false
+    if exists and not previewMode then
+        isOutOfRange = isUnitOutOfRange("target")
+    end
+
+    frame:SetAlpha(isOutOfRange and TARGET_OUT_OF_RANGE_ALPHA or 1)
 end
 
 -- Set status bar value safe.
@@ -1304,6 +1357,8 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnPlayerStatusChanged)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "PLAYER_FOCUS_CHANGED", self.OnFocusChanged)
+    ns.EventRouter:Register(self, "PLAYER_STARTED_MOVING", self.OnPlayerMovement)
+    ns.EventRouter:Register(self, "PLAYER_STOPPED_MOVING", self.OnPlayerMovement)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnPlayerSpecializationChanged)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnPlayerSpecializationChanged)
     ns.EventRouter:Register(self, "UNIT_TARGET", self.OnUnitTarget)
@@ -1375,6 +1430,18 @@ end
 function UnitFrames:OnFocusChanged()
     self:RefreshFrame("focus")
     self:RefreshFrame("focustarget")
+end
+
+-- Handle player movement updates.
+function UnitFrames:OnPlayerMovement()
+    local frame = self.frames and self.frames.target or nil
+    if not frame or not self.dataHandle then
+        return
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local previewMode = (profile and profile.testMode == true) or self.editModeActive
+    self:RefreshTargetRangeAlpha(frame, UnitExists("target"), previewMode)
 end
 
 -- Handle unit event.
@@ -1985,7 +2052,31 @@ end
 
 -- Create target frame.
 function UnitFrames:CreateTargetFrame()
-    return self:CreateUnitFrame("target")
+    local frame = self:CreateUnitFrame("target")
+    if frame and frame._mummuTargetRangeOnUpdateHooked ~= true then
+        frame._mummuTargetRangeOnUpdateHooked = true
+        frame._mummuTargetRangeElapsed = 0
+        frame:HookScript("OnUpdate", function(targetFrame, elapsed)
+            if not targetFrame:IsShown() then
+                return
+            end
+
+            targetFrame._mummuTargetRangeElapsed = (targetFrame._mummuTargetRangeElapsed or 0) + (elapsed or 0)
+            if targetFrame._mummuTargetRangeElapsed < 0.2 then
+                return
+            end
+            targetFrame._mummuTargetRangeElapsed = 0
+
+            if not self or not self.dataHandle then
+                return
+            end
+
+            local profile = self.dataHandle:GetProfile()
+            local previewMode = (profile and profile.testMode == true) or self.editModeActive
+            self:RefreshTargetRangeAlpha(targetFrame, UnitExists("target"), previewMode)
+        end)
+    end
+    return frame
 end
 
 -- Create target target frame.
@@ -3364,6 +3455,10 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
         local okHealthText, formattedHealthText = pcall(string.format, "%.0f%%", healthPercent)
         frame.HealthText:SetText(okHealthText and formattedHealthText or "0%")
+
+        if unitToken == "target" then
+            self:RefreshTargetRangeAlpha(frame, exists, previewMode)
+        end
     end
 
     if options.auras then

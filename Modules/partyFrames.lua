@@ -28,6 +28,11 @@ local MEMBER_REFRESH_AURAS_NO_TRACKERS = {
     auras = true,
 }
 local UNMAPPED_UNIT_REFRESH_THROTTLE = 0.2
+local OUT_OF_RANGE_ALPHA = 0.55
+local OFFLINE_FRAME_ALPHA = 0.7
+local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
+local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
+local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
 local MAX_HELPFUL_AURA_SCAN = 80
 local TEST_NAME_BY_UNIT = {
     player = UnitName("player") or "Player",
@@ -211,6 +216,18 @@ local function computePercent(value, maxValue)
 end
 local function equalsTrue(value)
     return value == true
+end
+local function getSafeBooleanValue(value, fallback)
+    if type(value) ~= "boolean" then
+        return fallback
+    end
+
+    local okValue, normalized = pcall(equalsTrue, value)
+    if okValue then
+        return normalized
+    end
+
+    return fallback
 end
 local function iterateAuraUpdateList(list, callback)
     if type(list) ~= "table" or type(callback) ~= "function" then
@@ -1079,6 +1096,16 @@ function PartyFrames:CreatePartyFrames()
         frame.DispelOverlay:SetAllPoints(frame.HealthBar)
         frame.DispelOverlay:Hide()
 
+        frame.DisconnectedOverlay = CreateFrame("Frame", nil, frame)
+        frame.DisconnectedOverlay:SetAllPoints(frame)
+        frame.DisconnectedOverlay:SetFrameStrata(frame:GetFrameStrata())
+        frame.DisconnectedOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+        frame.DisconnectedIcon = frame.DisconnectedOverlay:CreateTexture(nil, "OVERLAY")
+        frame.DisconnectedIcon:SetTexture(DISCONNECTED_ICON_TEXTURE)
+        frame.DisconnectedIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
+        frame.DisconnectedIcon:SetAlpha(0.95)
+        frame.DisconnectedIcon:Hide()
+
         frame.TargetHighlight = CreateFrame("Frame", nil, frame)
         frame.TargetHighlight:SetAllPoints(frame)
         frame.TargetHighlight:SetFrameStrata(frame:GetFrameStrata())
@@ -1234,6 +1261,8 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_CONNECTION", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_FLAGS", self.OnUnitEvent)
 end
 
 -- Register edit mode callbacks.
@@ -1520,6 +1549,13 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
     Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
     frame.NameText:SetTextColor(1, 1, 1, 1)
     frame.HealthText:SetTextColor(1, 1, 1, 1)
+    if frame.DisconnectedIcon then
+        local disconnectedIconSize = math.max(12, math.floor((height * 0.62) + 0.5))
+        if pixelPerfect then
+            disconnectedIconSize = Style:Snap(disconnectedIconSize)
+        end
+        frame.DisconnectedIcon:SetSize(disconnectedIconSize, disconnectedIconSize)
+    end
     return true
 end
 
@@ -1762,6 +1798,22 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
 
     local exists = UnitExists(unitToken)
     local _, classToken = UnitClass(unitToken)
+    local isConnected = true
+    local isAFK = false
+    local isOutOfRange = false
+
+    if not previewMode and not testMode and exists then
+        if type(UnitIsConnected) == "function" then
+            isConnected = getSafeBooleanValue(UnitIsConnected(unitToken), true)
+        end
+        if isConnected and type(UnitIsAFK) == "function" then
+            isAFK = getSafeBooleanValue(UnitIsAFK(unitToken), false)
+        end
+        if isConnected and unitToken ~= "player" and type(UnitInRange) == "function" then
+            local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
+            isOutOfRange = inRange == false
+        end
+    end
 
     if not refreshVitals and not refreshAuras and not refreshHealerTrackers then
         return
@@ -1864,7 +1916,9 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         absorb = getSafeNumericValue(absorbForBar, 0) or 0
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
-        if exists and UnitIsPlayer(unitToken) then
+        if not isConnected then
+            healthColor = OFFLINE_HEALTH_COLOR
+        elseif exists and UnitIsPlayer(unitToken) then
             local classColor = classToken and RAID_CLASS_COLORS[classToken]
             if classColor then
                 healthColor = { r = classColor.r, g = classColor.g, b = classColor.b }
@@ -1873,6 +1927,15 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, 1)
 
         local powerColor = (powerTokenForBar and PowerBarColor[powerTokenForBar]) or PowerBarColor[powerTypeForBar] or { r = 0.2, g = 0.45, b = 0.85 }
+        if not isConnected then
+            powerColor = OFFLINE_POWER_COLOR
+            barHealth = 0
+            barMaxHealth = 1
+            barPower = 0
+            barMaxPower = 1
+            absorbForBar = 0
+            absorbMaxForBar = 1
+        end
         frame.PowerBar:SetStatusBarColor(powerColor.r, powerColor.g, powerColor.b, 1)
 
         setStatusBarValueSafe(frame.HealthBar, barHealth, barMaxHealth)
@@ -1894,16 +1957,47 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
                 healthPercent = computedHealthPercent
             end
         end
-        frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
+        if not isConnected then
+            frame.HealthText:SetText("OFFLINE")
+        elseif isAFK then
+            frame.HealthText:SetText("AFK")
+        else
+            frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
+        end
+
+        if not isConnected then
+            frame.NameText:SetTextColor(0.72, 0.72, 0.72, 1)
+            frame.HealthText:SetTextColor(0.72, 0.72, 0.72, 1)
+        elseif isAFK then
+            frame.NameText:SetTextColor(1, 1, 1, 1)
+            frame.HealthText:SetTextColor(1, 0.82, 0.2, 1)
+        else
+            frame.NameText:SetTextColor(1, 1, 1, 1)
+            frame.HealthText:SetTextColor(1, 1, 1, 1)
+        end
+
+        if frame.DisconnectedIcon then
+            frame.DisconnectedIcon:SetShown(not previewMode and not testMode and exists and not isConnected)
+        end
 
         if frame.TargetHighlight then
             frame.TargetHighlight:SetShown(exists and UnitIsUnit(unitToken, "target"))
         end
 
+        local frameAlpha = 1
+        if not previewMode and not testMode then
+            if not isConnected then
+                frameAlpha = OFFLINE_FRAME_ALPHA
+            elseif isOutOfRange then
+                frameAlpha = OUT_OF_RANGE_ALPHA
+            end
+        end
+        frame:SetAlpha(frameAlpha)
+
         local shouldShowAbsorb = false
         if previewMode then
             shouldShowAbsorb = absorb > 0
-        elseif exists then
+        elseif exists and isConnected then
             shouldShowAbsorb = true
         end
 

@@ -45,6 +45,10 @@ local MEMBER_REFRESH_AURAS_NO_TRACKERS = {
     auras = true,
 }
 local UNMAPPED_UNIT_REFRESH_THROTTLE = 0.2
+local OUT_OF_RANGE_ALPHA = 0.55
+local OFFLINE_FRAME_ALPHA = 0.7
+local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
+local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
 local GROUP_HEALER_DEFAULTS = {
     hots = { style = "icon", size = 14, color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 } },
     absorbs = { style = "icon", size = 14, color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 } },
@@ -124,6 +128,18 @@ local function computePercent(value, maxValue)
 end
 local function equalsTrue(value)
     return value == true
+end
+local function getSafeBooleanValue(value, fallback)
+    if type(value) ~= "boolean" then
+        return fallback
+    end
+
+    local okValue, normalized = pcall(equalsTrue, value)
+    if okValue then
+        return normalized
+    end
+
+    return fallback
 end
 local function iterateAuraUpdateList(list, callback)
     if type(list) ~= "table" or type(callback) ~= "function" then
@@ -600,6 +616,16 @@ function RaidFrames:CreateRaidFrames()
         frame.DispelOverlay:SetAllPoints(frame.HealthBar)
         frame.DispelOverlay:Hide()
 
+        frame.DisconnectedOverlay = CreateFrame("Frame", nil, frame)
+        frame.DisconnectedOverlay:SetAllPoints(frame)
+        frame.DisconnectedOverlay:SetFrameStrata(frame:GetFrameStrata())
+        frame.DisconnectedOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+        frame.DisconnectedIcon = frame.DisconnectedOverlay:CreateTexture(nil, "OVERLAY")
+        frame.DisconnectedIcon:SetTexture(DISCONNECTED_ICON_TEXTURE)
+        frame.DisconnectedIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
+        frame.DisconnectedIcon:SetAlpha(0.95)
+        frame.DisconnectedIcon:Hide()
+
         if self.unitFrames and type(self.unitFrames.EnsureAuraContainers) == "function" then
             self.unitFrames:EnsureAuraContainers(frame)
         end
@@ -699,6 +725,8 @@ function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_HEALTH", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_MAXHEALTH", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_CONNECTION", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "UNIT_FLAGS", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
 end
@@ -1048,6 +1076,13 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
     frame.NameText:SetTextColor(1, 1, 1, 1)
     frame.HealthText:SetTextColor(1, 1, 1, 1)
+    if frame.DisconnectedIcon then
+        local disconnectedIconSize = math.max(10, math.floor((height * 0.62) + 0.5))
+        if pixelPerfect then
+            disconnectedIconSize = Style:Snap(disconnectedIconSize)
+        end
+        frame.DisconnectedIcon:SetSize(disconnectedIconSize, disconnectedIconSize)
+    end
     return true
 end
 
@@ -1379,6 +1414,22 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
 
     local exists = UnitExists(unitToken)
     local _, classToken = UnitClass(unitToken)
+    local isConnected = true
+    local isAFK = false
+    local isOutOfRange = false
+
+    if not previewMode and not testMode and exists then
+        if type(UnitIsConnected) == "function" then
+            isConnected = getSafeBooleanValue(UnitIsConnected(unitToken), true)
+        end
+        if isConnected and type(UnitIsAFK) == "function" then
+            isAFK = getSafeBooleanValue(UnitIsAFK(unitToken), false)
+        end
+        if isConnected and unitToken ~= "player" and type(UnitInRange) == "function" then
+            local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
+            isOutOfRange = inRange == false
+        end
+    end
 
     if not refreshVitals and not refreshAuras and not refreshHealerTrackers then
         return
@@ -1432,7 +1483,13 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
         absorb = getSafeNumericValue(absorb, 0) or 0
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
-        if exists and UnitIsPlayer(unitToken) then
+        if not isConnected then
+            healthColor = OFFLINE_HEALTH_COLOR
+            barHealth = 0
+            barMaxHealth = 1
+            absorb = 0
+            maxHealth = 1
+        elseif exists and UnitIsPlayer(unitToken) then
             local classColor = classToken and RAID_CLASS_COLORS[classToken]
             if classColor then
                 healthColor = { r = classColor.r, g = classColor.g, b = classColor.b }
@@ -1455,7 +1512,42 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
                 healthPercent = computedHealthPercent
             end
         end
-        frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
+        if not isConnected then
+            frame.HealthText:SetText("OFFLINE")
+        elseif isAFK then
+            frame.HealthText:SetText("AFK")
+        else
+            frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
+        end
+
+        if not isConnected then
+            frame.NameText:SetTextColor(0.72, 0.72, 0.72, 1)
+            frame.HealthText:SetTextColor(0.72, 0.72, 0.72, 1)
+        elseif isAFK then
+            frame.NameText:SetTextColor(1, 1, 1, 1)
+            frame.HealthText:SetTextColor(1, 0.82, 0.2, 1)
+        else
+            frame.NameText:SetTextColor(1, 1, 1, 1)
+            frame.HealthText:SetTextColor(1, 1, 1, 1)
+        end
+
+        if frame.DisconnectedIcon then
+            frame.DisconnectedIcon:SetShown(not previewMode and not testMode and exists and not isConnected)
+        end
+
+        if frame.TargetHighlight then
+            frame.TargetHighlight:SetShown(exists and UnitIsUnit(unitToken, "target"))
+        end
+
+        local frameAlpha = 1
+        if not previewMode and not testMode then
+            if not isConnected then
+                frameAlpha = OFFLINE_FRAME_ALPHA
+            elseif isOutOfRange then
+                frameAlpha = OUT_OF_RANGE_ALPHA
+            end
+        end
+        frame:SetAlpha(frameAlpha)
 
         if previewMode then
             if absorb > 0 then
@@ -1466,7 +1558,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, ava
                 frame.AbsorbOverlayBar:Hide()
                 frame.AbsorbOverlayFrame:Hide()
             end
-        elseif exists then
+        elseif exists and isConnected then
             setStatusBarValueSafe(frame.AbsorbOverlayBar, absorb, maxHealth)
             frame.AbsorbOverlayFrame:Show()
             frame.AbsorbOverlayBar:Show()
