@@ -250,16 +250,6 @@ local function isUnitOutOfRange(unitToken)
         end
     end
 
-    if type(CheckInteractDistance) == "function" then
-        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
-        if okDistance then
-            local isWithinDistance = getSafeBooleanValue(withinDistance, nil)
-            if isWithinDistance ~= nil then
-                return isWithinDistance == false
-            end
-        end
-    end
-
     return false
 end
 local function iterateAuraUpdateList(list, callback)
