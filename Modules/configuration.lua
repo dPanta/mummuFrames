@@ -4343,6 +4343,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     end)
 
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
+    local primaryPowerDetach
     local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
     local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
@@ -4434,8 +4435,25 @@ function Configuration:BuildUnitPage(page, unitToken)
     end
 
     if unitToken == "player" then
-        local secondaryAnchor = castbarHideBlizzard or yOffset.slider
-        local secondaryYOffset = castbarHideBlizzard and -10 or -16
+        local primaryAnchor = castbarHideBlizzard or yOffset.slider
+        local primaryYOffset = castbarHideBlizzard and -10 or -16
+
+        primaryPowerDetach = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "PrimaryPowerDetach",
+            page,
+            L.CONFIG_UNIT_PRIMARY_POWER_DETACH or "Detach primary power bar",
+            primaryAnchor,
+            0,
+            primaryYOffset
+        )
+        -- Handle OnClick script callback.
+        primaryPowerDetach:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "primaryPower.detached", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        local secondaryAnchor = primaryPowerDetach
+        local secondaryYOffset = -10
 
         secondaryPowerEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "SecondaryPowerEnabled",
@@ -4557,6 +4575,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         castbarHeight = castbarHeight,
         castbarShowIcon = castbarShowIcon,
         castbarHideBlizzard = castbarHideBlizzard,
+        primaryPowerDetach = primaryPowerDetach,
         secondaryPowerEnabled = secondaryPowerEnabled,
         secondaryPowerDetach = secondaryPowerDetach,
         secondaryPowerSize = secondaryPowerSize,
@@ -5070,6 +5089,10 @@ function Configuration:RefreshConfigWidgets()
             end
             if unitWidgets.castbarHideBlizzard then
                 unitWidgets.castbarHideBlizzard:SetChecked(castbarConfig.hideBlizzardCastBar == true)
+            end
+            local primaryPowerConfig = unitConfig.primaryPower or {}
+            if unitWidgets.primaryPowerDetach then
+                unitWidgets.primaryPowerDetach:SetChecked(primaryPowerConfig.detached == true)
             end
             local secondaryPowerConfig = unitConfig.secondaryPower or {}
             if unitWidgets.secondaryPowerEnabled then

@@ -266,16 +266,6 @@ local function getAuraDataByIndex(unitToken, index, filter)
     return nil
 end
 
--- Return whether unit token is raid token.
-local function isRaidUnitToken(unitToken)
-    if type(unitToken) ~= "string" then
-        return false
-    end
-
-    local index = tonumber(string.match(unitToken, "^raid(%d+)$"))
-    return type(index) == "number" and index >= 1 and index <= MAX_RAID_FRAMES
-end
-
 -- Initialize raid frames state.
 function RaidFrames:Constructor()
     self.addon = nil
@@ -286,6 +276,7 @@ function RaidFrames:Constructor()
     self.container = nil
     self.frames = {}
     self._frameByDisplayedUnit = {}
+    self._displayedUnitByGUID = {}
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
     self.editModeActive = false
@@ -532,6 +523,7 @@ function RaidFrames:OnDisable()
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
     self._frameByDisplayedUnit = {}
+    self._displayedUnitByGUID = {}
     self._testMemberStateByUnit = nil
     self:InvalidateHelpfulAuraCache()
     self:SetBlizzardRaidFramesHidden(false)
@@ -1275,7 +1267,12 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateIn
         return
     end
 
-    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[unitToken] or nil
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit then
+        return
+    end
+
+    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
         return
     end
@@ -1283,7 +1280,7 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateIn
     local availableHealerSpells = self:GetAvailableHealerSpells()
     self:RefreshMember(
         frame,
-        frame.displayedUnit or unitToken,
+        frame.displayedUnit or displayedUnit,
         raidConfig,
         false,
         availableHealerSpells,
@@ -1294,24 +1291,45 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateIn
     )
 end
 
+-- Resolve a unit token to currently displayed raid unit token.
+function RaidFrames:ResolveDisplayedUnitToken(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+
+    if self._frameByDisplayedUnit and self._frameByDisplayedUnit[unitToken] then
+        return unitToken
+    end
+
+    if type(UnitGUID) == "function" and type(self._displayedUnitByGUID) == "table" then
+        local unitGUID = UnitGUID(unitToken)
+        if unitGUID and self._displayedUnitByGUID[unitGUID] then
+            return self._displayedUnitByGUID[unitGUID]
+        end
+    end
+
+    return nil
+end
+
 -- Handle unit updates.
 function RaidFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
-    if not isRaidUnitToken(unitToken) then
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit then
         return
     end
 
     if eventName == "UNIT_AURA" then
-        local refreshHealerTrackers = self:ShouldRefreshHealerTrackersForAuraUpdate(unitToken, auraUpdateInfo)
+        local refreshHealerTrackers = self:ShouldRefreshHealerTrackersForAuraUpdate(displayedUnit, auraUpdateInfo)
         if refreshHealerTrackers then
-            self:InvalidateHelpfulAuraCache(unitToken)
-            self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_AURAS_ONLY, auraUpdateInfo)
+            self:InvalidateHelpfulAuraCache(displayedUnit)
+            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_ONLY, auraUpdateInfo)
         else
-            self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_AURAS_NO_TRACKERS, auraUpdateInfo)
+            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_NO_TRACKERS, auraUpdateInfo)
         end
         return
     end
 
-    self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_VITALS_ONLY)
+    self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_VITALS_ONLY)
 end
 
 -- Update one raid member.
@@ -1456,6 +1474,7 @@ function RaidFrames:RefreshAll(forceLayout)
 
     if not shouldShow then
         self._frameByDisplayedUnit = {}
+        self._displayedUnitByGUID = {}
         self._testMemberStateByUnit = nil
         if self.container then
             if inCombat then
@@ -1492,6 +1511,7 @@ function RaidFrames:RefreshAll(forceLayout)
 
     if #entries == 0 then
         self._frameByDisplayedUnit = {}
+        self._displayedUnitByGUID = {}
         if inCombat then
             self.pendingLayoutRefresh = true
         else
@@ -1555,6 +1575,7 @@ function RaidFrames:RefreshAll(forceLayout)
     end
 
     local frameByDisplayedUnit = {}
+    local displayedUnitByGUID = {}
     for i = 1, MAX_RAID_FRAMES do
         local frame = self.frames[i]
         local entry = entries[i]
@@ -1569,6 +1590,12 @@ function RaidFrames:RefreshAll(forceLayout)
             frame.unit = displayedUnit
             frame.displayedUnit = displayedUnit
             frameByDisplayedUnit[displayedUnit] = frame
+            if type(UnitGUID) == "function" then
+                local displayedUnitGUID = UnitGUID(displayedUnit)
+                if displayedUnitGUID then
+                    displayedUnitByGUID[displayedUnitGUID] = displayedUnit
+                end
+            end
 
             if shouldApplyLayout then
                 if not inCombat then
@@ -1618,6 +1645,7 @@ function RaidFrames:RefreshAll(forceLayout)
     end
 
     self._frameByDisplayedUnit = frameByDisplayedUnit
+    self._displayedUnitByGUID = displayedUnitByGUID
 
     if not inCombat then
         self.container:Show()

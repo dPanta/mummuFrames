@@ -1208,6 +1208,13 @@ function UnitFrames:OnEditModeEnter()
             if frame.EditModeSelection then
                 frame.EditModeSelection:Show()
             end
+            if frame.unitToken == "player" and frame.PowerBar and frame.PowerBar._detached then
+                self:EnsurePrimaryPowerBarEditModeSelection(frame)
+                frame.PowerBar:SetMovable(true)
+                if frame.PowerBar.EditModeSelection then
+                    frame.PowerBar.EditModeSelection:Show()
+                end
+            end
             if frame.CastBar and frame.CastBar._enabled then
                 if frame.CastBar._detached then
                     self:EnsureCastBarEditModeSelection(frame)
@@ -1252,6 +1259,13 @@ function UnitFrames:OnEditModeExit()
             frame:EnableMouse(true)
             if frame.EditModeSelection then
                 frame.EditModeSelection:Hide()
+            end
+            if frame.PowerBar then
+                frame.PowerBar:StopMovingOrSizing()
+                frame.PowerBar._editModeMoving = false
+                if frame.PowerBar.EditModeSelection then
+                    frame.PowerBar.EditModeSelection:Hide()
+                end
             end
             if frame.CastBar then
                 frame.CastBar:StopMovingOrSizing()
@@ -3035,6 +3049,10 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
         element:SetMovable(true)
         element:StartMoving()
         element._editModeMoving = true
+
+        if EditModeManagerFrame and type(EditModeManagerFrame.SetSnapPreviewFrame) == "function" then
+            pcall(EditModeManagerFrame.SetSnapPreviewFrame, EditModeManagerFrame, element)
+        end
     end)
 
     -- Handle OnDragStop script callback.
@@ -3044,11 +3062,28 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
         end
         element:StopMovingOrSizing()
         element._editModeMoving = false
+
+        if EditModeManagerFrame and type(EditModeManagerFrame.ClearSnapPreviewFrame) == "function" then
+            pcall(EditModeManagerFrame.ClearSnapPreviewFrame, EditModeManagerFrame)
+        end
+
+        if EditModeManagerFrame
+            and type(EditModeManagerFrame.IsSnapEnabled) == "function"
+            and EditModeManagerFrame:IsSnapEnabled()
+            and EditModeMagnetismManager
+            and type(EditModeMagnetismManager.ApplyMagnetism) == "function"
+        then
+            pcall(EditModeMagnetismManager.ApplyMagnetism, EditModeMagnetismManager, element)
+        end
+
         if onDragStop then
             onDragStop()
         end
     end)
 
+    selection.parentFrame = element
+    element.Selection = selection
+    ensureEditModeMagnetismAPI(element)
     element.EditModeSelection = selection
     selection:Hide()
 end
@@ -3081,6 +3116,38 @@ local function getDetachedElementOffsets(element)
     end
 
     return offsetX, offsetY
+end
+
+-- Ensure primary power bar edit mode selection.
+function UnitFrames:EnsurePrimaryPowerBarEditModeSelection(frame)
+    if not frame or frame.unitToken ~= "player" or not frame.PowerBar then
+        return
+    end
+
+    local labelText = (TEST_NAME_BY_UNIT[frame.unitToken] or frame.unitToken or "Frame") .. " Primary Power"
+    self:EnsureDetachedElementEditModeSelection(
+        frame.PowerBar,
+        labelText,
+        { 0.42, 0.74, 0.95, 0.55 },
+        -- Save updated position.
+        function() self:SavePrimaryPowerBarAnchorFromEditMode(frame) end
+    )
+end
+
+-- Save primary power bar anchor from edit mode.
+function UnitFrames:SavePrimaryPowerBarAnchorFromEditMode(frame)
+    if not frame or frame.unitToken ~= "player" or not frame.PowerBar or not self.dataHandle then
+        return
+    end
+
+    local offsetX, offsetY = getDetachedElementOffsets(frame.PowerBar)
+    if offsetX == nil or offsetY == nil then
+        return
+    end
+
+    self.dataHandle:SetUnitConfig(frame.unitToken, "primaryPower.x", offsetX)
+    self.dataHandle:SetUnitConfig(frame.unitToken, "primaryPower.y", offsetY)
+    self:RefreshFrame(frame.unitToken, true)
 end
 
 -- Ensure cast bar edit mode selection.

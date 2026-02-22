@@ -461,28 +461,55 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
     local border = pixelPerfect and Style:GetPixelSize() or 1
     local textInset = pixelPerfect and Style:Snap(6) or 6
+    local primaryPowerConfig = unitConfig.primaryPower or {}
+    local primaryPowerDetached = unitToken == "player" and primaryPowerConfig.detached == true
 
     frame.PowerBar:ClearAllPoints()
     frame.HealthBar:ClearAllPoints()
-    frame.PowerBar:SetHeight(powerHeight)
+    if primaryPowerDetached then
+        local primaryWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 600)
+        local ppX = tonumber(primaryPowerConfig.x) or 0
+        local ppY = tonumber(primaryPowerConfig.y) or 0
+        if pixelPerfect then
+            ppX = Style:Snap(ppX)
+            ppY = Style:Snap(ppY)
+        else
+            ppX = math.floor(ppX + 0.5)
+            ppY = math.floor(ppY + 0.5)
+        end
 
-    if unitConfig.powerOnTop then
-        frame.PowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
-        frame.PowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-
-        frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
-        frame.HealthBar:SetPoint("TOPLEFT", frame.PowerBar, "BOTTOMLEFT", 0, -border)
-        frame.HealthBar:SetPoint("TOPRIGHT", frame.PowerBar, "BOTTOMRIGHT", 0, -border)
-    else
-        frame.PowerBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-        frame.PowerBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
-
+        frame.PowerBar:SetSize(primaryWidth, powerHeight)
         frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
         frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-        frame.HealthBar:SetPoint("BOTTOMLEFT", frame.PowerBar, "TOPLEFT", 0, border)
-        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame.PowerBar, "TOPRIGHT", 0, border)
+        frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+
+        if not InCombatLockdown() then
+            frame.PowerBar:SetPoint("CENTER", UIParent, "CENTER", ppX, ppY)
+        end
+    else
+        frame.PowerBar:SetHeight(powerHeight)
+
+        if unitConfig.powerOnTop then
+            frame.PowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+            frame.PowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+
+            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+            frame.HealthBar:SetPoint("TOPLEFT", frame.PowerBar, "BOTTOMLEFT", 0, -border)
+            frame.HealthBar:SetPoint("TOPRIGHT", frame.PowerBar, "BOTTOMRIGHT", 0, -border)
+        else
+            frame.PowerBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+            frame.PowerBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+
+            frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+            frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+            frame.HealthBar:SetPoint("BOTTOMLEFT", frame.PowerBar, "TOPLEFT", 0, border)
+            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame.PowerBar, "TOPRIGHT", 0, border)
+        end
     end
+    frame.PowerBar._detached = primaryPowerDetached
+    frame.PowerBar._enabled = unitToken == "player"
 
     frame.NameText:ClearAllPoints()
     frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)

@@ -45,6 +45,12 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
+        -- Create table holding primary power bar.
+        primaryPower = {
+            detached = false,
+            x = 0,
+            y = 0,
+        },
         -- Create table holding secondary power. Entropy stays pending.
         secondaryPower = {
             enabled = true,

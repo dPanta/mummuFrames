@@ -12,13 +12,6 @@ local MAX_PARTY_TEST_FRAMES = 5
 local DISPEL_OVERLAY_ALPHA = 0.2
 local TEST_UNITS_WITH_PLAYER = { "player", "party1", "party2", "party3", "party4" }
 local TEST_UNITS_NO_PLAYER = { "party1", "party2", "party3", "party4" }
-local PARTY_UNIT_EVENT_TOKENS = {
-    player = true,
-    party1 = true,
-    party2 = true,
-    party3 = true,
-    party4 = true,
-}
 local MEMBER_REFRESH_FULL = {
     vitals = true,
     auras = true,
@@ -844,6 +837,7 @@ function PartyFrames:Constructor()
     self.layoutInitialized = false
     self._testMemberStateByUnit = nil
     self._frameByDisplayedUnit = {}
+    self._displayedUnitByGUID = {}
     self._availableHealerSpellsCache = nil
     self._availableHealerSpellsCacheClassToken = nil
     self._availableHealerSpellsCacheSpecID = nil
@@ -889,6 +883,7 @@ function PartyFrames:OnDisable()
     self.layoutInitialized = false
     self._testMemberStateByUnit = nil
     self._frameByDisplayedUnit = {}
+    self._displayedUnitByGUID = {}
     self:InvalidateHealerSpellCaches()
     self:InvalidateHelpfulAuraCache()
     self:StopTestTicker()
@@ -1272,7 +1267,12 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateI
         return
     end
 
-    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[unitToken] or nil
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit then
+        return
+    end
+
+    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
         return
     end
@@ -1280,7 +1280,7 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateI
     local availableHealerSpells = self:GetAvailableHealerSpells()
     self:RefreshMember(
         frame,
-        frame.displayedUnit or unitToken,
+        frame.displayedUnit or displayedUnit,
         partyConfig,
         false,
         availableHealerSpells,
@@ -1291,24 +1291,45 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateI
     )
 end
 
+-- Resolve a unit token to currently displayed party unit token.
+function PartyFrames:ResolveDisplayedUnitToken(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+
+    if self._frameByDisplayedUnit and self._frameByDisplayedUnit[unitToken] then
+        return unitToken
+    end
+
+    if type(UnitGUID) == "function" and type(self._displayedUnitByGUID) == "table" then
+        local unitGUID = UnitGUID(unitToken)
+        if unitGUID and self._displayedUnitByGUID[unitGUID] then
+            return self._displayedUnitByGUID[unitGUID]
+        end
+    end
+
+    return nil
+end
+
 -- Handle unit updates.
 function PartyFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
-    if not PARTY_UNIT_EVENT_TOKENS[unitToken] then
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit then
         return
     end
 
     if eventName == "UNIT_AURA" then
-        local refreshHealerTrackers = self:ShouldRefreshHealerTrackersForAuraUpdate(unitToken, auraUpdateInfo)
+        local refreshHealerTrackers = self:ShouldRefreshHealerTrackersForAuraUpdate(displayedUnit, auraUpdateInfo)
         if refreshHealerTrackers then
-            self:InvalidateHelpfulAuraCache(unitToken)
-            self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_AURAS_ONLY, auraUpdateInfo)
+            self:InvalidateHelpfulAuraCache(displayedUnit)
+            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_ONLY, auraUpdateInfo)
         else
-            self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_AURAS_NO_TRACKERS, auraUpdateInfo)
+            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_NO_TRACKERS, auraUpdateInfo)
         end
         return
     end
 
-    self:RefreshDisplayedUnit(unitToken, MEMBER_REFRESH_VITALS_ONLY)
+    self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_VITALS_ONLY)
 end
 
 -- Stop periodic test ticker.
@@ -1806,6 +1827,7 @@ function PartyFrames:RefreshAll(forceLayout)
 
     if not previewMode and (not addonEnabled or partyConfig.enabled == false) then
         self._frameByDisplayedUnit = {}
+        self._displayedUnitByGUID = {}
         if inCombat then
             self.pendingLayoutRefresh = true
         else
@@ -1853,6 +1875,7 @@ function PartyFrames:RefreshAll(forceLayout)
 
     if #unitsToShow == 0 then
         self._frameByDisplayedUnit = {}
+        self._displayedUnitByGUID = {}
         if inCombat then
             self.pendingLayoutRefresh = true
         else
@@ -1904,6 +1927,7 @@ function PartyFrames:RefreshAll(forceLayout)
     end
 
     local frameByDisplayedUnit = {}
+    local displayedUnitByGUID = {}
     for i = 1, MAX_PARTY_TEST_FRAMES do
         local frame = self.frames[i]
         local unitToken = unitsToShow[i]
@@ -1917,6 +1941,12 @@ function PartyFrames:RefreshAll(forceLayout)
             frame.unit = displayedUnit
             frame.displayedUnit = displayedUnit
             frameByDisplayedUnit[displayedUnit] = frame
+            if type(UnitGUID) == "function" then
+                local displayedUnitGUID = UnitGUID(displayedUnit)
+                if displayedUnitGUID then
+                    displayedUnitByGUID[displayedUnitGUID] = displayedUnit
+                end
+            end
 
             if shouldApplyLayout then
                 if not inCombat then
@@ -1957,6 +1987,7 @@ function PartyFrames:RefreshAll(forceLayout)
         end
     end
     self._frameByDisplayedUnit = frameByDisplayedUnit
+    self._displayedUnitByGUID = displayedUnitByGUID
 
     if not inCombat then
         self.container:Show()
