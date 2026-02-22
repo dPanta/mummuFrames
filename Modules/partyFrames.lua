@@ -1443,14 +1443,22 @@ function PartyFrames:ResolveDisplayedUnitToken(unitToken)
         return nil
     end
 
-    if self._frameByDisplayedUnit and self._frameByDisplayedUnit[unitToken] then
-        return unitToken
-    end
+    local frameByDisplayedUnit = self._frameByDisplayedUnit
+    if type(frameByDisplayedUnit) == "table" then
+        local okDirect, directFrame = pcall(function()
+            return frameByDisplayedUnit[unitToken]
+        end)
+        if okDirect and directFrame then
+            return unitToken
+        end
 
-    if type(UnitGUID) == "function" and type(self._displayedUnitByGUID) == "table" then
-        local unitGUID = UnitGUID(unitToken)
-        if unitGUID and self._displayedUnitByGUID[unitGUID] then
-            return self._displayedUnitByGUID[unitGUID]
+        if type(UnitIsUnit) == "function" then
+            for displayedUnit in pairs(frameByDisplayedUnit) do
+                local okMatch, isSameUnit = pcall(UnitIsUnit, unitToken, displayedUnit)
+                if okMatch and getSafeBooleanValue(isSameUnit, false) then
+                    return displayedUnit
+                end
+            end
         end
     end
 
