@@ -4343,9 +4343,9 @@ function Configuration:BuildUnitPage(page, unitToken)
     end)
 
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
-    local primaryPowerDetach
-    local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize
-    local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight
+    local primaryPowerDetach, primaryPowerWidth
+    local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize, secondaryPowerWidth
+    local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight, tertiaryPowerWidth
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
         castbarEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "CastbarEnabled",
@@ -4452,7 +4452,21 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RequestUnitFrameRefresh()
         end)
 
-        local secondaryAnchor = primaryPowerDetach
+        primaryPowerWidth = self:CreateNumericControl(
+            page,
+            unitToken .. "PrimaryPowerWidth",
+            L.CONFIG_UNIT_PRIMARY_POWER_WIDTH or "Primary power bar width",
+            80,
+            600,
+            1,
+            primaryPowerDetach
+        )
+        self:BindNumericControl(primaryPowerWidth, function(value)
+            dataHandle:SetUnitConfig(unitToken, "primaryPower.width", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        local secondaryAnchor = primaryPowerWidth.slider
         local secondaryYOffset = -10
 
         secondaryPowerEnabled = self:CreateCheckbox(
@@ -4498,11 +4512,25 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RequestUnitFrameRefresh()
         end)
 
+        secondaryPowerWidth = self:CreateNumericControl(
+            page,
+            unitToken .. "SecondaryPowerWidth",
+            L.CONFIG_UNIT_SECONDARY_POWER_WIDTH or "Secondary power bar width",
+            80,
+            600,
+            1,
+            secondaryPowerSize.slider
+        )
+        self:BindNumericControl(secondaryPowerWidth, function(value)
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.width", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
         tertiaryPowerEnabled = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "TertiaryPowerEnabled",
             page,
             L.CONFIG_UNIT_TERTIARY_POWER_ENABLE or "Show tertiary power bar",
-            secondaryPowerSize.slider,
+            secondaryPowerWidth.slider,
             0,
             -12
         )
@@ -4538,6 +4566,20 @@ function Configuration:BuildUnitPage(page, unitToken)
         -- Resolve value label. Coffee remains optional.
         self:BindNumericControl(tertiaryPowerHeight, function(value)
             dataHandle:SetUnitConfig(unitToken, "tertiaryPower.height", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        tertiaryPowerWidth = self:CreateNumericControl(
+            page,
+            unitToken .. "TertiaryPowerWidth",
+            L.CONFIG_UNIT_TERTIARY_POWER_WIDTH or "Tertiary power bar width",
+            80,
+            600,
+            1,
+            tertiaryPowerHeight.slider
+        )
+        self:BindNumericControl(tertiaryPowerWidth, function(value)
+            dataHandle:SetUnitConfig(unitToken, "tertiaryPower.width", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
         end)
     end
@@ -4576,12 +4618,15 @@ function Configuration:BuildUnitPage(page, unitToken)
         castbarShowIcon = castbarShowIcon,
         castbarHideBlizzard = castbarHideBlizzard,
         primaryPowerDetach = primaryPowerDetach,
+        primaryPowerWidth = primaryPowerWidth,
         secondaryPowerEnabled = secondaryPowerEnabled,
         secondaryPowerDetach = secondaryPowerDetach,
         secondaryPowerSize = secondaryPowerSize,
+        secondaryPowerWidth = secondaryPowerWidth,
         tertiaryPowerEnabled = tertiaryPowerEnabled,
         tertiaryPowerDetach = tertiaryPowerDetach,
         tertiaryPowerHeight = tertiaryPowerHeight,
+        tertiaryPowerWidth = tertiaryPowerWidth,
     }
 
     self.widgets.unitPages[unitToken] = widgets
@@ -5071,6 +5116,7 @@ function Configuration:RefreshConfigWidgets()
             self:SetNumericControlValue(unitWidgets.fontSize, unitConfig.fontSize or 12)
             self:SetNumericControlValue(unitWidgets.x, unitConfig.x or 0)
             self:SetNumericControlValue(unitWidgets.y, unitConfig.y or 0)
+            local baseUnitWidth = Util:Clamp(tonumber(unitConfig.width) or 220, 100, 600)
             local castbarConfig = unitConfig.castbar or {}
             if unitWidgets.castbarEnabled then
                 unitWidgets.castbarEnabled:SetChecked(castbarConfig.enabled ~= false)
@@ -5094,6 +5140,10 @@ function Configuration:RefreshConfigWidgets()
             if unitWidgets.primaryPowerDetach then
                 unitWidgets.primaryPowerDetach:SetChecked(primaryPowerConfig.detached == true)
             end
+            if unitWidgets.primaryPowerWidth then
+                local defaultPrimaryWidth = Util:Clamp(math.floor((baseUnitWidth - 2) + 0.5), 80, 600)
+                self:SetNumericControlValue(unitWidgets.primaryPowerWidth, primaryPowerConfig.width or defaultPrimaryWidth)
+            end
             local secondaryPowerConfig = unitConfig.secondaryPower or {}
             if unitWidgets.secondaryPowerEnabled then
                 unitWidgets.secondaryPowerEnabled:SetChecked(secondaryPowerConfig.enabled ~= false)
@@ -5104,6 +5154,15 @@ function Configuration:RefreshConfigWidgets()
             if unitWidgets.secondaryPowerSize then
                 self:SetNumericControlValue(unitWidgets.secondaryPowerSize, secondaryPowerConfig.size or 16)
             end
+            if unitWidgets.secondaryPowerWidth then
+                local secondarySize = Util:Clamp(math.floor((tonumber(secondaryPowerConfig.size) or 16) + 0.5), 8, 40)
+                local defaultSecondaryWidth = Util:Clamp(
+                    math.max(math.floor((baseUnitWidth * 0.75) + 0.5), secondarySize * 8),
+                    80,
+                    300
+                )
+                self:SetNumericControlValue(unitWidgets.secondaryPowerWidth, secondaryPowerConfig.width or defaultSecondaryWidth)
+            end
             local tertiaryPowerConfig = unitConfig.tertiaryPower or {}
             if unitWidgets.tertiaryPowerEnabled then
                 unitWidgets.tertiaryPowerEnabled:SetChecked(tertiaryPowerConfig.enabled ~= false)
@@ -5113,6 +5172,10 @@ function Configuration:RefreshConfigWidgets()
             end
             if unitWidgets.tertiaryPowerHeight then
                 self:SetNumericControlValue(unitWidgets.tertiaryPowerHeight, tertiaryPowerConfig.height or 8)
+            end
+            if unitWidgets.tertiaryPowerWidth then
+                local defaultTertiaryWidth = Util:Clamp(math.floor((baseUnitWidth - 2) + 0.5), 80, 520)
+                self:SetNumericControlValue(unitWidgets.tertiaryPowerWidth, tertiaryPowerConfig.width or defaultTertiaryWidth)
             end
         end
     end

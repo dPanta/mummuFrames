@@ -463,11 +463,18 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     local textInset = pixelPerfect and Style:Snap(6) or 6
     local primaryPowerConfig = unitConfig.primaryPower or {}
     local primaryPowerDetached = unitToken == "player" and primaryPowerConfig.detached == true
+    local defaultPrimaryWidth = math.floor((width - (border * 2)) + 0.5)
+    local primaryWidth = Util:Clamp(tonumber(primaryPowerConfig.width) or defaultPrimaryWidth, 80, 600)
+
+    if pixelPerfect then
+        primaryWidth = Style:Snap(primaryWidth)
+    else
+        primaryWidth = math.floor(primaryWidth + 0.5)
+    end
 
     frame.PowerBar:ClearAllPoints()
     frame.HealthBar:ClearAllPoints()
     if primaryPowerDetached then
-        local primaryWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 600)
         local ppX = tonumber(primaryPowerConfig.x) or 0
         local ppY = tonumber(primaryPowerConfig.y) or 0
         if pixelPerfect then
@@ -488,24 +495,23 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             frame.PowerBar:SetPoint("CENTER", UIParent, "CENTER", ppX, ppY)
         end
     else
-        frame.PowerBar:SetHeight(powerHeight)
+        local healthOffset = powerHeight + (border * 2)
+        frame.PowerBar:SetSize(primaryWidth, powerHeight)
 
         if unitConfig.powerOnTop then
-            frame.PowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
-            frame.PowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+            frame.PowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
 
+            frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -healthOffset)
+            frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -healthOffset)
             frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
             frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
-            frame.HealthBar:SetPoint("TOPLEFT", frame.PowerBar, "BOTTOMLEFT", 0, -border)
-            frame.HealthBar:SetPoint("TOPRIGHT", frame.PowerBar, "BOTTOMRIGHT", 0, -border)
         else
-            frame.PowerBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-            frame.PowerBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+            frame.PowerBar:SetPoint("BOTTOM", frame, "BOTTOM", 0, border)
 
             frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
             frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-            frame.HealthBar:SetPoint("BOTTOMLEFT", frame.PowerBar, "TOPLEFT", 0, border)
-            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame.PowerBar, "TOPRIGHT", 0, border)
+            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, healthOffset)
+            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, healthOffset)
         end
     end
     frame.PowerBar._detached = primaryPowerDetached
@@ -582,7 +588,16 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local spDetached = secondaryConfig.detached == true
         local defaultSpSize = math.floor((fontSize * 1.35) + 0.5)
         local spHeight = Util:Clamp(math.floor((tonumber(secondaryConfig.size) or defaultSpSize) + 0.5), 8, 40)
-        local spWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 300)
+        local defaultSpWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 300)
+        local spWidth = Util:Clamp(tonumber(secondaryConfig.width) or defaultSpWidth, 80, 600)
+
+        if pixelPerfect then
+            spHeight = Style:Snap(spHeight)
+            spWidth = Style:Snap(spWidth)
+        else
+            spHeight = math.floor(spHeight + 0.5)
+            spWidth = math.floor(spWidth + 0.5)
+        end
 
         frame.SecondaryPowerBar:ClearAllPoints()
         frame.SecondaryPowerBar:SetSize(spWidth, spHeight)
@@ -617,7 +632,16 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local defaultTpHeight = math.floor((fontSize * 0.68) + 0.5)
         local configuredTpHeight = tonumber(tertiaryConfig.height) or defaultTpHeight
         local tpHeight = Util:Clamp(math.floor(configuredTpHeight + TERTIARY_POWER_HEIGHT_BONUS + 0.5), 6, 32)
-        local tpWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 520)
+        local defaultTpWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 520)
+        local tpWidth = Util:Clamp(tonumber(tertiaryConfig.width) or defaultTpWidth, 80, 600)
+
+        if pixelPerfect then
+            tpHeight = Style:Snap(tpHeight)
+            tpWidth = Style:Snap(tpWidth)
+        else
+            tpHeight = math.floor(tpHeight + 0.5)
+            tpWidth = math.floor(tpWidth + 0.5)
+        end
 
         Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.Bar)
         Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.OverlayBar)
@@ -643,9 +667,8 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
                 frame.TertiaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", tpX, tpY)
             end
         else
-            frame.TertiaryPowerBar:SetHeight(tpHeight)
-            frame.TertiaryPowerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
-            frame.TertiaryPowerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+            frame.TertiaryPowerBar:SetSize(tpWidth, tpHeight)
+            frame.TertiaryPowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
         end
 
         frame.TertiaryPowerBar._enabled = tpEnabled
