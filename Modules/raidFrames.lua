@@ -558,12 +558,15 @@ function RaidFrames:CreateRaidFrames()
         frame:SetFrameStrata("LOW")
         frame:SetClampedToScreen(true)
         frame._mummuIsRaidFrame = true
-        frame:RegisterForClicks("AnyUp")
+        frame:RegisterForClicks("AnyDown", "AnyUp")
         frame:SetAttribute("unit", "raid1")
         frame:SetAttribute("type1", "target")
         frame:SetAttribute("*type2", "togglemenu")
         frame.unit = "raid1"
         frame.displayedUnit = "raid1"
+        if self.globalFrames and type(self.globalFrames.RegisterClickCastFrame) == "function" then
+            self.globalFrames:RegisterClickCastFrame(frame)
+        end
         frame:SetScript("OnEnter", showUnitTooltip)
         frame:SetScript("OnLeave", hideUnitTooltip)
 

@@ -60,14 +60,69 @@ local function hideUnitTooltip(frame)
     GameTooltip:Hide()
 end
 
+-- Register frame for click-cast integrations (Blizzard and Clique).
+local function registerFrameForClickCasting(frame)
+    if not frame then
+        return
+    end
+
+    if type(frame.RegisterForClicks) == "function" then
+        frame:RegisterForClicks("AnyDown", "AnyUp")
+    end
+
+    if type(_G.ClickCastFrames) == "table" then
+        _G.ClickCastFrames[frame] = true
+    end
+
+    local clique = _G.Clique
+    if clique and type(clique.RegisterFrame) == "function" then
+        pcall(clique.RegisterFrame, clique, frame)
+    end
+end
+
 -- Initialize global frames state.
 function GlobalFrames:Constructor()
     self.addon = nil
+    self.clickCastFrames = setmetatable({}, { __mode = "k" })
 end
 
 -- Initialize global frames module.
 function GlobalFrames:OnInitialize(addonRef)
     self.addon = addonRef
+end
+
+-- Enable global frames module.
+function GlobalFrames:OnEnable()
+    ns.EventRouter:Register(self, "ADDON_LOADED", self.OnAddonLoaded)
+end
+
+-- Disable global frames module.
+function GlobalFrames:OnDisable()
+    ns.EventRouter:UnregisterOwner(self)
+end
+
+-- Handle addon loaded event.
+function GlobalFrames:OnAddonLoaded(_, loadedAddonName)
+    if loadedAddonName ~= "Clique" then
+        return
+    end
+
+    self:RegisterAllClickCastFrames()
+end
+
+-- Register one frame for click-cast integrations.
+function GlobalFrames:RegisterClickCastFrame(frame)
+    if frame then
+        self.clickCastFrames[frame] = true
+    end
+    registerFrameForClickCasting(frame)
+end
+
+-- Re-register all known frames for click-cast integrations.
+function GlobalFrames:RegisterAllClickCastFrames()
+    for frame in pairs(self.clickCastFrames) do
+        registerFrameForClickCasting(frame)
+    end
 end
 
 -- Create status bar. Coffee remains optional.
@@ -347,12 +402,12 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame:SetSize(width, height)
     frame:SetFrameStrata("LOW")
     frame:SetClampedToScreen(true)
-    frame:RegisterForClicks("AnyUp")
     frame:SetAttribute("unit", unitToken)
     frame:SetAttribute("type1", "target")
     frame:SetAttribute("*type2", "togglemenu")
     frame.unit = unitToken
     frame.displayedUnit = unitToken
+    self:RegisterClickCastFrame(frame)
     frame:SetScript("OnEnter", showUnitTooltip)
     frame:SetScript("OnLeave", hideUnitTooltip)
 

@@ -1018,12 +1018,15 @@ function PartyFrames:CreatePartyFrames()
         frame:SetFrameStrata("LOW")
         frame:SetClampedToScreen(true)
         frame._mummuIsPartyFrame = true
-        frame:RegisterForClicks("AnyUp")
+        frame:RegisterForClicks("AnyDown", "AnyUp")
         frame:SetAttribute("unit", "party1")
         frame:SetAttribute("type1", "target")
         frame:SetAttribute("*type2", "togglemenu")
         frame.unit = "party1"
         frame.displayedUnit = "party1"
+        if self.globalFrames and type(self.globalFrames.RegisterClickCastFrame) == "function" then
+            self.globalFrames:RegisterClickCastFrame(frame)
+        end
         frame:SetScript("OnEnter", showUnitTooltip)
         frame:SetScript("OnLeave", hideUnitTooltip)
 
