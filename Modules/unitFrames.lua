@@ -150,6 +150,9 @@ local SECONDARY_POWER_EMPTY_ALPHA = 0.22
 local IRONFUR_SPELL_ID = 192081
 local GUARDIAN_SPEC_ID = 104
 local BREWMASTER_SPEC_ID = 268
+local ELEMENTAL_SPEC_ID = 262
+local ENHANCEMENT_SPEC_ID = 263
+local MAELSTROM_WEAPON_SPELL_ID = 344179
 local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
 local IRONFUR_BASE_DURATION = 7
 local SPELL_AURA_SCAN_MAX = 255
@@ -185,6 +188,11 @@ local REFRESH_OPTIONS_VITALS = {
 -- Create table holding refresh options auras.
 local REFRESH_OPTIONS_AURAS = {
     auras = true,
+    tertiaryPower = true,
+}
+local REFRESH_OPTIONS_AURAS_AND_SECONDARY = {
+    auras = true,
+    secondaryPower = true,
     tertiaryPower = true,
 }
 local REFRESH_OPTIONS_AURAS_ONLY = {
@@ -269,6 +277,22 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "dh_soul_fragments.png",
+    },
+    -- Create table holding shaman.
+    SHAMAN = {
+        maxIcons = 5,
+        powerCap = 10,
+        auraSpellID = MAELSTROM_WEAPON_SPELL_ID,
+        auraFilter = "HELPFUL|PLAYER",
+        usesAuraStacks = true,
+        displayMaxIcons = 5,
+        texture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_blue.png",
+        overflowTexture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_red.png",
+        -- Create table holding supported specs.
+        allowedSpecIDs = {
+            [ELEMENTAL_SPEC_ID] = true,
+            [ENHANCEMENT_SPEC_ID] = true,
+        },
     },
 }
 
@@ -643,6 +667,31 @@ local function spellIDMatches(spellID, targetSpellID)
 
     local ok, matches = pcall(valuesEqual, spellID, targetSpellID)
     return ok and matches
+end
+
+-- Return whether resource supports specialization.
+local function isSecondaryResourceSupportedForSpec(resource, specID)
+    if type(resource) ~= "table" then
+        return false
+    end
+
+    local allowedSpecIDs = resource.allowedSpecIDs
+    if type(allowedSpecIDs) ~= "table" then
+        return true
+    end
+
+    return specID ~= nil and allowedSpecIDs[specID] == true
+end
+
+-- Return whether player secondary power should refresh from aura updates.
+local function playerSecondaryPowerUsesAuraStacks()
+    local _, classToken = UnitClass("player")
+    local resource = classToken and SECONDARY_POWER_BY_CLASS[classToken] or nil
+    if type(resource) ~= "table" or resource.usesAuraStacks ~= true then
+        return false
+    end
+
+    return isSecondaryResourceSupportedForSpec(resource, getPlayerSpecializationID())
 end
 
 -- Check frame anchored to.
@@ -1380,7 +1429,10 @@ function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
         return
     end
 
-    local refreshOptions = (unitToken == "player") and REFRESH_OPTIONS_AURAS or REFRESH_OPTIONS_AURAS_ONLY
+    local refreshOptions = REFRESH_OPTIONS_AURAS_ONLY
+    if unitToken == "player" then
+        refreshOptions = playerSecondaryPowerUsesAuraStacks() and REFRESH_OPTIONS_AURAS_AND_SECONDARY or REFRESH_OPTIONS_AURAS
+    end
     self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
 end
 
@@ -2687,13 +2739,15 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     end
 
     local _, classToken = UnitClass("player")
+    local specID = getPlayerSpecializationID()
     local resource = classToken and SECONDARY_POWER_BY_CLASS[classToken] or nil
-    if not resource then
+    if not resource or not isSecondaryResourceSupportedForSpec(resource, specID) then
         hideSecondaryPowerBar(bar)
         return
     end
 
     local maxIcons = Util:Clamp(resource.maxIcons or 5, 1, SECONDARY_POWER_MAX_ICONS)
+    local powerCap = Util:Clamp(resource.powerCap or maxIcons, 1, SECONDARY_POWER_MAX_ICONS)
     local current = 0
     local maxPower = 0
     if exists and resource.usesRuneCooldownAPI then
@@ -2705,18 +2759,31 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
             current = UnitPower("player", resource.powerType) or 0
             maxPower = UnitPowerMax("player", resource.powerType) or 0
         end
+    elseif exists and resource.usesAuraStacks == true and type(resource.auraSpellID) == "number" then
+        local auraStacks = 0
+        local matchedAuras = getAurasBySpellID("player", resource.auraFilter or "HELPFUL|PLAYER", resource.auraSpellID)
+        for auraIndex = 1, #matchedAuras do
+            local auraData = matchedAuras[auraIndex]
+            local stacks = getSafeNumericValue(auraData and auraData.count, 1) or 1
+            stacks = Util:Clamp(math.floor(stacks + 0.5), 1, powerCap)
+            if stacks > auraStacks then
+                auraStacks = stacks
+            end
+        end
+        current = auraStacks
+        maxPower = powerCap
     elseif exists then
         current = UnitPower("player", resource.powerType) or 0
         maxPower = UnitPowerMax("player", resource.powerType) or 0
     end
 
-    local fallbackMaxPower = bar._lastSecondaryPowerMax or maxIcons
+    local fallbackMaxPower = bar._lastSecondaryPowerMax or powerCap
     local fallbackCurrent = bar._lastSecondaryPowerCurrent or 0
     maxPower = getSafeNumericValue(maxPower, fallbackMaxPower)
     current = getSafeNumericValue(current, fallbackCurrent)
 
     if maxPower <= 0 then
-        maxPower = maxIcons
+        maxPower = powerCap
     end
 
     if previewMode then
@@ -2725,10 +2792,23 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         end
     end
 
-    maxPower = Util:Clamp(math.floor((maxPower or 0) + 0.0001), 0, maxIcons)
+    maxPower = Util:Clamp(math.floor((maxPower or 0) + 0.0001), 0, powerCap)
     current = Util:Clamp(math.floor((current or 0) + 0.0001), 0, maxPower)
     bar._lastSecondaryPowerMax = maxPower
     bar._lastSecondaryPowerCurrent = current
+
+    local displayMaxPower = maxPower
+    if type(resource.displayMaxIcons) == "number" then
+        displayMaxPower = Util:Clamp(math.floor(resource.displayMaxIcons + 0.5), 1, maxIcons)
+    else
+        displayMaxPower = Util:Clamp(displayMaxPower, 1, maxIcons)
+    end
+
+    local displayCurrent = Util:Clamp(current, 0, displayMaxPower)
+    local overflowCount = 0
+    if resource.overflowTexture and current > displayMaxPower then
+        overflowCount = Util:Clamp(current - displayMaxPower, 0, displayMaxPower)
+    end
 
     local availableWidth = math.max(1, bar:GetWidth() or 1)
     local availableHeight = math.max(1, bar:GetHeight() or 1)
@@ -2738,24 +2818,29 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     end
 
     local iconSize = math.floor(
-        math.min(availableHeight, (availableWidth - (spacing * math.max(0, maxPower - 1))) / maxPower) + 0.5
+        math.min(availableHeight, (availableWidth - (spacing * math.max(0, displayMaxPower - 1))) / displayMaxPower) + 0.5
     )
     if iconSize < 1 then
         iconSize = 1
     end
 
-    local rowWidth = (iconSize * maxPower) + (spacing * math.max(0, maxPower - 1))
+    local rowWidth = (iconSize * displayMaxPower) + (spacing * math.max(0, displayMaxPower - 1))
     local startX = math.floor(((availableWidth - rowWidth) * 0.5) + 0.5)
     if startX < 0 then
         startX = 0
     end
 
     local texturePath = resource.texture or DEFAULT_AURA_TEXTURE
+    local overflowTexturePath = resource.overflowTexture
     for i = 1, #bar.Icons do
         local icon = bar.Icons[i]
-        if i <= maxPower then
-            icon:SetTexture(texturePath)
-            icon:SetAlpha(i <= current and 1 or SECONDARY_POWER_EMPTY_ALPHA)
+        if i <= displayMaxPower then
+            if overflowTexturePath and i <= overflowCount then
+                icon:SetTexture(overflowTexturePath)
+            else
+                icon:SetTexture(texturePath)
+            end
+            icon:SetAlpha(i <= displayCurrent and 1 or SECONDARY_POWER_EMPTY_ALPHA)
             icon:SetSize(iconSize, iconSize)
             icon:ClearAllPoints()
             icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
