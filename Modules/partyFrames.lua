@@ -34,6 +34,12 @@ local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
 local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
 local MAX_HELPFUL_AURA_SCAN = 80
+local ROLE_SORT_PRIORITY = {
+    TANK = 1,
+    HEALER = 2,
+    DAMAGER = 3,
+    NONE = 4,
+}
 local TEST_NAME_BY_UNIT = {
     player = UnitName("player") or "Player",
     party1 = "Party Member 1",
@@ -1606,6 +1612,35 @@ function PartyFrames:ShouldShowPowerBar(unitToken)
     return UnitGroupRolesAssigned(unitToken) == "HEALER"
 end
 
+-- Return sort priority for role token.
+function PartyFrames:GetRoleSortPriority(roleToken)
+    local normalized = type(roleToken) == "string" and roleToken or "NONE"
+    return ROLE_SORT_PRIORITY[normalized] or ROLE_SORT_PRIORITY.NONE
+end
+
+-- Sort party units by role: tank, healer, dps, unknown.
+function PartyFrames:SortUnitsByRole(unitsToShow)
+    if type(unitsToShow) ~= "table" or #unitsToShow <= 1 then
+        return
+    end
+
+    local originalIndexByUnit = {}
+    for index = 1, #unitsToShow do
+        originalIndexByUnit[unitsToShow[index]] = index
+    end
+
+    table.sort(unitsToShow, function(a, b)
+        local aRole = UnitGroupRolesAssigned(a)
+        local bRole = UnitGroupRolesAssigned(b)
+        local aPriority = self:GetRoleSortPriority(aRole)
+        local bPriority = self:GetRoleSortPriority(bRole)
+        if aPriority ~= bPriority then
+            return aPriority < bPriority
+        end
+        return (originalIndexByUnit[a] or 999) < (originalIndexByUnit[b] or 999)
+    end)
+end
+
 -- Apply dummy aura test state.
 function PartyFrames:ApplyDummyAuras(frame, partyConfig, dummyAuraState)
     if not (self.unitFrames and frame and frame.AuraContainers) then
@@ -2131,6 +2166,7 @@ function PartyFrames:RefreshAll(forceLayout)
                 unitsToShow[#unitsToShow + 1] = unitToken
             end
         end
+        self:SortUnitsByRole(unitsToShow)
     end
 
     if #unitsToShow == 0 then

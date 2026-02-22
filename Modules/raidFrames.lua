@@ -952,11 +952,18 @@ function RaidFrames:BuildSortedRaidEntries(previewMode, raidConfig)
     if previewMode then
         local previewCount = Util:Clamp(tonumber(raidConfig.testSize) or DEFAULT_TEST_SIZE, 1, MAX_RAID_FRAMES)
         for i = 1, previewCount do
+            local indexInGroup = ((i - 1) % MEMBERS_PER_GROUP) + 1
+            local previewRole = "DAMAGER"
+            if indexInGroup == 1 then
+                previewRole = "TANK"
+            elseif indexInGroup == 2 then
+                previewRole = "HEALER"
+            end
             entries[#entries + 1] = {
                 unitToken = "raid" .. tostring(i),
                 name = TEST_NAME_PREFIX .. tostring(i),
                 subgroup = math.floor((i - 1) / MEMBERS_PER_GROUP) + 1,
-                role = (i % 5 == 1) and "TANK" or ((i % 3 == 0) and "HEALER" or "DAMAGER"),
+                role = previewRole,
                 index = i,
             }
         end
@@ -1021,6 +1028,11 @@ function RaidFrames:BuildSortedRaidEntries(previewMode, raidConfig)
 
         if a.subgroup ~= b.subgroup then
             return a.subgroup < b.subgroup
+        end
+        local aRole = self:GetRoleSortPriority(a.role)
+        local bRole = self:GetRoleSortPriority(b.role)
+        if aRole ~= bRole then
+            return aRole < bRole
         end
         return a.index < b.index
     end
