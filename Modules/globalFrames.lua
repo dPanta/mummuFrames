@@ -1,3 +1,9 @@
+-- ============================================================================
+-- GLOBAL FRAMES MODULE
+-- ============================================================================
+-- Provides reusable frame factories (unit frame base, castbar, power bars) and
+-- shared visual behaviors (tooltips, click-casting registration, style apply).
+
 local _, ns = ...
 
 local addon = _G.mummuFrames
@@ -18,13 +24,48 @@ local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375
 local RESTING_ICON_ASPECT = 424 / 793
 local LEADER_ICON_ASPECT = 432 / 793
 
--- Show unit tooltip.
+-- Resolve a reliable unit token for tooltip/click-cast context.
+local function getTooltipUnit(frame)
+    if type(frame) ~= "table" then
+        return nil
+    end
+
+    if type(frame.unit) == "string" and frame.unit ~= "" then
+        return frame.unit
+    end
+    if type(frame.displayedUnit) == "string" and frame.displayedUnit ~= "" then
+        return frame.displayedUnit
+    end
+    if type(frame.unitToken) == "string" and frame.unitToken ~= "" then
+        return frame.unitToken
+    end
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr and type(attrUnit) == "string" and attrUnit ~= "" then
+            return attrUnit
+        end
+    end
+
+    return nil
+end
+
+local function isProtectedFrame(frame)
+    if type(frame) ~= "table" then
+        return false
+    end
+    if type(frame.IsProtected) ~= "function" then
+        return false
+    end
+    local okProtected, protected = pcall(frame.IsProtected, frame)
+    return okProtected and protected == true
+end
+
 local function showUnitTooltip(frame)
     if not frame then
         return
     end
 
-    local unit = frame.unit or frame.displayedUnit or frame.unitToken or (frame.GetAttribute and frame:GetAttribute("unit")) or nil
+    local unit = getTooltipUnit(frame)
     if not unit then
         return
     end
@@ -63,27 +104,38 @@ end
 -- Register frame for click-cast integrations (Blizzard and Clique).
 local function registerFrameForClickCasting(frame)
     if not frame then
-        return
+        return false
+    end
+
+    -- Secure click registration mutates protected buttons; defer in combat.
+    if InCombatLockdown() and isProtectedFrame(frame) then
+        return false
     end
 
     if type(frame.RegisterForClicks) == "function" then
         frame:RegisterForClicks("AnyDown", "AnyUp")
     end
 
-    if type(_G.ClickCastFrames) == "table" then
+    ---@diagnostic disable-next-line: undefined-field
+    if _G.ClickCastFrames and type(_G.ClickCastFrames) == "table" then
+        ---@diagnostic disable-next-line: undefined-field
         _G.ClickCastFrames[frame] = true
     end
 
+    ---@diagnostic disable-next-line: undefined-field
     local clique = _G.Clique
     if clique and type(clique.RegisterFrame) == "function" then
         pcall(clique.RegisterFrame, clique, frame)
     end
+
+    return true
 end
 
 -- Initialize global frames state.
 function GlobalFrames:Constructor()
     self.addon = nil
     self.clickCastFrames = setmetatable({}, { __mode = "k" })
+    self.pendingStyleByFrame = setmetatable({}, { __mode = "k" })
 end
 
 -- Initialize global frames module.
@@ -94,11 +146,14 @@ end
 -- Enable global frames module.
 function GlobalFrames:OnEnable()
     ns.EventRouter:Register(self, "ADDON_LOADED", self.OnAddonLoaded)
+    ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnPlayerRegenEnabled)
+    self:RegisterAllClickCastFrames()
 end
 
 -- Disable global frames module.
 function GlobalFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
+    self.pendingStyleByFrame = setmetatable({}, { __mode = "k" })
 end
 
 -- Handle addon loaded event.
@@ -108,6 +163,37 @@ function GlobalFrames:OnAddonLoaded(_, loadedAddonName)
     end
 
     self:RegisterAllClickCastFrames()
+end
+
+-- Queue style refresh for post-combat application.
+function GlobalFrames:QueueStyleRefresh(frame, unitToken)
+    if type(frame) ~= "table" then
+        return
+    end
+    local resolvedUnitToken = type(unitToken) == "string" and unitToken or frame.unitToken
+    if type(resolvedUnitToken) ~= "string" or resolvedUnitToken == "" then
+        return
+    end
+    self.pendingStyleByFrame[frame] = resolvedUnitToken
+end
+
+-- Apply all queued styles once combat restrictions end.
+function GlobalFrames:FlushQueuedStyles()
+    if InCombatLockdown() then
+        return
+    end
+    for frame, unitToken in pairs(self.pendingStyleByFrame) do
+        self.pendingStyleByFrame[frame] = nil
+        if frame and type(unitToken) == "string" and unitToken ~= "" then
+            self:ApplyStyle(frame, unitToken)
+        end
+    end
+end
+
+-- Handle combat-end. Re-apply deferred click-cast registration and style.
+function GlobalFrames:OnPlayerRegenEnabled()
+    self:RegisterAllClickCastFrames()
+    self:FlushQueuedStyles()
 end
 
 -- Register one frame for click-cast integrations.
@@ -277,7 +363,7 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     Style:ApplyStatusBarTexture(overlayBar)
 
     -- Create font string for value text.
-    local valueText = bar:CreateFontString(nil, "OVERLAY", nil, 7)
+    local valueText = bar:CreateFontString(nil, "OVERLAY", nil)
     valueText:SetPoint("RIGHT", bar, "RIGHT", -3, 0)
     valueText:SetJustifyH("RIGHT")
     valueText:SetDrawLayer("OVERLAY", 7)
@@ -388,8 +474,6 @@ function GlobalFrames:CreateCastBar(frame)
     container.TimeText:SetDrawLayer("OVERLAY", 7)
     container.TimeText:SetJustifyH("RIGHT")
 
-    container.parentUnitFrame = frame
-    container.unitToken = frame.unitToken
     frame.CastBar = container
 end
 
@@ -458,16 +542,31 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
 end
 
 -- Apply style settings to unit frame.
+-- Layout/anchor mutations are deferred while in combat; visual-only updates are
+-- still applied so textures/fonts remain consistent until combat ends.
 function GlobalFrames:ApplyStyle(frame, unitToken)
-    local dataHandle = self.addon:GetModule("dataHandle")
+    local dataHandle = self.addon and self.addon:GetModule("dataHandle")
     if not dataHandle or not frame then
+        return
+    end
+
+    local unitConfig = dataHandle:GetUnitConfig(unitToken)
+    if type(unitConfig) ~= "table" then
         return
     end
 
     local profile = dataHandle:GetProfile()
     local styleConfig = profile and profile.style or nil
-    local unitConfig = dataHandle:GetUnitConfig(unitToken)
     local pixelPerfect = Style:IsPixelPerfectEnabled()
+    local inCombat = InCombatLockdown()
+    local allowLayout = not inCombat
+
+    -- Secure unit buttons and detached anchor points can be protected in combat.
+    -- Queue a full style pass for combat-end and only apply non-layout visual updates now.
+    if inCombat then
+        self:QueueStyleRefresh(frame, unitToken)
+    end
+
     local width = Util:Clamp(tonumber(unitConfig.width) or 220, 100, 600)
     local height = Util:Clamp(tonumber(unitConfig.height) or 44, 18, 160)
     local powerHeight = Util:Clamp(tonumber(unitConfig.powerHeight) or 10, 4, height - 6)
@@ -491,7 +590,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     end
     fontSize = math.floor(fontSize + 0.5)
 
-    if not InCombatLockdown() then
+    if allowLayout then
         frame:SetSize(width, height)
         frame:ClearAllPoints()
         frame:SetPoint(
@@ -532,57 +631,56 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         primaryWidth = math.floor(primaryWidth + 0.5)
     end
 
-    frame.PowerBar:ClearAllPoints()
-    frame.HealthBar:ClearAllPoints()
-    if primaryPowerDetached then
-        local ppX = tonumber(primaryPowerConfig.x) or 0
-        local ppY = tonumber(primaryPowerConfig.y) or 0
-        if pixelPerfect then
-            ppX = Style:Snap(ppX)
-            ppY = Style:Snap(ppY)
-        else
-            ppX = math.floor(ppX + 0.5)
-            ppY = math.floor(ppY + 0.5)
-        end
+    if allowLayout then
+        frame.PowerBar:ClearAllPoints()
+        frame.HealthBar:ClearAllPoints()
+        if primaryPowerDetached then
+            local ppX = tonumber(primaryPowerConfig.x) or 0
+            local ppY = tonumber(primaryPowerConfig.y) or 0
+            if pixelPerfect then
+                ppX = Style:Snap(ppX)
+                ppY = Style:Snap(ppY)
+            else
+                ppX = math.floor(ppX + 0.5)
+                ppY = math.floor(ppY + 0.5)
+            end
 
-        frame.PowerBar:SetSize(primaryWidth, powerHeight)
-        frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
-        frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-        frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-        frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
-
-        if not InCombatLockdown() then
-            frame.PowerBar:SetPoint("CENTER", UIParent, "CENTER", ppX, ppY)
-        end
-    else
-        local healthOffset = powerHeight + (border * 2)
-        frame.PowerBar:SetSize(primaryWidth, powerHeight)
-
-        if unitConfig.powerOnTop then
-            frame.PowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
-
-            frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -healthOffset)
-            frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -healthOffset)
-            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
-            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
-        else
-            frame.PowerBar:SetPoint("BOTTOM", frame, "BOTTOM", 0, border)
-
+            frame.PowerBar:SetSize(primaryWidth, powerHeight)
             frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
             frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
-            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, healthOffset)
-            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, healthOffset)
+            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+            frame.PowerBar:SetPoint("CENTER", UIParent, "CENTER", ppX, ppY)
+        else
+            local healthOffset = powerHeight + (border * 2)
+            frame.PowerBar:SetSize(primaryWidth, powerHeight)
+
+            if unitConfig.powerOnTop then
+                frame.PowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
+                frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -healthOffset)
+                frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -healthOffset)
+                frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+                frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+            else
+                frame.PowerBar:SetPoint("BOTTOM", frame, "BOTTOM", 0, border)
+                frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+                frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+                frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, healthOffset)
+                frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, healthOffset)
+            end
         end
     end
     frame.PowerBar._detached = primaryPowerDetached
     frame.PowerBar._enabled = unitToken == "player"
 
-    frame.NameText:ClearAllPoints()
-    frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)
-    frame.NameText:SetPoint("RIGHT", frame.HealthText, "LEFT", -textInset, 0)
+    if allowLayout then
+        frame.NameText:ClearAllPoints()
+        frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)
+        frame.NameText:SetPoint("RIGHT", frame.HealthText, "LEFT", -textInset, 0)
 
-    frame.HealthText:ClearAllPoints()
-    frame.HealthText:SetPoint("RIGHT", frame.HealthBar, "RIGHT", -textInset, 0)
+        frame.HealthText:ClearAllPoints()
+        frame.HealthText:SetPoint("RIGHT", frame.HealthBar, "RIGHT", -textInset, 0)
+    end
 
     Style:ApplyFont(frame.NameText, fontSize, "OUTLINE")
     Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
@@ -612,12 +710,16 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local leaderHeight = math.max(1, math.floor((iconSize / 3) + 0.5))
         local leaderWidth = math.max(1, math.floor((leaderHeight * LEADER_ICON_ASPECT) + 0.5))
 
-        frame.StatusIconContainer:ClearAllPoints()
-        frame.StatusIconContainer:SetPoint("CENTER", frame, "TOPLEFT", 0, 0)
-        frame.StatusIconContainer:SetSize(restingWidth + leaderWidth + badgeSpacing, iconSize)
-        frame.StatusIconSpacing = badgeSpacing
+        if allowLayout then
+            frame.StatusIconContainer:ClearAllPoints()
+            frame.StatusIconContainer:SetPoint("CENTER", frame, "TOPLEFT", 0, 0)
+            frame.StatusIconContainer:SetSize(restingWidth + leaderWidth + badgeSpacing, iconSize)
 
-        frame.StatusIcons.Resting:SetSize(restingWidth, iconSize)
+            frame.StatusIcons.Resting:SetSize(restingWidth, iconSize)
+            frame.StatusIcons.Leader:SetSize(leaderWidth, leaderHeight)
+            frame.StatusIcons.Combat:SetSize(combatIconSize, combatIconSize)
+        end
+
         frame.StatusIcons.Resting.Icon:SetAllPoints()
         frame.StatusIcons.Resting.Icon:SetTexture(RESTING_ICON_TEXTURE)
         frame.StatusIcons.Resting.Icon:SetTexCoord(
@@ -627,7 +729,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             RESTING_ICON_TEXCOORD[4]
         )
 
-        frame.StatusIcons.Leader:SetSize(leaderWidth, leaderHeight)
         frame.StatusIcons.Leader.Icon:SetAllPoints()
         frame.StatusIcons.Leader.Icon:SetTexture(LEADER_ICON_TEXTURE)
         frame.StatusIcons.Leader.Icon:SetTexCoord(
@@ -637,7 +738,6 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             LEADER_ICON_TEXCOORD[4]
         )
 
-        frame.StatusIcons.Combat:SetSize(combatIconSize, combatIconSize)
         frame.StatusIcons.Combat.Icon:SetAllPoints()
         frame.StatusIcons.Combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
     end
@@ -659,26 +759,25 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             spWidth = math.floor(spWidth + 0.5)
         end
 
-        frame.SecondaryPowerBar:ClearAllPoints()
-        frame.SecondaryPowerBar:SetSize(spWidth, spHeight)
+        if allowLayout then
+            frame.SecondaryPowerBar:ClearAllPoints()
+            frame.SecondaryPowerBar:SetSize(spWidth, spHeight)
 
-        if spDetached then
-            local spX = tonumber(secondaryConfig.x) or 0
-            local spY = tonumber(secondaryConfig.y) or 0
-            if pixelPerfect then
-                spX = Style:Snap(spX)
-                spY = Style:Snap(spY)
-            else
-                spX = math.floor(spX + 0.5)
-                spY = math.floor(spY + 0.5)
-            end
-
-            if not InCombatLockdown() then
+            if spDetached then
+                local spX = tonumber(secondaryConfig.x) or 0
+                local spY = tonumber(secondaryConfig.y) or 0
+                if pixelPerfect then
+                    spX = Style:Snap(spX)
+                    spY = Style:Snap(spY)
+                else
+                    spX = math.floor(spX + 0.5)
+                    spY = math.floor(spY + 0.5)
+                end
                 frame.SecondaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", spX, spY)
+            else
+                local spOffsetY = pixelPerfect and Style:Snap(8) or 8
+                frame.SecondaryPowerBar:SetPoint("BOTTOM", frame, "TOP", 0, spOffsetY)
             end
-        else
-            local spOffsetY = pixelPerfect and Style:Snap(8) or 8
-            frame.SecondaryPowerBar:SetPoint("BOTTOM", frame, "TOP", 0, spOffsetY)
         end
 
         frame.SecondaryPowerBar._enabled = spEnabled
@@ -710,25 +809,23 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.TertiaryPowerBar.ValueText:SetShadowColor(0, 0, 0, 0)
         frame.TertiaryPowerBar.ValueText:SetShadowOffset(0, 0)
 
-        frame.TertiaryPowerBar:ClearAllPoints()
-        if tpDetached then
-            local tpX = tonumber(tertiaryConfig.x) or 0
-            local tpY = tonumber(tertiaryConfig.y) or 0
-            if pixelPerfect then
-                tpX = Style:Snap(tpX)
-                tpY = Style:Snap(tpY)
-            else
-                tpX = math.floor(tpX + 0.5)
-                tpY = math.floor(tpY + 0.5)
-            end
-
+        if allowLayout then
+            frame.TertiaryPowerBar:ClearAllPoints()
             frame.TertiaryPowerBar:SetSize(tpWidth, tpHeight)
-            if not InCombatLockdown() then
+            if tpDetached then
+                local tpX = tonumber(tertiaryConfig.x) or 0
+                local tpY = tonumber(tertiaryConfig.y) or 0
+                if pixelPerfect then
+                    tpX = Style:Snap(tpX)
+                    tpY = Style:Snap(tpY)
+                else
+                    tpX = math.floor(tpX + 0.5)
+                    tpY = math.floor(tpY + 0.5)
+                end
                 frame.TertiaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", tpX, tpY)
+            else
+                frame.TertiaryPowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
             end
-        else
-            frame.TertiaryPowerBar:SetSize(tpWidth, tpHeight)
-            frame.TertiaryPowerBar:SetPoint("TOP", frame, "TOP", 0, -border)
         end
 
         frame.TertiaryPowerBar._enabled = tpEnabled
@@ -750,26 +847,25 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             cbHeight = math.floor(cbHeight + 0.5)
         end
 
-        frame.CastBar:ClearAllPoints()
-
-        if cbDetached then
-            local cbX = tonumber(castbarConfig.x) or 0
-            local cbY = tonumber(castbarConfig.y) or 0
-            if pixelPerfect then
-                cbX = Style:Snap(cbX)
-                cbY = Style:Snap(cbY)
-            else
-                cbX = math.floor(cbX + 0.5)
-                cbY = math.floor(cbY + 0.5)
-            end
-            frame.CastBar:SetSize(cbWidth, cbHeight)
-            if not InCombatLockdown() then
+        if allowLayout then
+            frame.CastBar:ClearAllPoints()
+            if cbDetached then
+                local cbX = tonumber(castbarConfig.x) or 0
+                local cbY = tonumber(castbarConfig.y) or 0
+                if pixelPerfect then
+                    cbX = Style:Snap(cbX)
+                    cbY = Style:Snap(cbY)
+                else
+                    cbX = math.floor(cbX + 0.5)
+                    cbY = math.floor(cbY + 0.5)
+                end
+                frame.CastBar:SetSize(cbWidth, cbHeight)
                 frame.CastBar:SetPoint("CENTER", UIParent, "CENTER", cbX, cbY)
+            else
+                frame.CastBar:SetSize(width, cbHeight)
+                frame.CastBar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -border)
+                frame.CastBar:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -border)
             end
-        else
-            frame.CastBar:SetSize(width, cbHeight)
-            frame.CastBar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -border)
-            frame.CastBar:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -border)
         end
 
         local cbBorderInset = 1
@@ -781,28 +877,30 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
         local cbShowIcon = castbarConfig.showIcon ~= false
         frame.CastBar.Icon:SetShown(cbShowIcon)
-        local innerHeight = cbHeight - cbBorderInset * 2
-        frame.CastBar.Icon:SetWidth(cbShowIcon and math.max(1, innerHeight) or 0)
-
-        frame.CastBar.Bar:ClearAllPoints()
-        if cbShowIcon then
-            frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar.Icon, "TOPRIGHT", 1, 0)
-        else
-            frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar, "TOPLEFT", cbBorderInset, -cbBorderInset)
+        if allowLayout then
+            local innerHeight = cbHeight - cbBorderInset * 2
+            frame.CastBar.Icon:SetWidth(cbShowIcon and math.max(1, innerHeight) or 0)
+            frame.CastBar.Bar:ClearAllPoints()
+            if cbShowIcon then
+                frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar.Icon, "TOPRIGHT", 1, 0)
+            else
+                frame.CastBar.Bar:SetPoint("TOPLEFT", frame.CastBar, "TOPLEFT", cbBorderInset, -cbBorderInset)
+            end
+            frame.CastBar.Bar:SetPoint("BOTTOMRIGHT", frame.CastBar, "BOTTOMRIGHT", -cbBorderInset, cbBorderInset)
         end
-        frame.CastBar.Bar:SetPoint("BOTTOMRIGHT", frame.CastBar, "BOTTOMRIGHT", -cbBorderInset, cbBorderInset)
 
         Style:ApplyStatusBarTexture(frame.CastBar.Bar)
 
         local cbTextInset = pixelPerfect and Style:Snap(4) or 4
         local cbFontSize = Util:Clamp(math.floor(cbHeight * 0.55 + 0.5), 8, 20)
+        if allowLayout then
+            frame.CastBar.SpellText:ClearAllPoints()
+            frame.CastBar.SpellText:SetPoint("LEFT", frame.CastBar.Bar, "LEFT", cbTextInset, 0)
+            frame.CastBar.SpellText:SetPoint("RIGHT", frame.CastBar.TimeText, "LEFT", -cbTextInset, 0)
 
-        frame.CastBar.SpellText:ClearAllPoints()
-        frame.CastBar.SpellText:SetPoint("LEFT", frame.CastBar.Bar, "LEFT", cbTextInset, 0)
-        frame.CastBar.SpellText:SetPoint("RIGHT", frame.CastBar.TimeText, "LEFT", -cbTextInset, 0)
-
-        frame.CastBar.TimeText:ClearAllPoints()
-        frame.CastBar.TimeText:SetPoint("RIGHT", frame.CastBar.Bar, "RIGHT", -cbTextInset, 0)
+            frame.CastBar.TimeText:ClearAllPoints()
+            frame.CastBar.TimeText:SetPoint("RIGHT", frame.CastBar.Bar, "RIGHT", -cbTextInset, 0)
+        end
 
         Style:ApplyFont(frame.CastBar.SpellText, cbFontSize, "OUTLINE")
         Style:ApplyFont(frame.CastBar.TimeText, cbFontSize, "OUTLINE")

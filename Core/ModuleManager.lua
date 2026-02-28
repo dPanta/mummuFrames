@@ -1,3 +1,6 @@
+-- Module lifecycle coordinator.
+-- Keeps registration order stable so init/enable/disable happen predictably.
+
 local _, ns = ...
 
 -- Create class holding module manager behavior.
@@ -69,6 +72,7 @@ end
 
 -- Disable all enabled modules.
 function ModuleManager:DisableAll()
+    -- Disable in reverse registration order so dependent modules tear down last.
     for idx = #self.order, 1, -1 do
         local name = self.order[idx]
         local moduleTable = self.modules[name]

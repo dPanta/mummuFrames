@@ -1,3 +1,5 @@
+-- Static catalog of bundled fonts exposed in configuration dropdowns.
+
 local _, ns = ...
 
 -- Create table holding font catalog.

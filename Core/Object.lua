@@ -1,3 +1,6 @@
+-- Lightweight prototype-style object helper used across modules.
+-- Provides class extension (`Extend`) and instance construction (`New`).
+
 local _, ns = ...
 
 -- Create table holding object.

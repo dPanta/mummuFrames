@@ -1,3 +1,30 @@
+-- ============================================================================
+-- MUMMUFRAMES CONFIGURATION MODULE
+-- ============================================================================
+-- Manages settings UI with panels for profile management, aura tracking,
+-- frame positioning/styling, and per-unit configuration.
+--
+-- FEATURES:
+--   - Profile system: save/load/import/export player-specific settings
+--   - Dropdown controls for fonts, textures, positions, sources, and roles
+--   - Numeric sliders and input fields for dimensions and offsets
+--   - Checkbox toggles for features and display modes
+--   - Color picker integration for bar colors and overlays
+--   - Per-unit configuration pages (party, raid, player, target, etc.)
+--   - Spell tracking control for healer aura display
+--
+-- PAGE STRUCTURE:
+--   1. Profiles: manage named profile sets with import/export
+--   2. Global: addon-wide settings (enabled, fonts, textures, test mode)
+--   3. Auras: spell whitelist for healer buff tracking
+--   4. Unit: per-unit configuration (width, height, spacing, colors, auras)
+--
+-- EVENTS:
+--   Configuration changes trigger:
+--   - RequestUnitFrameRefresh() to update live frames (debounced)
+--   - Profile switching updates all unit configurations
+-- ============================================================================
+
 local _, ns = ...
 
 local addon = _G.mummuFrames
@@ -8,6 +35,11 @@ local Util = ns.Util
 -- Create class holding configuration behavior.
 local Configuration = ns.Object:Extend()
 
+-- ============================================================================
+-- CONFIGURATION CONSTANTS
+-- ============================================================================
+
+-- Unit tab order and labels for configurable frames.
 -- Create table holding unit tab order.
 local UNIT_TAB_ORDER = {
     "party",
@@ -199,6 +231,11 @@ local function getBuffPositionPresetByAnchors(anchorPoint, relativePoint)
     return BUFF_POSITION_PRESETS[1]
 end
 
+-- ============================================================================
+-- LABEL LOOKUP HELPERS
+-- ============================================================================
+-- Functions to resolve localized labels for dropdown options by their keys.
+
 -- Return buff source label.
 local function getBuffSourceLabel(sourceKey)
     local normalized = "all"
@@ -267,6 +304,11 @@ local function getFontLabelByPath(fontPath)
     end
     return fontPath or "Unknown"
 end
+
+-- ============================================================================
+-- DROPDOWN OPTION FETCHERS
+-- ============================================================================
+-- Retrieve available dropdown options from Style module (fonts, textures).
 
 -- Return bar texture options.
 local function getBarTextureOptions(forceRefresh)
@@ -404,8 +446,9 @@ local function openColorPicker(initialColor, onColorChanged)
     local function applyFromPicker()
         local red, green, blue = ColorPickerFrame:GetColorRGB()
         local alpha = 1
-        if OpacitySliderFrame and type(OpacitySliderFrame.GetValue) == "function" then
-            alpha = 1 - (tonumber(OpacitySliderFrame:GetValue()) or 0)
+        local opacitySlider = _G["OpacitySliderFrame"]
+        if opacitySlider and type(opacitySlider.GetValue) == "function" then
+            alpha = 1 - (tonumber(opacitySlider:GetValue()) or 0)
         elseif type(ColorPickerFrame.GetColorAlpha) == "function" then
             alpha = tonumber(ColorPickerFrame:GetColorAlpha()) or 1
         end
@@ -464,6 +507,12 @@ local function openColorPicker(initialColor, onColorChanged)
     ColorPickerFrame:Hide()
     ColorPickerFrame:Show()
 end
+
+-- ============================================================================
+-- UI CONTROL FACTORIES
+-- ============================================================================
+-- Factory functions creating sliders, edit boxes, dropdowns, and complex controls.
+-- All styled consistently and integrated with configuration system.
 
 -- Create numeric options slider.
 local function createSlider(name, parent, label, minValue, maxValue, step)
@@ -585,7 +634,7 @@ local function createLabeledDropdown(name, parent, labelText, anchor)
     dropdown:GetNormalTexture():SetVertexColor(0.08, 0.08, 0.1, 0.92)
     dropdown:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
     dropdown:GetHighlightTexture():SetVertexColor(0.24, 0.46, 0.72, 0.2)
-    dropdown:SetPushedTexture("Interface\\Buttons\\WHITE8x8", "ARTWORK")
+    dropdown:SetPushedTexture("Interface\\Buttons\\WHITE8x8")
     dropdown:GetPushedTexture():SetVertexColor(0.12, 0.2, 0.3, 0.36)
 
     -- Create texture for border top.
@@ -694,7 +743,15 @@ local function createColorControl(parent, labelText, anchor)
     }
 end
 
--- Initialize configuration state.
+-- ============================================================================
+-- CONFIGURATION CLASS METHODS
+-- ============================================================================
+-- Lifecycle (Constructor, OnInitialize, OnEnable)
+-- Configuration getters/setters
+-- UI widget state management
+-- Page builders and refresh logic
+
+-- Initialize configuration state and player data.
 function Configuration:Constructor()
     self.addon = nil
     self.panel = nil
@@ -724,13 +781,18 @@ function Configuration:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Enable configuration module.
+-- Enable configuration module. Registers settings category and minimap button.
 function Configuration:OnEnable()
     self:RegisterSettingsCategory()
     self:CreateMinimapLauncher()
 end
 
--- Return active profile table.
+-- ============================================================================
+-- CONFIGURATION GETTERS
+-- ============================================================================
+-- Retrieve current profile, data handle, and UI context.
+
+-- Return active profile table from dataHandle.
 function Configuration:GetProfile()
     local dataHandle = self.addon:GetModule("dataHandle")
     return dataHandle and dataHandle:GetProfile() or nil
@@ -741,7 +803,7 @@ function Configuration:GetDataHandle()
     return self.addon:GetModule("dataHandle")
 end
 
--- Return selected profile name in profiles page context.
+-- Return the currently-selected profile name (for the profiles UI page).
 function Configuration:GetSelectedProfileName()
     local dataHandle = self:GetDataHandle()
     if not dataHandle then
@@ -770,7 +832,10 @@ function Configuration:SetProfilesStatus(message, r, g, b)
     widgets.statusText:SetTextColor(r or 0.82, g or 0.84, b or 0.9, 1)
 end
 
--- Return party healer config.
+-- ============================================================================
+-- SELECT POPUP SYSTEM
+-- ============================================================================
+-- Dropdown list UI with scrolling, callbacks, and flexible item rendering.
 function Configuration:GetPartyHealerConfig()
     local partyFrames = self.addon:GetModule("partyFrames")
     if partyFrames and type(partyFrames.GetPartyHealerConfig) == "function" then
@@ -785,16 +850,10 @@ function Configuration:GetPartyHealerConfig()
         return nil
     end
 
-    if type(profile.loveHealers) ~= "table" then
-        if type(profile.partyHealer) == "table" then
-            profile.loveHealers = profile.partyHealer
-        elseif type(profile.raidHealer) == "table" then
-            profile.loveHealers = profile.raidHealer
-        else
-            profile.loveHealers = {}
-        end
+    if type(profile.auras) ~= "table" then
+        profile.auras = {}
     end
-    local config = profile.loveHealers
+    local config = profile.auras
     if config.enabled == nil then
         config.enabled = true
     end
@@ -898,10 +957,11 @@ function Configuration:GetRaidHealerConfig()
 end
 
 -- Return available raid healer spells for current talents/spec.
+-- Delegates to partyFrames (raid module removed).
 function Configuration:GetRaidHealerAvailableSpells()
-    local raidFrames = self.addon:GetModule("raidFrames")
-    if raidFrames and type(raidFrames.GetAvailableHealerSpells) == "function" then
-        local spells = raidFrames:GetAvailableHealerSpells()
+    local partyFrames = self.addon:GetModule("partyFrames")
+    if partyFrames and type(partyFrames.GetAvailableHealerSpells) == "function" then
+        local spells = partyFrames:GetAvailableHealerSpells()
         if type(spells) == "table" then
             return spells
         end
@@ -969,6 +1029,11 @@ function Configuration:GetSelectedRaidHealerGroupConfig()
     groupConfig.color.a = clampColorComponent(groupConfig.color.a, defaults.color.a)
     return selectedGroup, groupConfig
 end
+
+-- ============================================================================
+-- SELECT POPUP SYSTEM
+-- ============================================================================
+-- Dropdown list UI with scrolling, callbacks, and flexible item rendering.
 
 -- Return select popup max rows.
 local function getSelectPopupMaxRows()
@@ -1397,6 +1462,12 @@ function Configuration:RefreshSelectControlText(control, forceRefreshOptions)
     self:SetSelectControlText(control, selectedLabel, selectedFontObject)
 end
 
+-- ============================================================================
+-- DROPDOWN INITIALIZERS
+-- ============================================================================
+-- Methods for configuring and populating dropdown lists with options.
+-- Handles font selection, bar textures, buff positions, unit frame layouts, etc.
+
 -- Initialize font dropdown.
 function Configuration:InitializeFontDropdown(dropdown)
     if not dropdown then
@@ -1654,7 +1725,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             local entries = {}
             for i = 1, #BUFF_SOURCE_OPTIONS do
                 local option = BUFF_SOURCE_OPTIONS[i]
-                if not (unitToken ~= "party" and unitToken ~= "raid" and option.key == "important") then
+                if option.key ~= "important" then
                     entries[#entries + 1] = {
                         value = option.key,
                         label = option.label,
@@ -1676,9 +1747,6 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             if buffsConfig.source == "self" then
                 return "self"
             end
-            if (unitToken == "party" or unitToken == "raid") and buffsConfig.source == "important" then
-                return "important"
-            end
             return "all"
         end,
         -- Apply selected option.
@@ -1697,69 +1765,6 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
         -- Resolve value label.
         function(value)
             return getBuffSourceLabel(value)
-        end
-    )
-
-    self:RefreshSelectControlText(dropdown, false)
-end
-
--- Initialize debuff position dropdown.
-function Configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
-    if not dropdown then
-        return
-    end
-
-    self:ConfigureSelectControl(
-        dropdown,
-        -- Return computed value.
-        function()
-            -- Create table holding entries.
-            local entries = {}
-            for i = 1, #BUFF_POSITION_PRESETS do
-                local preset = BUFF_POSITION_PRESETS[i]
-                entries[#entries + 1] = {
-                    value = preset.key,
-                    label = preset.label,
-                    preset = preset,
-                }
-            end
-            return entries
-        end,
-        -- Return computed value.
-        function()
-            local dataHandle = self.addon:GetModule("dataHandle")
-            if not dataHandle then
-                return "BOTTOM_RIGHT"
-            end
-
-            local unitConfig = dataHandle:GetUnitConfig(unitToken)
-            local auraConfig = unitConfig.aura or {}
-            local debuffsConfig = auraConfig.debuffs or {}
-            local selectedPreset = getBuffPositionPresetByAnchors(
-                debuffsConfig.anchorPoint or "TOPRIGHT",
-                debuffsConfig.relativePoint or "BOTTOMRIGHT"
-            )
-            return selectedPreset.key
-        end,
-        -- Apply selected option.
-        function(option)
-            local dataHandle = self.addon:GetModule("dataHandle")
-            if not dataHandle or not option.preset then
-                return
-            end
-
-            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.anchorPoint", option.preset.anchorPoint)
-            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.relativePoint", option.preset.relativePoint)
-            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.x", option.preset.x)
-            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.y", option.preset.y)
-            self:SetSelectControlText(dropdown, option.label, nil)
-            self:RequestUnitFrameRefresh()
-        end,
-        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
-        nil,
-        -- Return computed value.
-        function()
-            return BUFF_POSITION_PRESETS[2].label
         end
     )
 
@@ -1980,7 +1985,9 @@ function Configuration:InitializeRaidTestSizeDropdown(dropdown)
     self:RefreshSelectControlText(dropdown, false)
 end
 
--- Initialize party healer spell dropdown.
+-- Initialize party healer spell dropdown (legacy healer editor controls).
+-- This editor block is kept for compatibility with shared aura config data, but
+-- current tabs expose the simplified Auras page instead of this full healer UI.
 function Configuration:InitializePartyHealerSpellDropdown(dropdown)
     if not dropdown then
         return
@@ -2518,7 +2525,8 @@ function Configuration:RefreshRaidHealerControlStates()
     local spellConfig = self:GetSelectedRaidHealerSpellConfig()
     local hasSpell = spellConfig ~= nil
     local enabled = config and config.enabled ~= false
-    local raidFrames = self.addon and self.addon:GetModule("raidFrames") or nil
+    -- Raid healer config is currently shared with partyFrames in this addon.
+    local raidFrames = self.addon and self.addon:GetModule("partyFrames") or nil
     local canRemoveCustom = false
     if spellEntry and raidFrames and type(raidFrames.IsCustomHealerSpell) == "function" then
         canRemoveCustom = raidFrames:IsCustomHealerSpell(spellEntry.spellID) == true
@@ -2554,8 +2562,7 @@ end
 function Configuration:RequestUnitFrameRefresh(immediate)
     local unitFrames = self.addon:GetModule("unitFrames")
     local partyFrames = self.addon:GetModule("partyFrames")
-    local raidFrames = self.addon:GetModule("raidFrames")
-    if not unitFrames and not partyFrames and not raidFrames then
+    if not unitFrames and not partyFrames then
         return
     end
 
@@ -2563,7 +2570,8 @@ function Configuration:RequestUnitFrameRefresh(immediate)
         partyFrames:InvalidateHealerSpellCaches()
     end
 
-    -- Refresh unit frames after debounce.
+    -- Refresh unit modules via a debounced scheduler, then defer protected
+    -- frame updates until out-of-combat through Util:RunWhenOutOfCombat.
     local function runRefresh()
         self._refreshScheduled = false
         -- Return computed value.
@@ -2573,9 +2581,6 @@ function Configuration:RequestUnitFrameRefresh(immediate)
             end
             if partyFrames and type(partyFrames.RefreshAll) == "function" then
                 partyFrames:RefreshAll(true)
-            end
-            if raidFrames and type(raidFrames.RefreshAll) == "function" then
-                raidFrames:RefreshAll(true)
             end
         end, L.CONFIG_DEFERRED_APPLY, "config_refresh_all")
     end
@@ -2597,6 +2602,12 @@ function Configuration:RequestUnitFrameRefresh(immediate)
         runRefresh()
     end
 end
+
+-- ============================================================================
+-- UI CONTROL STATE MANAGEMENT
+-- ============================================================================
+-- Methods for setting/getting control values, enabling/disabling controls,
+-- and managing visual feedback (alpha, color, text).
 
 -- Set numeric control value.
 function Configuration:SetNumericControlValue(control, value)
@@ -2725,6 +2736,12 @@ function Configuration:SetSliderLabel(slider, value)
     setFontStringTextSafe(label, baseLabel .. ": " .. formatNumericForDisplay(value), 12)
 end
 
+-- ============================================================================
+-- UI CONTROL CREATION & BINDING
+-- ============================================================================
+-- Factory methods for creating UI controls (sliders, inputs, dropdowns, checkboxes)
+-- and binding them to configuration data. Also handles select popup management.
+
 -- Create numeric control.
 function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, maxValue, step, anchor, anchorXOffset)
     local sliderName = "mummuFramesConfig" .. keyPrefix .. "Slider"
@@ -2824,6 +2841,15 @@ function Configuration:CreateCheckbox(name, parent, label, anchor, xOffset, yOff
 
     return check
 end
+
+-- ============================================================================
+-- CONFIGURATION PAGE BUILDERS
+-- ============================================================================
+-- Methods that dynamically create the UI pages for each configuration section:
+-- Profiles (import/export, active profile selection),
+-- Global (general settings, fonts, bar textures),
+-- Auras (aura display and filtering),
+-- Unit (unit-specific frame layout and color options).
 
 -- Build profiles page.
 function Configuration:BuildProfilesPage(page)
@@ -3183,6 +3209,7 @@ function Configuration:BuildGlobalPage(page)
     -- Handle OnClick script callback.
     pixelPerfect:SetScript("OnClick", function(button)
         local profile = self:GetProfile()
+        if not profile then return end
         profile.style = profile.style or {}
         profile.style.pixelPerfect = button:GetChecked() and true or false
         self:RequestUnitFrameRefresh()
@@ -3201,6 +3228,7 @@ function Configuration:BuildGlobalPage(page)
     -- Resolve value label.
     self:BindNumericControl(globalFontSize, function(value)
         local profile = self:GetProfile()
+        if not profile then return end
         profile.style = profile.style or {}
         profile.style.fontSize = math.floor((value or 12) + 0.5)
         self:RequestUnitFrameRefresh()
@@ -3238,24 +3266,25 @@ function Configuration:BuildGlobalPage(page)
     self.widgets.barTextureDropdown = barTextureDropdown
 end
 
--- Build party healer page.
-function Configuration:BuildPartyHealerPage(page)
+-- Build auras page.
+function Configuration:BuildAurasPage(page)
+    local auraHandle = ns.AuraHandle
+
     local enabled = self:CreateCheckbox(
-        "mummuFramesConfigPartyHealerEnabled",
+        "mummuFramesConfigAurasEnabled",
         page,
-        L.CONFIG_PARTY_HEALER_ENABLE or "Enable party healer tracking",
+        L.CONFIG_AURAS_ENABLE or "Aura tracking",
         page,
         0,
         -6,
         "TOPLEFT"
     )
     enabled:SetScript("OnClick", function(button)
-        local config = self:GetPartyHealerConfig()
+        local config = auraHandle and auraHandle:GetAurasConfig()
         if not config then
             return
         end
         config.enabled = button:GetChecked() and true or false
-        self:RefreshPartyHealerControlStates()
         self:RequestUnitFrameRefresh()
     end)
 
@@ -3267,405 +3296,164 @@ function Configuration:BuildPartyHealerPage(page)
     Style:ApplyFont(helpText, 11)
     setFontStringTextSafe(
         helpText,
-        L.CONFIG_PARTY_HEALER_HELP
-            or "Configure tracked HoTs, absorbs and externals for party and raid frames. Only available spells are listed.",
+        L.CONFIG_AURAS_HELP
+            or "Track player-cast buffs on party and raid members. Icon size and duration limit apply to all frames.",
         11
     )
     helpText:SetTextColor(0.82, 0.84, 0.9, 0.95)
 
-    local spellControl = createLabeledDropdown(
-        "mummuFramesConfigPartyHealerSpellDropdown",
+    -- Icon size.
+    local sizeControl = self:CreateNumericControl(
         page,
-        L.CONFIG_PARTY_HEALER_SPELL or "Tracked spell",
-        helpText
-    )
-    local spellDropdown = spellControl and spellControl.dropdown or nil
-    if spellDropdown then
-        spellDropdown:SetHeight(CONFIG_SELECT_HEIGHT * 2)
-        self:InitializePartyHealerSpellDropdown(spellDropdown)
-    end
-
-    local customInputLabel = page:CreateFontString(nil, "ARTWORK")
-    customInputLabel:SetPoint("TOPLEFT", spellDropdown or helpText, "BOTTOMLEFT", 0, -14)
-    setFontStringTextSafe(
-        customInputLabel,
-        L.CONFIG_PARTY_HEALER_CUSTOM_INPUT or "Add custom buff (spell name or spell ID)",
-        12
-    )
-
-    local customInput = createTextEditBox("mummuFramesConfigPartyHealerCustomInput", page, 250)
-    customInput:SetPoint("TOPLEFT", customInputLabel, "BOTTOMLEFT", 0, -6)
-
-    local addCustomButton = CreateFrame("Button", "mummuFramesConfigPartyHealerCustomAddButton", page, "UIPanelButtonTemplate")
-    addCustomButton:SetSize(64, 22)
-    addCustomButton:SetPoint("LEFT", customInput, "RIGHT", 8, 0)
-    if type(addCustomButton.SetText) == "function" then
-        addCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_ADD or "Add")
-    end
-
-    local removeCustomButton = CreateFrame(
-        "Button",
-        "mummuFramesConfigPartyHealerCustomRemoveButton",
-        page,
-        "UIPanelButtonTemplate"
-    )
-    removeCustomButton:SetSize(112, 22)
-    removeCustomButton:SetPoint("TOPLEFT", customInput, "BOTTOMLEFT", 0, -8)
-    if type(removeCustomButton.SetText) == "function" then
-        removeCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_REMOVE or "Remove selected custom")
-    end
-
-    local function addCustomSpellFromInput()
-        local inputText = customInput and customInput:GetText() or nil
-        if type(inputText) ~= "string" then
-            return
-        end
-        inputText = string.match(inputText, "^%s*(.-)%s*$")
-        if not inputText or inputText == "" then
-            return
-        end
-
-        local partyFrames = self.addon:GetModule("partyFrames")
-        if not partyFrames or type(partyFrames.AddCustomHealerSpell) ~= "function" then
-            return
-        end
-
-        local spellID, err = partyFrames:AddCustomHealerSpell(inputText, self._partyHealerSelectedGroup or "hots")
-        if spellID then
-            self._partyHealerSelectedSpellID = spellID
-            customInput:SetText("")
-            self:RefreshConfigWidgets()
-            self:RequestUnitFrameRefresh()
-            return
-        end
-
-        if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
-            local message = L.CONFIG_PARTY_HEALER_CUSTOM_INVALID or "Unable to add custom spell."
-            if err == "unknown_spell" then
-                message = L.CONFIG_PARTY_HEALER_CUSTOM_UNKNOWN or "Unknown spell. Use a valid spell name or spell ID."
-            end
-            UIErrorsFrame:AddMessage(message, 1, 0.2, 0.2)
-        end
-    end
-
-    addCustomButton:SetScript("OnClick", addCustomSpellFromInput)
-    customInput:SetScript("OnEnterPressed", function(editBox)
-        addCustomSpellFromInput()
-        editBox:ClearFocus()
-    end)
-    customInput:SetScript("OnEscapePressed", function(editBox)
-        editBox:ClearFocus()
-    end)
-
-    removeCustomButton:SetScript("OnClick", function()
-        local spellEntry = self:GetSelectedPartyHealerSpellEntry()
-        if not spellEntry then
-            return
-        end
-
-        local partyFrames = self.addon:GetModule("partyFrames")
-        if not partyFrames or type(partyFrames.RemoveCustomHealerSpell) ~= "function" then
-            return
-        end
-
-        local removed = partyFrames:RemoveCustomHealerSpell(spellEntry.spellID)
-        if removed then
-            self._partyHealerSelectedSpellID = nil
-            self:RefreshConfigWidgets()
-            self:RequestUnitFrameRefresh()
-        end
-    end)
-
-    local spellEnabled = self:CreateCheckbox(
-        "mummuFramesConfigPartyHealerSpellEnabled",
-        page,
-        L.CONFIG_PARTY_HEALER_SPELL_ENABLE or "Show selected spell",
-        removeCustomButton,
-        0,
-        -12
-    )
-    spellEnabled:SetScript("OnClick", function(button)
-        local spellConfig = self:GetSelectedPartyHealerSpellConfig()
-        if not spellConfig then
-            button:SetChecked(false)
-            return
-        end
-        spellConfig.enabled = button:GetChecked() and true or false
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellAnchorControl = createLabeledDropdown(
-        "mummuFramesConfigPartyHealerSpellAnchorDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_ANCHOR or "Spell anchor",
-        spellEnabled
-    )
-    local spellAnchorDropdown = spellAnchorControl and spellAnchorControl.dropdown or nil
-    if spellAnchorDropdown then
-        self:InitializePartyHealerAnchorDropdown(spellAnchorDropdown)
-    end
-
-    local spellStyleControl = createLabeledDropdown(
-        "mummuFramesConfigPartyHealerSpellStyleDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_STYLE or "Spell style",
-        spellAnchorDropdown or spellEnabled
-    )
-    local spellStyleDropdown = spellStyleControl and spellStyleControl.dropdown or nil
-    if spellStyleDropdown then
-        self:InitializePartyHealerSpellStyleDropdown(spellStyleDropdown)
-    end
-
-    local spellX = self:CreateNumericControl(
-        page,
-        "PartyHealerSpellX",
-        L.CONFIG_PARTY_HEALER_X or "Spell X offset",
-        -200,
-        200,
-        1,
-        spellStyleDropdown or spellAnchorDropdown or spellEnabled,
-        20
-    )
-    self:BindNumericControl(spellX, function(value)
-        local spellConfig = self:GetSelectedPartyHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.x = tonumber(value) or 0
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellY = self:CreateNumericControl(
-        page,
-        "PartyHealerSpellY",
-        L.CONFIG_PARTY_HEALER_Y or "Spell Y offset",
-        -200,
-        200,
-        1,
-        spellX.slider
-    )
-    self:BindNumericControl(spellY, function(value)
-        local spellConfig = self:GetSelectedPartyHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.y = tonumber(value) or 0
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellSize = self:CreateNumericControl(
-        page,
-        "PartyHealerSpellSize",
-        L.CONFIG_PARTY_HEALER_SIZE or "Spell size",
+        "AurasSize",
+        L.CONFIG_AURAS_SIZE or "Icon size",
         6,
         48,
         1,
-        spellY.slider
+        helpText,
+        0
     )
-    self:BindNumericControl(spellSize, function(value)
-        local spellConfig = self:GetSelectedPartyHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.size = math.floor((tonumber(value) or 14) + 0.5)
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellColor = createColorControl(
-        page,
-        L.CONFIG_PARTY_HEALER_SPELL_COLOR or "Spell rectangle color",
-        spellSize.slider
-    )
-    if spellColor and spellColor.button then
-        spellColor.button:SetScript("OnClick", function()
-            local config = self:GetPartyHealerConfig()
-            local spellConfig, spellEntry = self:GetSelectedPartyHealerSpellConfig()
-            if not config or not spellConfig then
-                return
-            end
-
-            local groupKey = spellEntry and spellEntry.group or "hots"
-            local groupConfig = config.groups and config.groups[groupKey] or nil
-            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            local baseColor = spellConfig.color or (groupConfig and groupConfig.color) or defaults.color
-
-            openColorPicker(baseColor, function(r, g, b, a)
-                spellConfig.color = spellConfig.color or {}
-                spellConfig.color.r = clampColorComponent(r, defaults.color.r)
-                spellConfig.color.g = clampColorComponent(g, defaults.color.g)
-                spellConfig.color.b = clampColorComponent(b, defaults.color.b)
-                spellConfig.color.a = clampColorComponent(a, defaults.color.a)
-                self:SetColorControlValue(spellColor, spellConfig.color)
-                self:RequestUnitFrameRefresh()
-            end)
-        end)
-    end
-
-    local groupControl = createLabeledDropdown(
-        "mummuFramesConfigPartyHealerGroupDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP or "Group defaults",
-        spellColor and spellColor.button or spellSize.slider
-    )
-    local groupDropdown = groupControl and groupControl.dropdown or nil
-    if groupDropdown then
-        self:InitializePartyHealerGroupDropdown(groupDropdown)
-    end
-
-    local groupStyleControl = createLabeledDropdown(
-        "mummuFramesConfigPartyHealerGroupStyleDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP_STYLE or "Group style",
-        groupDropdown or (spellColor and spellColor.button) or spellSize.slider
-    )
-    local groupStyleDropdown = groupStyleControl and groupStyleControl.dropdown or nil
-    if groupStyleDropdown then
-        self:InitializePartyHealerGroupStyleDropdown(groupStyleDropdown)
-    end
-
-    local groupSize = self:CreateNumericControl(
-        page,
-        "PartyHealerGroupSize",
-        L.CONFIG_PARTY_HEALER_GROUP_SIZE or "Group size",
-        6,
-        48,
-        1,
-        groupStyleDropdown or groupDropdown or spellSize.slider,
-        20
-    )
-    self:BindNumericControl(groupSize, function(value)
-        local _, groupConfig = self:GetSelectedPartyHealerGroupConfig()
-        if not groupConfig then
-            return
-        end
-        groupConfig.size = math.floor((tonumber(value) or 14) + 0.5)
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local groupColor = createColorControl(
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP_COLOR or "Group rectangle color",
-        groupSize.slider
-    )
-    if groupColor and groupColor.button then
-        groupColor.button:SetScript("OnClick", function()
-            local groupKey, groupConfig = self:GetSelectedPartyHealerGroupConfig()
-            if not groupConfig then
-                return
-            end
-            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            local baseColor = groupConfig.color or defaults.color
-            openColorPicker(baseColor, function(r, g, b, a)
-                groupConfig.color = groupConfig.color or {}
-                groupConfig.color.r = clampColorComponent(r, defaults.color.r)
-                groupConfig.color.g = clampColorComponent(g, defaults.color.g)
-                groupConfig.color.b = clampColorComponent(b, defaults.color.b)
-                groupConfig.color.a = clampColorComponent(a, defaults.color.a)
-                self:SetColorControlValue(groupColor, groupConfig.color)
-                self:RequestUnitFrameRefresh()
-            end)
-        end)
-    end
-
-    self.widgets.partyHealer = {
-        enabled = enabled,
-        spellDropdown = spellDropdown,
-        customInput = customInput,
-        addCustomButton = addCustomButton,
-        removeCustomButton = removeCustomButton,
-        spellEnabled = spellEnabled,
-        spellAnchorDropdown = spellAnchorDropdown,
-        spellStyleDropdown = spellStyleDropdown,
-        spellX = spellX,
-        spellY = spellY,
-        spellSize = spellSize,
-        spellColor = spellColor,
-        groupDropdown = groupDropdown,
-        groupStyleDropdown = groupStyleDropdown,
-        groupSize = groupSize,
-        groupColor = groupColor,
-    }
-end
-
--- Build raid healer page.
-function Configuration:BuildRaidHealerPage(page)
-    local enabled = self:CreateCheckbox(
-        "mummuFramesConfigRaidHealerEnabled",
-        page,
-        L.CONFIG_RAID_HEALER_ENABLE or "Enable raid healer tracking",
-        page,
-        0,
-        -6,
-        "TOPLEFT"
-    )
-    enabled:SetScript("OnClick", function(button)
-        local config = self:GetRaidHealerConfig()
+    self:BindNumericControl(sizeControl, function(value)
+        local config = auraHandle and auraHandle:GetAurasConfig()
         if not config then
             return
         end
-        config.enabled = button:GetChecked() and true or false
-        self:RefreshRaidHealerControlStates()
+        config.size = math.floor((tonumber(value) or 14) + 0.5)
         self:RequestUnitFrameRefresh()
     end)
 
-    local helpText = page:CreateFontString(nil, "ARTWORK")
-    helpText:SetPoint("TOPLEFT", enabled, "BOTTOMLEFT", 4, -8)
-    helpText:SetPoint("RIGHT", page, "RIGHT", -24, 0)
-    helpText:SetJustifyH("LEFT")
-    helpText:SetJustifyV("TOP")
-    Style:ApplyFont(helpText, 11)
+    -- Divider.
+    local divider = page:CreateTexture(nil, "ARTWORK")
+    divider:SetPoint("TOPLEFT", sizeControl.slider, "BOTTOMLEFT", 0, -20)
+    divider:SetPoint("RIGHT", page, "RIGHT", -24, 0)
+    divider:SetHeight(1)
+    divider:SetColorTexture(1, 1, 1, 0.1)
+
+    -- Spell filter header.
+    local filterHeader = page:CreateFontString(nil, "ARTWORK")
+    filterHeader:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -12)
+    Style:ApplyFont(filterHeader, 13)
+    setFontStringTextSafe(filterHeader, L.CONFIG_AURAS_FILTER_HEADER or "Spell filter", 13)
+
+    local filterHelp = page:CreateFontString(nil, "ARTWORK")
+    filterHelp:SetPoint("TOPLEFT", filterHeader, "BOTTOMLEFT", 0, -6)
+    filterHelp:SetPoint("RIGHT", page, "RIGHT", -24, 0)
+    filterHelp:SetJustifyH("LEFT")
+    filterHelp:SetJustifyV("TOP")
+    Style:ApplyFont(filterHelp, 11)
     setFontStringTextSafe(
-        helpText,
-        L.CONFIG_RAID_HEALER_HELP
-            or "Configure tracked HoTs, absorbs and externals for raid frames. Spells are shared with Party Healer.",
+        filterHelp,
+        L.CONFIG_AURAS_FILTER_HELP
+            or "Only show buffs whose names are in this list. Leave empty to show all (duration filter still applies).",
         11
     )
-    helpText:SetTextColor(0.82, 0.84, 0.9, 0.95)
+    filterHelp:SetTextColor(0.82, 0.84, 0.9, 0.95)
 
-    local spellControl = createLabeledDropdown(
-        "mummuFramesConfigRaidHealerSpellDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_SPELL or "Tracked spell",
-        helpText
+    -- Scrollable spell list.
+    local listWidth  = 380
+    local listHeight = 180
+    local rowHeight  = 20
+
+    local listContainer = CreateFrame("Frame", "mummuFramesConfigAurasListContainer", page)
+    listContainer:SetPoint("TOPLEFT", filterHelp, "BOTTOMLEFT", 0, -10)
+    listContainer:SetSize(listWidth, listHeight)
+    Style:CreateBackground(listContainer, 0.05, 0.05, 0.07, 0.9)
+
+    local listScroll = CreateFrame(
+        "ScrollFrame",
+        "mummuFramesConfigAurasListScroll",
+        listContainer,
+        "UIPanelScrollFrameTemplate"
     )
-    local spellDropdown = spellControl and spellControl.dropdown or nil
-    if spellDropdown then
-        spellDropdown:SetHeight(CONFIG_SELECT_HEIGHT * 2)
-        self:InitializeRaidHealerSpellDropdown(spellDropdown)
+    listScroll:SetPoint("TOPLEFT", listContainer, "TOPLEFT", 4, -4)
+    listScroll:SetPoint("BOTTOMRIGHT", listContainer, "BOTTOMRIGHT", -28, 4)
+    listScroll:EnableMouseWheel(true)
+    listScroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur    = sf:GetVerticalScroll() or 0
+        local target = cur - delta * rowHeight
+        if target < 0 then target = 0 end
+        local maxR = sf:GetVerticalScrollRange() or 0
+        if target > maxR then target = maxR end
+        sf:SetVerticalScroll(target)
+    end)
+
+    local listChild = CreateFrame("Frame", "mummuFramesConfigAurasListChild", listScroll)
+    listChild:SetSize(listWidth - 32, 1)
+    listScroll:SetScrollChild(listChild)
+
+    -- Track row frames so we can reuse/hide them on refresh.
+    local listRows = {}
+
+    local function refreshList()
+        -- Hide existing rows.
+        for i = 1, #listRows do
+            listRows[i]:Hide()
+        end
+        listRows = {}
+
+        local config = auraHandle and auraHandle:GetAurasConfig()
+        local names  = (config and type(config.allowedSpells) == "table") and config.allowedSpells or {}
+        local yOffset = 0
+
+        for idx = 1, #names do
+            local name = names[idx]
+            local row  = CreateFrame("Button", nil, listChild)
+            row:SetSize(listChild:GetWidth(), rowHeight)
+            row:SetPoint("TOPLEFT", listChild, "TOPLEFT", 0, -yOffset)
+
+            local nameText = row:CreateFontString(nil, "ARTWORK")
+            nameText:SetPoint("LEFT", row, "LEFT", 4, 0)
+            nameText:SetPoint("RIGHT", row, "RIGHT", -24, 0)
+            nameText:SetJustifyH("LEFT")
+            Style:ApplyFont(nameText, 11)
+            setFontStringTextSafe(nameText, name, 11)
+
+            local removeBtn = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+            removeBtn:SetSize(18, 18)
+            removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+            local capturedIdx = idx
+            removeBtn:SetScript("OnClick", function()
+                local cfg = auraHandle and auraHandle:GetAurasConfig()
+                if not cfg or type(cfg.allowedSpells) ~= "table" then
+                    return
+                end
+                table.remove(cfg.allowedSpells, capturedIdx)
+                auraHandle:InvalidateAuraNameSetCache()
+                self:RequestUnitFrameRefresh()
+                refreshList()
+            end)
+
+            listRows[#listRows + 1] = row
+            yOffset = yOffset + rowHeight
+        end
+
+        listChild:SetHeight(math.max(1, yOffset))
     end
 
-    local customInputLabel = page:CreateFontString(nil, "ARTWORK")
-    customInputLabel:SetPoint("TOPLEFT", spellDropdown or helpText, "BOTTOMLEFT", 0, -14)
-    setFontStringTextSafe(
-        customInputLabel,
-        L.CONFIG_PARTY_HEALER_CUSTOM_INPUT or "Add custom buff (spell name or spell ID)",
-        12
-    )
+    -- Add-spell input row.
+    local addLabel = page:CreateFontString(nil, "ARTWORK")
+    addLabel:SetPoint("TOPLEFT", listContainer, "BOTTOMLEFT", 0, -14)
+    setFontStringTextSafe(addLabel, L.CONFIG_AURAS_ADD_LABEL or "Add spell name", 12)
 
-    local customInput = createTextEditBox("mummuFramesConfigRaidHealerCustomInput", page, 250)
-    customInput:SetPoint("TOPLEFT", customInputLabel, "BOTTOMLEFT", 0, -6)
+    local addInput = createTextEditBox("mummuFramesConfigAurasAddInput", page, 220)
+    addInput:SetPoint("TOPLEFT", addLabel, "BOTTOMLEFT", 0, -6)
 
-    local addCustomButton = CreateFrame("Button", "mummuFramesConfigRaidHealerCustomAddButton", page, "UIPanelButtonTemplate")
-    addCustomButton:SetSize(64, 22)
-    addCustomButton:SetPoint("LEFT", customInput, "RIGHT", 8, 0)
-    if type(addCustomButton.SetText) == "function" then
-        addCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_ADD or "Add")
+    local addButton = CreateFrame("Button", "mummuFramesConfigAurasAddButton", page, "UIPanelButtonTemplate")
+    addButton:SetSize(64, 22)
+    addButton:SetPoint("LEFT", addInput, "RIGHT", 8, 0)
+    if type(addButton.SetText) == "function" then
+        addButton:SetText(L.CONFIG_AURAS_ADD or "Add")
     end
 
-    local removeCustomButton = CreateFrame(
-        "Button",
-        "mummuFramesConfigRaidHealerCustomRemoveButton",
-        page,
-        "UIPanelButtonTemplate"
-    )
-    removeCustomButton:SetSize(112, 22)
-    removeCustomButton:SetPoint("TOPLEFT", customInput, "BOTTOMLEFT", 0, -8)
-    if type(removeCustomButton.SetText) == "function" then
-        removeCustomButton:SetText(L.CONFIG_PARTY_HEALER_CUSTOM_REMOVE or "Remove selected custom")
+    local resetButton = CreateFrame("Button", "mummuFramesConfigAurasResetButton", page, "UIPanelButtonTemplate")
+    resetButton:SetSize(160, 22)
+    resetButton:SetPoint("TOPLEFT", addInput, "BOTTOMLEFT", 0, -8)
+    if type(resetButton.SetText) == "function" then
+        resetButton:SetText(L.CONFIG_AURAS_RESET or "Reset to class defaults")
     end
 
-    local function addCustomSpellFromInput()
-        local inputText = customInput and customInput:GetText() or nil
+    local function addSpellFromInput()
+        local inputText = addInput and addInput:GetText() or nil
         if type(inputText) ~= "string" then
             return
         end
@@ -3673,266 +3461,45 @@ function Configuration:BuildRaidHealerPage(page)
         if not inputText or inputText == "" then
             return
         end
-
-        local raidFrames = self.addon:GetModule("raidFrames")
-        if not raidFrames or type(raidFrames.AddCustomHealerSpell) ~= "function" then
+        local config = auraHandle and auraHandle:GetAurasConfig()
+        if not config then
             return
         end
-
-        local spellID, err = raidFrames:AddCustomHealerSpell(inputText, self._raidHealerSelectedGroup or "hots")
-        if spellID then
-            self._raidHealerSelectedSpellID = spellID
-            customInput:SetText("")
-            self:RefreshConfigWidgets()
-            self:RequestUnitFrameRefresh()
-            return
-        end
-
-        if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
-            local message = L.CONFIG_PARTY_HEALER_CUSTOM_INVALID or "Unable to add custom spell."
-            if err == "unknown_spell" then
-                message = L.CONFIG_PARTY_HEALER_CUSTOM_UNKNOWN or "Unknown spell. Use a valid spell name or spell ID."
+        config.allowedSpells = config.allowedSpells or {}
+        for _, existing in ipairs(config.allowedSpells) do
+            if existing == inputText then
+                addInput:SetText("")
+                return
             end
-            UIErrorsFrame:AddMessage(message, 1, 0.2, 0.2)
         end
+        config.allowedSpells[#config.allowedSpells + 1] = inputText
+        auraHandle:InvalidateAuraNameSetCache()
+        addInput:SetText("")
+        self:RequestUnitFrameRefresh()
+        refreshList()
     end
 
-    addCustomButton:SetScript("OnClick", addCustomSpellFromInput)
-    customInput:SetScript("OnEnterPressed", function(editBox)
-        addCustomSpellFromInput()
+    addButton:SetScript("OnClick", addSpellFromInput)
+    addInput:SetScript("OnEnterPressed", function(editBox)
+        addSpellFromInput()
         editBox:ClearFocus()
     end)
-    customInput:SetScript("OnEscapePressed", function(editBox)
+    addInput:SetScript("OnEscapePressed", function(editBox)
         editBox:ClearFocus()
     end)
 
-    removeCustomButton:SetScript("OnClick", function()
-        local spellEntry = self:GetSelectedRaidHealerSpellEntry()
-        if not spellEntry then
-            return
-        end
-
-        local raidFrames = self.addon:GetModule("raidFrames")
-        if not raidFrames or type(raidFrames.RemoveCustomHealerSpell) ~= "function" then
-            return
-        end
-
-        local removed = raidFrames:RemoveCustomHealerSpell(spellEntry.spellID)
-        if removed then
-            self._raidHealerSelectedSpellID = nil
-            self:RefreshConfigWidgets()
+    resetButton:SetScript("OnClick", function()
+        if auraHandle and type(auraHandle.ResetAurasToClassDefaults) == "function" then
+            auraHandle:ResetAurasToClassDefaults()
             self:RequestUnitFrameRefresh()
+            refreshList()
         end
     end)
 
-    local spellEnabled = self:CreateCheckbox(
-        "mummuFramesConfigRaidHealerSpellEnabled",
-        page,
-        L.CONFIG_PARTY_HEALER_SPELL_ENABLE or "Show selected spell",
-        removeCustomButton,
-        0,
-        -12
-    )
-    spellEnabled:SetScript("OnClick", function(button)
-        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
-        if not spellConfig then
-            button:SetChecked(false)
-            return
-        end
-        spellConfig.enabled = button:GetChecked() and true or false
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellAnchorControl = createLabeledDropdown(
-        "mummuFramesConfigRaidHealerSpellAnchorDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_ANCHOR or "Spell anchor",
-        spellEnabled
-    )
-    local spellAnchorDropdown = spellAnchorControl and spellAnchorControl.dropdown or nil
-    if spellAnchorDropdown then
-        self:InitializeRaidHealerAnchorDropdown(spellAnchorDropdown)
-    end
-
-    local spellStyleControl = createLabeledDropdown(
-        "mummuFramesConfigRaidHealerSpellStyleDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_STYLE or "Spell style",
-        spellAnchorDropdown or spellEnabled
-    )
-    local spellStyleDropdown = spellStyleControl and spellStyleControl.dropdown or nil
-    if spellStyleDropdown then
-        self:InitializeRaidHealerSpellStyleDropdown(spellStyleDropdown)
-    end
-
-    local spellX = self:CreateNumericControl(
-        page,
-        "RaidHealerSpellX",
-        L.CONFIG_PARTY_HEALER_X or "Spell X offset",
-        -200,
-        200,
-        1,
-        spellStyleDropdown or spellAnchorDropdown or spellEnabled,
-        20
-    )
-    self:BindNumericControl(spellX, function(value)
-        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.x = tonumber(value) or 0
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellY = self:CreateNumericControl(
-        page,
-        "RaidHealerSpellY",
-        L.CONFIG_PARTY_HEALER_Y or "Spell Y offset",
-        -200,
-        200,
-        1,
-        spellX.slider
-    )
-    self:BindNumericControl(spellY, function(value)
-        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.y = tonumber(value) or 0
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellSize = self:CreateNumericControl(
-        page,
-        "RaidHealerSpellSize",
-        L.CONFIG_PARTY_HEALER_SIZE or "Spell size",
-        6,
-        48,
-        1,
-        spellY.slider
-    )
-    self:BindNumericControl(spellSize, function(value)
-        local spellConfig = self:GetSelectedRaidHealerSpellConfig()
-        if not spellConfig then
-            return
-        end
-        spellConfig.size = math.floor((tonumber(value) or 14) + 0.5)
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local spellColor = createColorControl(
-        page,
-        L.CONFIG_PARTY_HEALER_SPELL_COLOR or "Spell rectangle color",
-        spellSize.slider
-    )
-    if spellColor and spellColor.button then
-        spellColor.button:SetScript("OnClick", function()
-            local config = self:GetRaidHealerConfig()
-            local spellConfig, spellEntry = self:GetSelectedRaidHealerSpellConfig()
-            if not config or not spellConfig then
-                return
-            end
-
-            local groupKey = spellEntry and spellEntry.group or "hots"
-            local groupConfig = config.groups and config.groups[groupKey] or nil
-            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            local baseColor = spellConfig.color or (groupConfig and groupConfig.color) or defaults.color
-
-            openColorPicker(baseColor, function(r, g, b, a)
-                spellConfig.color = spellConfig.color or {}
-                spellConfig.color.r = clampColorComponent(r, defaults.color.r)
-                spellConfig.color.g = clampColorComponent(g, defaults.color.g)
-                spellConfig.color.b = clampColorComponent(b, defaults.color.b)
-                spellConfig.color.a = clampColorComponent(a, defaults.color.a)
-                self:SetColorControlValue(spellColor, spellConfig.color)
-                self:RequestUnitFrameRefresh()
-            end)
-        end)
-    end
-
-    local groupControl = createLabeledDropdown(
-        "mummuFramesConfigRaidHealerGroupDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP or "Group defaults",
-        spellColor and spellColor.button or spellSize.slider
-    )
-    local groupDropdown = groupControl and groupControl.dropdown or nil
-    if groupDropdown then
-        self:InitializeRaidHealerGroupDropdown(groupDropdown)
-    end
-
-    local groupStyleControl = createLabeledDropdown(
-        "mummuFramesConfigRaidHealerGroupStyleDropdown",
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP_STYLE or "Group style",
-        groupDropdown or (spellColor and spellColor.button) or spellSize.slider
-    )
-    local groupStyleDropdown = groupStyleControl and groupStyleControl.dropdown or nil
-    if groupStyleDropdown then
-        self:InitializeRaidHealerGroupStyleDropdown(groupStyleDropdown)
-    end
-
-    local groupSize = self:CreateNumericControl(
-        page,
-        "RaidHealerGroupSize",
-        L.CONFIG_PARTY_HEALER_GROUP_SIZE or "Group size",
-        6,
-        48,
-        1,
-        groupStyleDropdown or groupDropdown or spellSize.slider,
-        20
-    )
-    self:BindNumericControl(groupSize, function(value)
-        local _, groupConfig = self:GetSelectedRaidHealerGroupConfig()
-        if not groupConfig then
-            return
-        end
-        groupConfig.size = math.floor((tonumber(value) or 14) + 0.5)
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local groupColor = createColorControl(
-        page,
-        L.CONFIG_PARTY_HEALER_GROUP_COLOR or "Group rectangle color",
-        groupSize.slider
-    )
-    if groupColor and groupColor.button then
-        groupColor.button:SetScript("OnClick", function()
-            local groupKey, groupConfig = self:GetSelectedRaidHealerGroupConfig()
-            if not groupConfig then
-                return
-            end
-            local defaults = PARTY_HEALER_GROUP_DEFAULTS[groupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            local baseColor = groupConfig.color or defaults.color
-            openColorPicker(baseColor, function(r, g, b, a)
-                groupConfig.color = groupConfig.color or {}
-                groupConfig.color.r = clampColorComponent(r, defaults.color.r)
-                groupConfig.color.g = clampColorComponent(g, defaults.color.g)
-                groupConfig.color.b = clampColorComponent(b, defaults.color.b)
-                groupConfig.color.a = clampColorComponent(a, defaults.color.a)
-                self:SetColorControlValue(groupColor, groupConfig.color)
-                self:RequestUnitFrameRefresh()
-            end)
-        end)
-    end
-
-    self.widgets.raidHealer = {
-        enabled = enabled,
-        spellDropdown = spellDropdown,
-        customInput = customInput,
-        addCustomButton = addCustomButton,
-        removeCustomButton = removeCustomButton,
-        spellEnabled = spellEnabled,
-        spellAnchorDropdown = spellAnchorDropdown,
-        spellStyleDropdown = spellStyleDropdown,
-        spellX = spellX,
-        spellY = spellY,
-        spellSize = spellSize,
-        spellColor = spellColor,
-        groupDropdown = groupDropdown,
-        groupStyleDropdown = groupStyleDropdown,
-        groupSize = groupSize,
-        groupColor = groupColor,
+    self.widgets.auras = {
+        enabled     = enabled,
+        size        = sizeControl,
+        refreshList = refreshList,
     }
 end
 
@@ -4000,7 +3567,17 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     local includePlayer = nil
     local showSelfWithoutGroup = nil
-    local buffsAnchor = hideBlizzard or enabled
+    local auraControlsAllowed = unitToken ~= "party" and unitToken ~= "raid"
+    local auraAnchor = hideBlizzard or enabled
+    local buffsEnabled = nil
+    local buffsMax = nil
+    local buffsSize = nil
+    local buffsPositionControl = nil
+    local buffsSourceControl = nil
+    local debuffsPositionControl = nil
+    local layoutAnchor = nil
+    local layoutAnchorXOffset = 20
+
     if unitToken == "party" then
         includePlayer = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "IncludePlayer",
@@ -4030,94 +3607,77 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RequestUnitFrameRefresh()
         end)
 
-        buffsAnchor = showSelfWithoutGroup or includePlayer
+        auraAnchor = showSelfWithoutGroup or includePlayer
     end
 
-    local buffsEnabled = self:CreateCheckbox(
-        "mummuFramesConfig" .. unitToken .. "BuffsEnabled",
-        page,
-        L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
-        buffsAnchor,
-        0,
-        -8
-    )
-    -- Handle OnClick script callback.
-    buffsEnabled:SetScript("OnClick", function(button)
-        dataHandle:SetUnitConfig(unitToken, "aura.buffs.enabled", button:GetChecked() and true or false)
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local buffsMax = self:CreateNumericControl(
-        page,
-        unitToken .. "BuffsMax",
-        L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
-        1,
-        16,
-        1,
-        buffsEnabled,
-        20
-    )
-    -- Resolve value label. Deadline still theoretical.
-    self:BindNumericControl(buffsMax, function(value)
-        dataHandle:SetUnitConfig(unitToken, "aura.buffs.max", math.floor((value or 0) + 0.5))
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local buffsSize = self:CreateNumericControl(
-        page,
-        unitToken .. "BuffsSize",
-        L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
-        10,
-        48,
-        1,
-        buffsMax.slider
-    )
-    -- Resolve value label.
-    self:BindNumericControl(buffsSize, function(value)
-        dataHandle:SetUnitConfig(unitToken, "aura.buffs.size", math.floor((value or 0) + 0.5))
-        self:RequestUnitFrameRefresh()
-    end)
-
-    local layoutAnchor = buffsSize.slider
-    local layoutAnchorXOffset = 20
-
-    local buffsPositionControl = createLabeledDropdown(
-        "mummuFramesConfig" .. unitToken .. "BuffPositionDropdown",
-        page,
-        L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
-        layoutAnchor
-    )
-    if buffsPositionControl and buffsPositionControl.dropdown then
-        self:InitializeBuffPositionDropdown(buffsPositionControl.dropdown, unitToken)
-        layoutAnchor = buffsPositionControl.dropdown
-        layoutAnchorXOffset = 20
-    end
-
-    local buffsSourceControl = createLabeledDropdown(
-        "mummuFramesConfig" .. unitToken .. "BuffSourceDropdown",
-        page,
-        L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
-        layoutAnchor
-    )
-    if buffsSourceControl and buffsSourceControl.dropdown then
-        self:InitializeBuffSourceDropdown(buffsSourceControl.dropdown, unitToken)
-        layoutAnchor = buffsSourceControl.dropdown
-        layoutAnchorXOffset = 20
-    end
-
-    local debuffsPositionControl = nil
-    if unitToken == "party" or unitToken == "raid" then
-        debuffsPositionControl = createLabeledDropdown(
-            "mummuFramesConfig" .. unitToken .. "DebuffPositionDropdown",
+    if auraControlsAllowed then
+        buffsEnabled = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "BuffsEnabled",
             page,
-            L.CONFIG_UNIT_DEBUFFS_POSITION or "Debuff position",
+            L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
+            auraAnchor,
+            0,
+            -8
+        )
+        buffsEnabled:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.enabled", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        buffsMax = self:CreateNumericControl(
+            page,
+            unitToken .. "BuffsMax",
+            L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
+            1,
+            16,
+            1,
+            buffsEnabled,
+            20
+        )
+        self:BindNumericControl(buffsMax, function(value)
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.max", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        buffsSize = self:CreateNumericControl(
+            page,
+            unitToken .. "BuffsSize",
+            L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
+            10,
+            48,
+            1,
+            buffsMax.slider
+        )
+        self:BindNumericControl(buffsSize, function(value)
+            dataHandle:SetUnitConfig(unitToken, "aura.buffs.size", math.floor((value or 0) + 0.5))
+            self:RequestUnitFrameRefresh()
+        end)
+
+        layoutAnchor = buffsSize.slider
+
+        buffsPositionControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "BuffPositionDropdown",
+            page,
+            L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
             layoutAnchor
         )
-        if debuffsPositionControl and debuffsPositionControl.dropdown then
-            self:InitializeDebuffPositionDropdown(debuffsPositionControl.dropdown, unitToken)
-            layoutAnchor = debuffsPositionControl.dropdown
-            layoutAnchorXOffset = 20
+        if buffsPositionControl and buffsPositionControl.dropdown then
+            self:InitializeBuffPositionDropdown(buffsPositionControl.dropdown, unitToken)
+            layoutAnchor = buffsPositionControl.dropdown
         end
+
+        buffsSourceControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "BuffSourceDropdown",
+            page,
+            L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
+            layoutAnchor
+        )
+        if buffsSourceControl and buffsSourceControl.dropdown then
+            self:InitializeBuffSourceDropdown(buffsSourceControl.dropdown, unitToken)
+            layoutAnchor = buffsSourceControl.dropdown
+        end
+    else
+        layoutAnchor = auraAnchor
     end
 
     local width = self:CreateNumericControl(
@@ -4832,6 +4392,12 @@ function Configuration:CreateScrollableTabPage(parent)
     return page, content
 end
 
+-- ============================================================================
+-- CONFIGURATION REFRESH & STATE MANAGEMENT
+-- ============================================================================
+-- Methods for updating UI widget states based on current configuration,
+-- refreshing profile lists, and notifying other modules of setting changes.
+
 -- Refresh config widgets.
 function Configuration:RefreshConfigWidgets()
     if not self.panel then
@@ -4843,6 +4409,9 @@ function Configuration:RefreshConfigWidgets()
         return
     end
 
+    if profile then
+        profile.style = profile.style or {}
+    end
     local style = profile.style or {}
 
     if self.widgets.enableAddon then
@@ -4901,148 +4470,18 @@ function Configuration:RefreshConfigWidgets()
         end
     end
 
-    local partyHealerWidgets = self.widgets.partyHealer
-    if partyHealerWidgets then
-        local partyHealerConfig = self:GetPartyHealerConfig()
-        local spellConfig, spellEntry = self:GetSelectedPartyHealerSpellConfig()
-        local selectedGroupKey, selectedGroupConfig = self:GetSelectedPartyHealerGroupConfig()
-
-        if partyHealerWidgets.enabled then
-            partyHealerWidgets.enabled:SetChecked(partyHealerConfig and partyHealerConfig.enabled ~= false)
+    local aurasWidgets = self.widgets.auras
+    if aurasWidgets then
+        local config = ns.AuraHandle and ns.AuraHandle:GetAurasConfig()
+        if aurasWidgets.enabled then
+            aurasWidgets.enabled:SetChecked(config and config.enabled ~= false)
         end
-        if partyHealerWidgets.spellDropdown then
-            self:RefreshSelectControlText(partyHealerWidgets.spellDropdown, true)
+        if aurasWidgets.size then
+            self:SetNumericControlValue(aurasWidgets.size, config and config.size or 14)
         end
-        if partyHealerWidgets.spellEnabled then
-            partyHealerWidgets.spellEnabled:SetChecked(spellConfig and spellConfig.enabled ~= false or false)
+        if type(aurasWidgets.refreshList) == "function" then
+            aurasWidgets.refreshList()
         end
-        if partyHealerWidgets.spellAnchorDropdown then
-            self:RefreshSelectControlText(partyHealerWidgets.spellAnchorDropdown, false)
-        end
-        if partyHealerWidgets.spellStyleDropdown then
-            self:RefreshSelectControlText(partyHealerWidgets.spellStyleDropdown, false)
-        end
-
-        local spellGroupKey = spellEntry and spellEntry.group or "hots"
-        local spellGroupDefaults = PARTY_HEALER_GROUP_DEFAULTS[spellGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-        local spellGroupConfig = partyHealerConfig
-            and partyHealerConfig.groups
-            and partyHealerConfig.groups[spellGroupKey]
-            or spellGroupDefaults
-
-        if partyHealerWidgets.spellX then
-            self:SetNumericControlValue(partyHealerWidgets.spellX, spellConfig and spellConfig.x or 0)
-        end
-        if partyHealerWidgets.spellY then
-            self:SetNumericControlValue(partyHealerWidgets.spellY, spellConfig and spellConfig.y or 0)
-        end
-        if partyHealerWidgets.spellSize then
-            self:SetNumericControlValue(
-                partyHealerWidgets.spellSize,
-                spellConfig and spellConfig.size or (spellGroupConfig and spellGroupConfig.size) or spellGroupDefaults.size
-            )
-        end
-        if partyHealerWidgets.spellColor then
-            self:SetColorControlValue(
-                partyHealerWidgets.spellColor,
-                spellConfig and spellConfig.color or (spellGroupConfig and spellGroupConfig.color) or spellGroupDefaults.color
-            )
-        end
-
-        if partyHealerWidgets.groupDropdown then
-            self:RefreshSelectControlText(partyHealerWidgets.groupDropdown, false)
-        end
-        if partyHealerWidgets.groupStyleDropdown then
-            self:RefreshSelectControlText(partyHealerWidgets.groupStyleDropdown, false)
-        end
-        if partyHealerWidgets.groupSize then
-            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            self:SetNumericControlValue(
-                partyHealerWidgets.groupSize,
-                selectedGroupConfig and selectedGroupConfig.size or groupDefaults.size
-            )
-        end
-        if partyHealerWidgets.groupColor then
-            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            self:SetColorControlValue(
-                partyHealerWidgets.groupColor,
-                selectedGroupConfig and selectedGroupConfig.color or groupDefaults.color
-            )
-        end
-
-        self:RefreshPartyHealerControlStates()
-    end
-
-    local raidHealerWidgets = self.widgets.raidHealer
-    if raidHealerWidgets then
-        local raidHealerConfig = self:GetRaidHealerConfig()
-        local spellConfig, spellEntry = self:GetSelectedRaidHealerSpellConfig()
-        local selectedGroupKey, selectedGroupConfig = self:GetSelectedRaidHealerGroupConfig()
-
-        if raidHealerWidgets.enabled then
-            raidHealerWidgets.enabled:SetChecked(raidHealerConfig and raidHealerConfig.enabled ~= false)
-        end
-        if raidHealerWidgets.spellDropdown then
-            self:RefreshSelectControlText(raidHealerWidgets.spellDropdown, true)
-        end
-        if raidHealerWidgets.spellEnabled then
-            raidHealerWidgets.spellEnabled:SetChecked(spellConfig and spellConfig.enabled ~= false or false)
-        end
-        if raidHealerWidgets.spellAnchorDropdown then
-            self:RefreshSelectControlText(raidHealerWidgets.spellAnchorDropdown, false)
-        end
-        if raidHealerWidgets.spellStyleDropdown then
-            self:RefreshSelectControlText(raidHealerWidgets.spellStyleDropdown, false)
-        end
-
-        local spellGroupKey = spellEntry and spellEntry.group or "hots"
-        local spellGroupDefaults = PARTY_HEALER_GROUP_DEFAULTS[spellGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-        local spellGroupConfig = raidHealerConfig
-            and raidHealerConfig.groups
-            and raidHealerConfig.groups[spellGroupKey]
-            or spellGroupDefaults
-
-        if raidHealerWidgets.spellX then
-            self:SetNumericControlValue(raidHealerWidgets.spellX, spellConfig and spellConfig.x or 0)
-        end
-        if raidHealerWidgets.spellY then
-            self:SetNumericControlValue(raidHealerWidgets.spellY, spellConfig and spellConfig.y or 0)
-        end
-        if raidHealerWidgets.spellSize then
-            self:SetNumericControlValue(
-                raidHealerWidgets.spellSize,
-                spellConfig and spellConfig.size or (spellGroupConfig and spellGroupConfig.size) or spellGroupDefaults.size
-            )
-        end
-        if raidHealerWidgets.spellColor then
-            self:SetColorControlValue(
-                raidHealerWidgets.spellColor,
-                spellConfig and spellConfig.color or (spellGroupConfig and spellGroupConfig.color) or spellGroupDefaults.color
-            )
-        end
-
-        if raidHealerWidgets.groupDropdown then
-            self:RefreshSelectControlText(raidHealerWidgets.groupDropdown, false)
-        end
-        if raidHealerWidgets.groupStyleDropdown then
-            self:RefreshSelectControlText(raidHealerWidgets.groupStyleDropdown, false)
-        end
-        if raidHealerWidgets.groupSize then
-            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            self:SetNumericControlValue(
-                raidHealerWidgets.groupSize,
-                selectedGroupConfig and selectedGroupConfig.size or groupDefaults.size
-            )
-        end
-        if raidHealerWidgets.groupColor then
-            local groupDefaults = PARTY_HEALER_GROUP_DEFAULTS[selectedGroupKey] or PARTY_HEALER_GROUP_DEFAULTS.hots
-            self:SetColorControlValue(
-                raidHealerWidgets.groupColor,
-                selectedGroupConfig and selectedGroupConfig.color or groupDefaults.color
-            )
-        end
-
-        self:RefreshRaidHealerControlStates()
     end
 
     local dataHandle = self.addon:GetModule("dataHandle")
@@ -5058,7 +4497,7 @@ function Configuration:RefreshConfigWidgets()
                 unitWidgets.includePlayer:SetChecked(unitConfig.showPlayer ~= false)
             end
             if unitWidgets.showSelfWithoutGroup then
-                unitWidgets.showSelfWithoutGroup:SetChecked(unitConfig.showSelfWithoutGroup == true)
+                unitWidgets.showSelfWithoutGroup:SetChecked(unitConfig.showSelfWithoutGroup ~= false)
             end
             if unitWidgets.hideBlizzard then
                 unitWidgets.hideBlizzard:SetChecked(unitConfig.hideBlizzardFrame == true)
@@ -5203,8 +4642,8 @@ function Configuration:BuildTabs(subtitle)
         }
         if token == "raid" then
             tabs[#tabs + 1] = {
-                key = "lovehealers",
-                label = L.CONFIG_TAB_LOVE_HEALERS or "Love Healers",
+                key = "auras",
+                label = L.CONFIG_TAB_AURAS or "Auras",
             }
         end
     end
@@ -5278,8 +4717,8 @@ function Configuration:BuildTabs(subtitle)
             self:BuildGlobalPage(content)
         elseif tab.key == "profiles" then
             self:BuildProfilesPage(content)
-        elseif tab.key == "lovehealers" then
-            self:BuildPartyHealerPage(content)
+        elseif tab.key == "auras" then
+            self:BuildAurasPage(content)
         else
             self:BuildUnitPage(content, tab.key)
         end
@@ -5547,7 +4986,7 @@ function Configuration:CreateMinimapLauncher()
             local deltaX = cursorX - centerX
             local deltaY = cursorY - centerY
 
-            local angle = math.deg(math.atan(deltaY, deltaX))
+            local angle = math.deg(math.atan2(deltaY, deltaX))
             if angle < 0 then
                 angle = angle + 360
             end

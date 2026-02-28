@@ -1,3 +1,6 @@
+-- Centralized style/media resolver.
+-- Handles font/texture discovery, profile overrides, and pixel-perfect snapping.
+
 local _, ns = ...
 
 -- Create table holding style.

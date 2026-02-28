@@ -1,27 +1,37 @@
+-- Misc shared helpers:
+-- - numeric coercion/clamping
+-- - formatted output
+-- - deferred execution queue for combat-lockdown-safe updates
+
 local _, ns = ...
 
 -- Create table holding util.
 local Util = {}
--- Return input plus zero.
-local function addZero(input)
-    return input + 0
-end
 
 -- Return safe numeric conversion.
 local function toNumberSafe(input, fallback)
     if type(input) == "number" then
-        local okDirect, directValue = pcall(addZero, input)
-        if okDirect and type(directValue) == "number" then
-            return directValue
+        local okString, asString = pcall(tostring, input)
+        if okString and type(asString) == "string" then
+            local parsed = tonumber(asString)
+            if type(parsed) == "number" then
+                return parsed
+            end
         end
+        return fallback
+    end
+
+    if type(input) == "string" then
+        local parsed = tonumber(input)
+        if type(parsed) == "number" then
+            return parsed
+        end
+        return fallback
     end
 
     local okTonumber, coerced = pcall(tonumber, input)
     if okTonumber and type(coerced) == "number" then
-        local okCoerced, numericValue = pcall(addZero, coerced)
-        if okCoerced and type(numericValue) == "number" then
-            return numericValue
-        end
+        return coerced
     end
 
     return fallback

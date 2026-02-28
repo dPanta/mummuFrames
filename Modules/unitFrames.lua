@@ -1,12 +1,38 @@
+-- ============================================================================
+-- UNIT FRAMES MODULE
+-- ============================================================================
+-- Handles player/pet/target/focus style frames: event routing, visibility,
+-- status/cast updates, and detached power element positioning.
+
 local _, ns = ...
 
 local addon = _G.mummuFrames
 local L = ns.L
 local Style = ns.Style
 local Util = ns.Util
+local AuraSafety = ns.AuraSafety
 
 -- Create class holding unit frames behavior.
 local UnitFrames = ns.Object:Extend()
+
+---@class mummuEditModeSelection : Frame
+---@field Label FontString
+---@field parentFrame Frame?
+---@field _fallbackBorder Texture?
+
+---@class SecondaryPowerResource
+---@field powerType number?
+---@field maxIcons number
+---@field texture string
+---@field usesRuneCooldownAPI boolean?
+---@field powerCap number?
+---@field auraSpellID number?
+---@field auraFilter string?
+---@field usesAuraStacks boolean?
+---@field displayMaxIcons number?
+---@field overflowTexture string?
+---@field allowedSpecIDs table<number, boolean>?
+
 -- Create table holding frame order.
 local FRAME_ORDER = {
     "player",
@@ -59,98 +85,17 @@ local TEST_NAME_BY_UNIT = {
     focus = L.UNIT_TEST_FOCUS or "Focus",
     focustarget = L.UNIT_TEST_FOCUSTARGET or "Focus Target",
 }
--- Create table holding aura filter by section.
-local AURA_FILTER_BY_SECTION = {
-    buffs = "HELPFUL",
-    debuffs = "HARMFUL",
-}
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
-local MAX_AURA_SCAN = 40
--- Create table holding modern aura api by unit.
-local MODERN_AURA_API_BY_UNIT = {}
--- Create table holding important party buff spell ids.
-local IMPORTANT_PARTY_BUFF_SPELL_IDS = {
-    17, -- Power Word: Shield
-    139, -- Renew
-    774, -- Rejuvenation
-    974, -- Earth Shield
-    1022, -- Blessing of Protection
-    1044, -- Blessing of Freedom
-    5277, -- Evasion
-    102342, -- Ironbark
-    104773, -- Unending Resolve
-    115175, -- Soothing Mist
-    116849, -- Life Cocoon
-    118038, -- Die by the Sword
-    119611, -- Renewing Mist
-    120954, -- Fortifying Brew
-    122278, -- Dampen Harm
-    122783, -- Diffuse Magic
-    124682, -- Enveloping Mist
-    12975, -- Last Stand
-    19236, -- Desperate Prayer
-    22812, -- Barkskin
-    22842, -- Frenzied Regeneration
-    31224, -- Cloak of Shadows
-    33076, -- Prayer of Mending
-    33206, -- Pain Suppression
-    33763, -- Lifebloom
-    3411, -- Intervene
-    45438, -- Ice Block
-    47788, -- Guardian Spirit
-    48438, -- Wild Growth
-    48707, -- Anti-Magic Shell
-    48792, -- Icebound Fortitude
-    51052, -- Anti-Magic Zone
-    61336, -- Survival Instincts
-    61295, -- Riptide
-    642, -- Divine Shield
-    6940, -- Blessing of Sacrifice
-    871, -- Shield Wall
-    98008, -- Spirit Link Totem
-    102351, -- Cenarion Ward
-    186265, -- Aspect of the Turtle
-    194384, -- Atonement
-    194679, -- Rune Tap
-    196555, -- Netherwalk
-    196718, -- Darkness
-    212800, -- Blur
-    223306, -- Bestow Faith
-    264735, -- Survival of the Fittest
-    272679, -- Fortitude of the Bear
-    355941, -- Dream Breath
-    357170, -- Time Dilation
-    364343, -- Echo
-    366155, -- Reversion
-}
-local IMPORTANT_PARTY_BUFF_SPELLS = {}
-for i = 1, #IMPORTANT_PARTY_BUFF_SPELL_IDS do
-    IMPORTANT_PARTY_BUFF_SPELLS[IMPORTANT_PARTY_BUFF_SPELL_IDS[i]] = true
-end
-local importantPartyBuffSpellSetCache = nil
-local importantPartyBuffSpellSetCacheRevision = nil
-local function addZero(value)
-    return value + 0
-end
 local function roundToNearestInteger(value)
     return math.floor(value + 0.5)
 end
 local function valuesEqual(left, right)
     return left == right
 end
-local function boolFromValue(value)
-    return value and true or false
-end
 local function getSafeBooleanValue(value, fallback)
-    if type(value) ~= "boolean" then
-        return fallback
+    if type(value) == "boolean" then
+        return value
     end
-
-    local okValue, normalized = pcall(boolFromValue, value)
-    if okValue then
-        return normalized
-    end
-
     return fallback
 end
 
@@ -241,6 +186,7 @@ local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
 end
 
 -- Create table holding secondary power by class.
+---@type table<string, SecondaryPowerResource>
 local SECONDARY_POWER_BY_CLASS = {
     -- Create table holding monk.
     MONK = {
@@ -309,10 +255,19 @@ local SECONDARY_POWER_BY_CLASS = {
     },
 }
 
--- Safe bool. Deadline still theoretical.
-local function safeBool(val)
-    local ok, result = pcall(boolFromValue, val)
-    return ok and result or false
+-- Safe bool. Evaluate boolean-like inputs inside pcall to avoid hard errors when
+-- WoW returns secret booleans from APIs like UnitCastingInfo/UnitChannelInfo.
+local function safeBool(val, fallback)
+    local okEval, evaluated = pcall(function()
+        if val then
+            return true
+        end
+        return false
+    end)
+    if okEval then
+        return evaluated
+    end
+    return fallback == true
 end
 
 -- Resolve health color.
@@ -355,23 +310,8 @@ local function isUnitOutOfRange(unitToken)
         return false
     end
 
-    if type(UnitInRange) == "function" then
-        local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
-        if inRange ~= nil then
-            return inRange == false
-        end
-    end
-
-    if type(CheckInteractDistance) == "function" then
-        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
-        if okDistance then
-            local isWithinDistance = getSafeBooleanValue(withinDistance, nil)
-            if isWithinDistance ~= nil then
-                return isWithinDistance == false
-            end
-        end
-    end
-
+    -- Range APIs can produce secret booleans in insecure code paths.
+    -- Avoid evaluating them here to prevent combat taint propagation.
     return false
 end
 
@@ -432,265 +372,70 @@ local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testM
     frame.AbsorbOverlayBar:Show()
 end
 
--- Normalize aura data.
-local function normalizeAuraData(auraData)
-    if type(auraData) ~= "table" then
+local function normalizeSpellID(value)
+    local numeric = tonumber(value)
+    if type(numeric) ~= "number" then
         return nil
     end
-
-    local icon = auraData.icon or auraData.iconFileID or auraData.texture
-    if not icon then
+    local rounded = math.floor(numeric + 0.5)
+    if rounded <= 0 then
         return nil
     end
-
-    return {
-        name = auraData.name,
-        icon = icon,
-        count = auraData.applications or auraData.charges or auraData.count,
-        duration = auraData.duration,
-        expirationTime = auraData.expirationTime,
-        debuffType = auraData.dispelName or auraData.debuffType,
-        spellId = auraData.spellId,
-    }
-end
-
--- Return aura data by index.
-local function getAuraDataByIndex(unitToken, index, filter)
-    if C_UnitAuras and type(C_UnitAuras.GetAuraDataByIndex) == "function" then
-        local modernSupport = MODERN_AURA_API_BY_UNIT[unitToken]
-        if modernSupport ~= false then
-            local auraData
-
-            if modernSupport == true then
-                auraData = C_UnitAuras.GetAuraDataByIndex(unitToken, index, filter)
-            else
-                local ok, result = pcall(C_UnitAuras.GetAuraDataByIndex, unitToken, index, filter)
-                if ok then
-                    MODERN_AURA_API_BY_UNIT[unitToken] = true
-                    auraData = result
-                else
-                    MODERN_AURA_API_BY_UNIT[unitToken] = false
-                end
-            end
-
-            local normalized = normalizeAuraData(auraData)
-            if normalized then
-                return normalized
-            end
-        end
-    end
-
-    if type(UnitAura) == "function" then
-        local name, icon, count, debuffType, duration, expirationTime, _, _, _, spellId = UnitAura(unitToken, index, filter)
-        if icon then
-            return {
-                name = name,
-                icon = icon,
-                count = count,
-                duration = duration,
-                expirationTime = expirationTime,
-                debuffType = debuffType,
-                spellId = spellId,
-            }
-        end
-    end
-
-    return nil
-end
-
--- Return important party buff spell set, including custom party healer spells.
-local function getImportantPartyBuffSpellSet(dataHandle)
-    local partyFrames = addon and type(addon.GetModule) == "function" and addon:GetModule("partyFrames") or nil
-    local healerRevision = nil
-    if partyFrames and type(partyFrames.GetHealerCacheRevision) == "function" then
-        local okRevision, revision = pcall(partyFrames.GetHealerCacheRevision, partyFrames)
-        if okRevision and type(revision) == "number" then
-            healerRevision = revision
-        end
-    end
-
-    if
-        healerRevision ~= nil
-        and type(importantPartyBuffSpellSetCache) == "table"
-        and importantPartyBuffSpellSetCacheRevision == healerRevision
-    then
-        return importantPartyBuffSpellSetCache
-    end
-
-    -- Create table holding spell ids.
-    local spellSet = {}
-    for spellID in pairs(IMPORTANT_PARTY_BUFF_SPELLS) do
-        spellSet[spellID] = true
-    end
-
-    if not dataHandle then
-        return spellSet
-    end
-
-    if partyFrames and type(partyFrames.GetAvailableHealerSpells) == "function" then
-        local okAvailable, availableSpells = pcall(partyFrames.GetAvailableHealerSpells, partyFrames)
-        if okAvailable and type(availableSpells) == "table" then
-            for i = 1, #availableSpells do
-                local spellID = availableSpells[i] and tonumber(availableSpells[i].spellID) or nil
-                spellID = spellID and math.floor(spellID + 0.5) or nil
-                if spellID and spellID > 0 then
-                    spellSet[spellID] = true
-                end
-            end
-        end
-    end
-
-    local profile = dataHandle:GetProfile()
-    local healerConfig = nil
-    if profile then
-        healerConfig = profile.loveHealers or profile.partyHealer or profile.raidHealer
-    end
-    local customSpells = healerConfig and healerConfig.customSpells or nil
-    if type(customSpells) ~= "table" then
-        return spellSet
-    end
-
-    for key, entry in pairs(customSpells) do
-        local spellID = tonumber(key)
-        if type(entry) == "table" and tonumber(entry.spellID) then
-            spellID = tonumber(entry.spellID)
-        end
-        spellID = spellID and math.floor(spellID + 0.5) or nil
-        if spellID and spellID > 0 then
-            spellSet[spellID] = true
-        end
-    end
-
-    if healerRevision ~= nil then
-        importantPartyBuffSpellSetCache = spellSet
-        importantPartyBuffSpellSetCacheRevision = healerRevision
-    end
-    return spellSet
-end
-
-local normalizeSpellID
-local function getSafeNumericValue(value)
-    local numeric = nil
-    if type(value) == "number" then
-        local okDirect, direct = pcall(addZero, value)
-        if okDirect and type(direct) == "number" then
-            numeric = direct
-        end
-    end
-
-    if numeric == nil then
-        local coerced = tonumber(value)
-        if type(coerced) == "number" then
-            local okCoerced, normalized = pcall(addZero, coerced)
-            if okCoerced and type(normalized) == "number" then
-                numeric = normalized
-            end
-        end
-    end
-
-    if type(numeric) == "number" then
-        return numeric
-    end
-    return nil
-end
-
--- Return whether aura should be shown when using important-party-buffs filter.
-local function isImportantPartyBuffAura(auraData, importantSpellSet)
-    if type(auraData) ~= "table" or type(importantSpellSet) ~= "table" then
-        return false
-    end
-
-    local spellID = normalizeSpellID(auraData.spellId)
-    if not spellID then
-        return false
-    end
-
-    return importantSpellSet[spellID] == true
-end
-
--- Return normalized spell id.
-normalizeSpellID = function(value)
-    local numeric = getSafeNumericValue(value)
-    if not numeric then
-        return nil
-    end
-
-    local okRound, rounded = pcall(roundToNearestInteger, numeric)
-    if not okRound or type(rounded) ~= "number" then
-        return nil
-    end
-
-    local okPositive, isPositive = pcall(function(v)
-        return v > 0
-    end, rounded)
-    if not okPositive or not isPositive then
-        return nil
-    end
-
     return rounded
-end
-
--- Return active tracked party healer spell set.
-local function getActiveTrackedPartyHealerSpellSet(addonRef)
-    if not addonRef or type(addonRef.GetModule) ~= "function" then
-        return nil
-    end
-
-    local partyFrames = addonRef:GetModule("partyFrames")
-    if not partyFrames or type(partyFrames.GetActiveTrackedHealerSpellSet) ~= "function" then
-        return nil
-    end
-
-    local okSet, spellSet = pcall(partyFrames.GetActiveTrackedHealerSpellSet, partyFrames)
-    if okSet and type(spellSet) == "table" then
-        return spellSet
-    end
-
-    return nil
-end
-
--- Aura matches spell.
-local function auraMatchesSpell(auraData, wantedSpellID, wantedSpellName)
-    if type(auraData) ~= "table" then
-        return false
-    end
-
-    if auraData.spellId ~= nil then
-        local okMatch, matchesSpellID = pcall(valuesEqual, auraData.spellId, wantedSpellID)
-        if okMatch and matchesSpellID then
-            return true
-        end
-    end
-
-    return wantedSpellName and auraData.name == wantedSpellName
 end
 
 -- Return auras by spell id.
 local function getAurasBySpellID(unitToken, filter, spellID)
-    if not unitToken or not filter or type(spellID) ~= "number" then
-        return {}
+    local normalizedSpellID = normalizeSpellID(spellID)
+    if not normalizedSpellID or type(unitToken) ~= "string" then
+        return {}, false
     end
 
-    local wantedSpellID = spellID
-    local wantedSpellName = nil
-    if type(GetSpellInfo) == "function" then
-        wantedSpellName = GetSpellInfo(wantedSpellID)
+    if unitToken ~= "player" then
+        return {}, false
+    end
+    if type(filter) == "string" and not string.find(filter, "HELPFUL", 1, true) then
+        return {}, false
     end
 
-    -- Create table holding matches.
-    local matches = {}
-    for auraIndex = 1, SPELL_AURA_SCAN_MAX do
-        local auraData = getAuraDataByIndex(unitToken, auraIndex, filter)
-        if not auraData then
-            break
+    local auraData = nil
+    local queryRestricted = false
+    if AuraSafety and type(AuraSafety.GetPlayerAuraBySpellIDSafe) == "function" then
+        auraData, queryRestricted = AuraSafety:GetPlayerAuraBySpellIDSafe(normalizedSpellID)
+    elseif C_UnitAuras and type(C_UnitAuras.GetPlayerAuraBySpellID) == "function" then
+        local ok, result = pcall(C_UnitAuras.GetPlayerAuraBySpellID, normalizedSpellID)
+        if ok and type(result) == "table" then
+            auraData = result
         end
-
-        if auraMatchesSpell(auraData, wantedSpellID, wantedSpellName) then
-            matches[#matches + 1] = auraData
-        end
     end
 
-    return matches
+    if type(auraData) ~= "table" then
+        return {}, queryRestricted == true
+    end
+
+    local safeNumber = function(value, fallback)
+        if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+            return AuraSafety:SafeNumber(value, fallback)
+        end
+        local parsed = tonumber(value)
+        if type(parsed) == "number" then
+            return parsed
+        end
+        return fallback
+    end
+
+    local matches = {
+        {
+            name = auraData.name,
+            auraInstanceID = auraData.auraInstanceID,
+            icon = auraData.icon,
+            count = safeNumber(auraData.applications, 1) or 1,
+            duration = safeNumber(auraData.duration, 0) or 0,
+            expirationTime = safeNumber(auraData.expirationTime, 0) or 0,
+            spellId = normalizedSpellID,
+        },
+    }
+    return matches, queryRestricted == true
 end
 
 -- Return player specialization id.
@@ -1128,7 +873,7 @@ function UnitFrames:EnsureEditModeSelection(frame)
     end
 
     -- Create frame for selection.
-    local selection = CreateFrame("Frame", nil, frame)
+    local selection = CreateFrame("Frame", nil, frame) --[[@as mummuEditModeSelection]]
     -- Create texture for border.
     local border = selection:CreateTexture(nil, "OVERLAY")
     border:SetPoint("TOPLEFT", -2, 2)
@@ -1416,7 +1161,7 @@ function UnitFrames:OnCombatEnded()
 end
 
 -- Handle player status changed event. Nothing exploded yet.
-function UnitFrames:OnPlayerStatusChanged()
+function UnitFrames:OnPlayerStatusChanged(eventName)
     self:RefreshFrame("player")
 end
 
@@ -1504,6 +1249,42 @@ function UnitFrames:OnUnitPet(_, unitToken)
     end
 end
 
+local function shouldSkipPlayerAuraRefresh(auraUpdateInfo)
+    if type(auraUpdateInfo) ~= "table" then
+        return false
+    end
+    if auraUpdateInfo.isFullUpdate == true then
+        return false
+    end
+    if not (AuraUtil and type(AuraUtil.ShouldSkipAuraUpdate) == "function") then
+        return false
+    end
+
+    local function isRelevantAura()
+        return true
+    end
+
+    local okModern, shouldSkipModern = pcall(AuraUtil.ShouldSkipAuraUpdate, auraUpdateInfo, isRelevantAura)
+    if okModern and shouldSkipModern == true then
+        return true
+    end
+
+    local updatedAuras = auraUpdateInfo.updatedAuras or auraUpdateInfo.addedAuras
+    if updatedAuras ~= nil then
+        local okLegacy, shouldSkipLegacy = pcall(
+            AuraUtil.ShouldSkipAuraUpdate,
+            auraUpdateInfo.isFullUpdate == true,
+            updatedAuras,
+            isRelevantAura
+        )
+        if okLegacy and shouldSkipLegacy == true then
+            return true
+        end
+    end
+
+    return false
+end
+
 -- Handle unit aura event.
 function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     if not SUPPORTED_UNITS[unitToken] then
@@ -1512,512 +1293,12 @@ function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
 
     local refreshOptions = REFRESH_OPTIONS_AURAS_ONLY
     if unitToken == "player" then
+        if shouldSkipPlayerAuraRefresh(auraUpdateInfo) then
+            return
+        end
         refreshOptions = playerSecondaryPowerUsesAuraStacks() and REFRESH_OPTIONS_AURAS_AND_SECONDARY or REFRESH_OPTIONS_AURAS
     end
     self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
-end
-
--- Create aura icon.
-function UnitFrames:CreateAuraIcon(parent)
-    -- Create frame for icon.
-    local icon = CreateFrame("Frame", nil, parent, BackdropTemplateMixin and "BackdropTemplate")
-    icon:SetFrameStrata(parent:GetFrameStrata())
-    icon:SetFrameLevel(parent:GetFrameLevel() + 1)
-    icon:Hide()
-
-    if type(icon.SetBackdrop) == "function" then
-        icon:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Buttons\\WHITE8x8",
-            edgeSize = 1,
-            insets = { left = 1, right = 1, top = 1, bottom = 1 },
-        })
-        icon:SetBackdropColor(0, 0, 0, 0.92)
-        icon:SetBackdropBorderColor(0, 0, 0, 0.95)
-    end
-
-    -- Create texture layer.
-    icon.Icon = icon:CreateTexture(nil, "ARTWORK")
-    icon.Icon:SetPoint("TOPLEFT", 1, -1)
-    icon.Icon:SetPoint("BOTTOMRIGHT", -1, 1)
-    icon.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    -- Create frame widget.
-    icon.Cooldown = CreateFrame("Cooldown", nil, icon, "CooldownFrameTemplate")
-    icon.Cooldown:SetAllPoints(icon.Icon)
-    if type(icon.Cooldown.SetDrawBling) == "function" then
-        icon.Cooldown:SetDrawBling(false)
-    end
-    if type(icon.Cooldown.SetDrawEdge) == "function" then
-        icon.Cooldown:SetDrawEdge(false)
-    end
-    if type(icon.Cooldown.SetHideCountdownNumbers) == "function" then
-        icon.Cooldown:SetHideCountdownNumbers(true)
-    end
-
-    -- Create text font string.
-    icon.CountText = icon:CreateFontString(nil, "OVERLAY")
-    icon.CountText:SetPoint("BOTTOMRIGHT", -1, 1)
-    icon.CountText:SetJustifyH("RIGHT")
-    Style:ApplyFont(icon.CountText, 10, "OUTLINE")
-    icon.CountText:SetTextColor(1, 1, 1, 1)
-    icon.CountText:SetShadowColor(0, 0, 0, 0)
-    icon.CountText:SetShadowOffset(0, 0)
-
-    return icon
-end
-
--- Return aura icon.
-function UnitFrames:GetAuraIcon(container, index)
-    if not container or index < 1 then
-        return nil
-    end
-
-    container.icons = container.icons or {}
-    if not container.icons[index] then
-        container.icons[index] = self:CreateAuraIcon(container)
-    end
-
-    return container.icons[index]
-end
-
--- Ensure aura containers.
-function UnitFrames:EnsureAuraContainers(frame)
-    if not frame or frame.AuraContainers then
-        return
-    end
-
-    -- Create frame for buffs.
-    local buffs = CreateFrame("Frame", nil, frame)
-    buffs:SetFrameStrata("MEDIUM")
-    buffs:SetFrameLevel(frame:GetFrameLevel() + 20)
-    -- Create table holding icons.
-    buffs.icons = {}
-    buffs:Hide()
-
-    -- Create frame for debuffs.
-    local debuffs = CreateFrame("Frame", nil, frame)
-    debuffs:SetFrameStrata("MEDIUM")
-    debuffs:SetFrameLevel(frame:GetFrameLevel() + 20)
-    -- Create table holding icons.
-    debuffs.icons = {}
-    debuffs:Hide()
-
-    -- Create table holding aura containers. Entropy stays pending.
-    frame.AuraContainers = {
-        buffs = buffs,
-        debuffs = debuffs,
-    }
-
-    for i = 1, 16 do
-        self:GetAuraIcon(buffs, i)
-        self:GetAuraIcon(debuffs, i)
-    end
-    self:HideUnusedAuraIcons(buffs, 0)
-    self:HideUnusedAuraIcons(debuffs, 0)
-end
-
--- Apply aura layout.
-function UnitFrames:ApplyAuraLayout(frame, unitConfig)
-    if not (frame and frame.AuraContainers and unitConfig) then
-        return
-    end
-
-    local auraConfig = unitConfig.aura or {}
-    local pixelPerfect = Style:IsPixelPerfectEnabled()
-    local auraEnabled = auraConfig.enabled ~= false
-
-    for sectionName, container in pairs(frame.AuraContainers) do
-        local sectionConfig = auraConfig[sectionName] or {}
-        local anchorPoint = sectionConfig.anchorPoint
-            or (sectionName == "buffs" and "TOPLEFT" or "TOPRIGHT")
-        local relativePoint = sectionConfig.relativePoint
-            or (sectionName == "buffs" and "BOTTOMLEFT" or "BOTTOMRIGHT")
-        local x = tonumber(sectionConfig.x) or 0
-        local y = tonumber(sectionConfig.y) or -4
-        local size = Util:Clamp(tonumber(sectionConfig.size) or 18, 10, 48)
-        local scale = Util:Clamp(tonumber(sectionConfig.scale) or 1, 0.5, 2)
-        local maxIcons = Util:Clamp(math.floor((tonumber(sectionConfig.max) or 8) + 0.5), 1, 16)
-        local spacing = pixelPerfect and Style:GetPixelSize() or 1
-        local growFromRight = string.find(anchorPoint, "RIGHT", 1, true) ~= nil
-
-        if pixelPerfect then
-            x = Style:Snap(x)
-            y = Style:Snap(y)
-            size = math.max(spacing, Style:Snap(size))
-        else
-            x = math.floor(x + 0.5)
-            y = math.floor(y + 0.5)
-            size = math.max(1, math.floor(size + 0.5))
-        end
-
-        local containerWidth = (size * maxIcons) + ((maxIcons - 1) * spacing)
-        local layoutChanged = container._anchorPoint ~= anchorPoint
-            or container._relativePoint ~= relativePoint
-            or container._offsetX ~= x
-            or container._offsetY ~= y
-            or container._scale ~= scale
-            or container._iconSize ~= size
-            or container._maxIcons ~= maxIcons
-            or container._spacing ~= spacing
-            or container._width ~= containerWidth
-            or container._growFromRight ~= growFromRight
-
-        if layoutChanged then
-            container:ClearAllPoints()
-            container:SetPoint(anchorPoint, frame, relativePoint, x, y)
-            container:SetScale(scale)
-            container:SetSize(containerWidth, size)
-            container._anchorPoint = anchorPoint
-            container._relativePoint = relativePoint
-            container._offsetX = x
-            container._offsetY = y
-            container._scale = scale
-            container._iconSize = size
-            container._maxIcons = maxIcons
-            container._spacing = spacing
-            container._width = containerWidth
-            container._growFromRight = growFromRight
-        end
-
-        container.iconSize = size
-        container.spacing = spacing
-        container.maxIcons = maxIcons
-        container.growFromRight = growFromRight
-        container.enabled = auraEnabled and (sectionConfig.enabled ~= false)
-        container.source = sectionName == "buffs"
-            and (sectionConfig.source == "self" and "self"
-                or (sectionConfig.source == "important" and "important" or "all"))
-            or nil
-    end
-end
-
--- Apply aura to icon.
-function UnitFrames:ApplyAuraToIcon(container, sectionName, auraIndex, auraData)
-    local icon = self:GetAuraIcon(container, auraIndex)
-    if not icon then
-        return
-    end
-
-    local iconSize = container.iconSize or 18
-    local spacing = container.spacing or 1
-    local offset = (auraIndex - 1) * (iconSize + spacing)
-
-    icon:SetSize(iconSize, iconSize)
-    icon:ClearAllPoints()
-    if container.growFromRight then
-        icon:SetPoint("RIGHT", container, "RIGHT", -offset, 0)
-    else
-        icon:SetPoint("LEFT", container, "LEFT", offset, 0)
-    end
-
-    icon.Icon:SetTexture(auraData.icon or DEFAULT_AURA_TEXTURE)
-
-    local okSetCount = pcall(icon.CountText.SetText, icon.CountText, auraData.count)
-    if not okSetCount then
-        icon.CountText:SetText("")
-    end
-    local countFontSize = math.max(8, math.floor((iconSize * 0.55) + 0.5))
-    if icon._countFontSize ~= countFontSize then
-        Style:ApplyFont(icon.CountText, countFontSize, "OUTLINE")
-        icon._countFontSize = countFontSize
-    end
-
-    if type(CooldownFrame_Clear) == "function" then
-        CooldownFrame_Clear(icon.Cooldown)
-    else
-        icon.Cooldown:SetCooldown(0, 0)
-    end
-    icon.Cooldown:Hide()
-
-    if type(icon.SetBackdropBorderColor) == "function" then
-        if sectionName == "debuffs" and DebuffTypeColor then
-            local color = DebuffTypeColor[auraData.debuffType] or DebuffTypeColor.none
-            if color then
-                icon:SetBackdropBorderColor(color.r, color.g, color.b, 1)
-            else
-                icon:SetBackdropBorderColor(0.92, 0.2, 0.2, 1)
-            end
-        else
-            icon:SetBackdropBorderColor(0, 0, 0, 0.95)
-        end
-    end
-
-    icon:Show()
-end
-
--- Hide unused aura icons.
-function UnitFrames:HideUnusedAuraIcons(container, usedIcons)
-    if not (container and container.icons) then
-        return
-    end
-
-    for i = usedIcons + 1, #container.icons do
-        container.icons[i]:Hide()
-    end
-end
-
--- Return raw aura data by aura instance id.
-local function getAuraDataByInstanceID(unitToken, auraInstanceID)
-    if not (C_UnitAuras and type(C_UnitAuras.GetAuraDataByAuraInstanceID) == "function") then
-        return nil
-    end
-
-    local ok, auraData = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unitToken, auraInstanceID)
-    if ok and type(auraData) == "table" then
-        return auraData
-    end
-    return nil
-end
-
--- Iterate aura update list entries.
-local function iterateAuraUpdateList(list, callback)
-    if type(list) ~= "table" or type(callback) ~= "function" then
-        return false
-    end
-
-    local numericCount = #list
-    if numericCount > 0 then
-        for i = 1, numericCount do
-            if callback(list[i]) then
-                return true
-            end
-        end
-        return false
-    end
-
-    for _, value in pairs(list) do
-        if callback(value) then
-            return true
-        end
-    end
-    return false
-end
-
--- Return whether aura was cast by player/player pet.
-local function auraIsFromPlayer(auraData)
-    if type(auraData) ~= "table" then
-        return false
-    end
-
-    if auraData.isFromPlayerOrPlayerPet ~= nil then
-        local okFromPlayer, fromPlayer = pcall(valuesEqual, auraData.isFromPlayerOrPlayerPet, true)
-        if okFromPlayer then
-            return fromPlayer
-        end
-        return true
-    end
-
-    local sourceUnit = auraData.sourceUnit
-    local okPlayer, isPlayer = pcall(valuesEqual, sourceUnit, "player")
-    if not okPlayer then
-        return true
-    end
-    if isPlayer then
-        return true
-    end
-
-    local okPet, isPet = pcall(valuesEqual, sourceUnit, "pet")
-    if not okPet then
-        return true
-    end
-    if isPet then
-        return true
-    end
-
-    local okVehicle, isVehicle = pcall(valuesEqual, sourceUnit, "vehicle")
-    if not okVehicle then
-        return true
-    end
-    return isVehicle
-end
-
--- Return whether one aura update can affect section output.
-function UnitFrames:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
-    if type(auraData) ~= "table" then
-        return true
-    end
-
-    local isHelpful = auraData.isHelpful
-    local isHarmful = auraData.isHarmful
-    if isHelpful == nil and isHarmful == nil then
-        if auraData.debuffType ~= nil or auraData.dispelName ~= nil then
-            isHelpful = false
-            isHarmful = true
-        else
-            return true
-        end
-    end
-
-    if sectionName == "debuffs" then
-        local okHarmful, harmfulTrue = pcall(valuesEqual, isHarmful, true)
-        if not okHarmful or harmfulTrue then
-            return true
-        end
-        local okHelpful, helpfulTrue = pcall(valuesEqual, isHelpful, true)
-        if okHelpful and helpfulTrue then
-            return false
-        end
-        return true
-    end
-
-    local okHelpful, helpfulTrue = pcall(valuesEqual, isHelpful, true)
-    if not okHelpful then
-        return true
-    end
-    if not helpfulTrue then
-        return false
-    end
-
-    if container and container.source == "self" and not auraIsFromPlayer(auraData) then
-        return false
-    end
-
-    local auraSpellID = normalizeSpellID(auraData.spellId or auraData.spellID)
-    if excludedSpellSet and auraSpellID and excludedSpellSet[auraSpellID] == true then
-        return false
-    end
-
-    if importantSpellSet then
-        return auraSpellID and importantSpellSet[auraSpellID] == true or false
-    end
-
-    return true
-end
-
--- Return whether this section can skip refresh for given aura update info.
-function UnitFrames:ShouldSkipAuraSectionUpdate(unitToken, sectionName, container, auraUpdateInfo, importantSpellSet, excludedSpellSet)
-    if type(auraUpdateInfo) ~= "table" then
-        return false
-    end
-
-    if auraUpdateInfo.isFullUpdate == true then
-        return false
-    end
-
-    local removed = auraUpdateInfo.removedAuraInstanceIDs
-    if type(removed) == "table" and next(removed) ~= nil then
-        return false
-    end
-
-    local added = auraUpdateInfo.addedAuras
-    local updated = auraUpdateInfo.updatedAuraInstanceIDs
-    local hasChanges = (type(added) == "table" and next(added) ~= nil) or (type(updated) == "table" and next(updated) ~= nil)
-    if not hasChanges then
-        return true
-    end
-
-    if iterateAuraUpdateList(added, function(auraData)
-        return self:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
-    end) then
-        return false
-    end
-
-    if iterateAuraUpdateList(updated, function(auraInstanceID)
-        local auraData = getAuraDataByInstanceID(unitToken, auraInstanceID)
-        if type(auraData) ~= "table" then
-            return true
-        end
-        return self:AuraUpdateAffectsSection(auraData, sectionName, container, importantSpellSet, excludedSpellSet)
-    end) then
-        return false
-    end
-
-    return true
-end
-
--- Refresh aura section.
-function UnitFrames:RefreshAuraSection(frame, unitToken, sectionName, exists, previewMode, auraUpdateInfo)
-    local container = frame and frame.AuraContainers and frame.AuraContainers[sectionName]
-    if not container then
-        return
-    end
-
-    if container.enabled == false then
-        container:Hide()
-        self:HideUnusedAuraIcons(container, 0)
-        return
-    end
-
-    if not exists and not previewMode then
-        container:Hide()
-        self:HideUnusedAuraIcons(container, 0)
-        return
-    end
-
-    local maxIcons = container.maxIcons or 8
-    local shown = 0
-    local filter = AURA_FILTER_BY_SECTION[sectionName] or "HELPFUL"
-    local importantSpellSet = nil
-    local excludedSpellSet = nil
-    if sectionName == "buffs" and container.source == "self" then
-        filter = filter .. "|PLAYER"
-    elseif sectionName == "buffs" and container.source == "important" then
-        importantSpellSet = getImportantPartyBuffSpellSet(self.dataHandle)
-    end
-    if sectionName == "buffs" and frame and frame._mummuIsPartyFrame then
-        excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
-    elseif sectionName == "buffs" and frame and frame._mummuIsRaidFrame then
-        excludedSpellSet = getActiveTrackedPartyHealerSpellSet(self.addon)
-    end
-
-    if exists and not previewMode and self:ShouldSkipAuraSectionUpdate(
-        unitToken,
-        sectionName,
-        container,
-        auraUpdateInfo,
-        importantSpellSet,
-        excludedSpellSet
-    ) then
-        return
-    end
-
-    if exists then
-        for index = 1, MAX_AURA_SCAN do
-            if shown >= maxIcons then
-                break
-            end
-
-            local auraData = getAuraDataByIndex(unitToken, index, filter)
-            if not auraData then
-                break
-            end
-
-            local auraSpellID = normalizeSpellID(auraData.spellId)
-            local filteredByTracked = excludedSpellSet and auraSpellID and excludedSpellSet[auraSpellID] == true
-            if not filteredByTracked and (not importantSpellSet or isImportantPartyBuffAura(auraData, importantSpellSet)) then
-                shown = shown + 1
-                self:ApplyAuraToIcon(container, sectionName, shown, auraData)
-            end
-        end
-    elseif previewMode then
-        local previewCount = math.min(maxIcons, sectionName == "buffs" and 3 or 2)
-        for index = 1, previewCount do
-            shown = shown + 1
-            self:ApplyAuraToIcon(container, sectionName, shown, {
-                icon = DEFAULT_AURA_TEXTURE,
-                count = index == 1 and 2 or 0,
-                duration = 0,
-                expirationTime = 0,
-                debuffType = sectionName == "debuffs" and (index == 1 and "Magic" or "Poison") or nil,
-            })
-        end
-    end
-
-    self:HideUnusedAuraIcons(container, shown)
-    container:SetShown(shown > 0)
-end
-
--- Refresh unit aura sections.
-function UnitFrames:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig, auraUpdateInfo)
-    if not frame then
-        return
-    end
-
-    self:EnsureAuraContainers(frame)
-    self:ApplyAuraLayout(frame, unitConfig or self.dataHandle:GetUnitConfig(unitToken))
-    self:RefreshAuraSection(frame, unitToken, "buffs", exists, previewMode, auraUpdateInfo)
-    self:RefreshAuraSection(frame, unitToken, "debuffs", exists, previewMode, auraUpdateInfo)
 end
 
 -- Create unit frame.
@@ -2034,7 +1315,6 @@ function UnitFrames:CreateUnitFrame(unitToken)
         cfg.width,
         cfg.height
     )
-    self:EnsureAuraContainers(frame)
     self.frames[unitToken] = frame
     self:EnsureEditModeSelection(frame)
     return frame
@@ -2462,7 +1742,7 @@ local function getRunePowerState()
         local ok, start, duration, runeReady = pcall(runeCooldownFunc, runeIndex)
         if ok then
             if type(start) == "table" then
-                local runeInfo = start
+                local runeInfo = start --[[@as any]]
                 start = tonumber(runeInfo.startTime or runeInfo.start or runeInfo.cooldownStart) or 0
                 duration = tonumber(runeInfo.duration or runeInfo.cooldownDuration) or 0
                 runeReady = runeInfo.runeReady or runeInfo.isReady
@@ -2480,27 +1760,30 @@ end
 
 -- Return safe numeric value.
 local function getSafeNumericValue(value, fallback)
-    local numeric = nil
     if type(value) == "number" then
-        local okDirect, direct = pcall(addZero, value)
-        if okDirect and type(direct) == "number" then
-            numeric = direct
-        end
-    end
-
-    if numeric == nil then
-        local coerced = tonumber(value)
-        if type(coerced) == "number" then
-            local okCoerced, normalized = pcall(addZero, coerced)
-            if okCoerced and type(normalized) == "number" then
-                numeric = normalized
+        local okString, asString = pcall(tostring, value)
+        if okString and type(asString) == "string" then
+            local parsed = tonumber(asString)
+            if type(parsed) == "number" then
+                return parsed
             end
         end
+        return fallback
     end
 
-    if type(numeric) == "number" then
-        return numeric
+    if type(value) == "string" then
+        local parsed = tonumber(value)
+        if type(parsed) == "number" then
+            return parsed
+        end
+        return fallback
     end
+
+    local okCoerced, coerced = pcall(tonumber, value)
+    if okCoerced and type(coerced) == "number" then
+        return coerced
+    end
+
     return fallback
 end
 
@@ -2533,7 +1816,10 @@ local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
     -- Create table holding stack states.
     local stackStates = {}
     if exists then
-        local ironfurAuras = getAurasBySpellID("player", "HELPFUL|PLAYER", IRONFUR_SPELL_ID)
+        local ironfurAuras, queryRestricted = getAurasBySpellID("player", "HELPFUL|PLAYER", IRONFUR_SPELL_ID)
+        if #ironfurAuras == 0 and queryRestricted == true and InCombatLockdown() then
+            return collectActiveGuardianStackStates(bar, now)
+        end
         if #ironfurAuras > 1 then
             for auraIndex = 1, #ironfurAuras do
                 local auraData = ironfurAuras[auraIndex]
@@ -2866,7 +2152,7 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         end
     elseif exists and resource.usesAuraStacks == true and type(resource.auraSpellID) == "number" then
         local auraStacks = 0
-        local matchedAuras = getAurasBySpellID("player", resource.auraFilter or "HELPFUL|PLAYER", resource.auraSpellID)
+        local matchedAuras, queryRestricted = getAurasBySpellID("player", resource.auraFilter or "HELPFUL|PLAYER", resource.auraSpellID)
         for auraIndex = 1, #matchedAuras do
             local auraData = matchedAuras[auraIndex]
             local stacks = getSafeNumericValue(auraData and auraData.count, 1) or 1
@@ -2874,6 +2160,9 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
             if stacks > auraStacks then
                 auraStacks = stacks
             end
+        end
+        if #matchedAuras == 0 and queryRestricted == true and InCombatLockdown() then
+            auraStacks = getSafeNumericValue(bar._lastSecondaryPowerCurrent, 0) or 0
         end
         current = auraStacks
         maxPower = powerCap
@@ -3057,9 +2346,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     if spellName then
         castBar.Bar:SetMinMaxValues(startTimeMs, endTimeMs)
         castBar.Bar:SetReverseFill(false)
-        -- Run protected callback.
-        local okEnd, cleanEnd = pcall(addZero, endTimeMs)
-        castBar._castEndClean = okEnd and cleanEnd or 0
+        castBar._castEndClean = getSafeNumericValue(endTimeMs, 0) or 0
         castBar.SpellText:SetText(spellName)
         castBar.Icon:SetTexture(iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark")
 
@@ -3082,9 +2369,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     if channelName then
         castBar.Bar:SetMinMaxValues(channelStartMs, channelEndMs)
         castBar.Bar:SetReverseFill(true)
-        -- Run protected callback.
-        local okEnd, cleanEnd = pcall(addZero, channelEndMs)
-        castBar._castEndClean = okEnd and cleanEnd or 0
+        castBar._castEndClean = getSafeNumericValue(channelEndMs, 0) or 0
         castBar.SpellText:SetText(channelName)
         castBar.Icon:SetTexture(channelIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
@@ -3109,7 +2394,7 @@ function UnitFrames:EnsureDetachedElementEditModeSelection(element, labelText, b
     end
 
     -- Create frame for selection.
-    local selection = CreateFrame("Frame", nil, element)
+    local selection = CreateFrame("Frame", nil, element) --[[@as mummuEditModeSelection]]
     -- Create texture for border.
     local border = selection:CreateTexture(nil, "OVERLAY")
     border:SetPoint("TOPLEFT", -2, 2)
@@ -3461,9 +2746,6 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
     end
 
-    if options.auras then
-        self:RefreshAuras(frame, unitToken, exists, previewMode, unitConfig, auraUpdateInfo)
-    end
     if options.statusIcons then
         self:RefreshPlayerStatusIcons(frame, unitToken)
     end

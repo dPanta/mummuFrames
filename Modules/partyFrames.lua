@@ -1,39 +1,67 @@
+-- ============================================================================
+-- MUMMUFRAMES PARTY FRAMES MODULE
+-- ============================================================================
+-- Manages custom party member unit frames with health, power, and aura displays.
+--
+-- ARCHITECTURE (Three-Layer Design):
+--   Layer 1: Blizzard's CompactPartyFrame runs passively in the background,
+--            managed by AuraHandle for visibility (alpha/scale only).
+--   Layer 2: SecureGroupHeaderTemplate header ('mummuFramesPartyHeader') owns
+--            unit attribution and child visibility via secure attributes.
+--            In combat, only the header can modify unit assignments.
+--   Layer 3: Visual sub-frames (health bar, power bar, auras, overlays) are
+--            lazily attached to header children in normal Lua via BuildFrameVisuals.
+--
+-- MODES:
+--   Real Mode:    Header manages live party members; frames map 1:1 to actual units.
+--   Preview Mode: Header hidden; test frames shown with static data for positioning.
+--   Test Mode:    Periodic ticker updates fake data; preview-only use case.
+--
+-- UNIT MAPPING:
+--   During combat, the header may reassign children to different units.
+--   Maps are rebuilt at safe times (combat-end) with safety-net retries.
+--   GUID->DisplayedUnit and DisplayedUnit->Frame mappings enable correct aura dispatch.
+-- ============================================================================
+
 local _, ns = ...
 
 local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 local L = ns.L
+local AuraSafety = ns.AuraSafety
+
+-- ============================================================================
+-- CONFIGURATION CONSTANTS
+-- ============================================================================
 
 -- Create class holding party frames behavior.
 local PartyFrames = ns.Object:Extend()
+
+-- Texture and visual constants
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
-local MAX_PARTY_TEST_FRAMES = 5
+local MAX_PARTY_TEST_FRAMES = 5  -- Maximum frames in test/solo preview mode
 local DISPEL_OVERLAY_ALPHA = 0.2
+
+-- Test mode unit lists for frame preview
 local TEST_UNITS_WITH_PLAYER = { "player", "party1", "party2", "party3", "party4" }
 local TEST_UNITS_NO_PLAYER = { "party1", "party2", "party3", "party4" }
 local MEMBER_REFRESH_FULL = {
     vitals = true,
     auras = true,
-    healerTrackers = true,
 }
 local MEMBER_REFRESH_VITALS_ONLY = {
     vitals = true,
 }
 local MEMBER_REFRESH_AURAS_ONLY = {
     auras = true,
-    healerTrackers = true,
 }
-local MEMBER_REFRESH_AURAS_NO_TRACKERS = {
-    auras = true,
-}
-local UNMAPPED_UNIT_REFRESH_THROTTLE = 0.2
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
 local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
-local MAX_HELPFUL_AURA_SCAN = 80
+local SUMMON_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\summon.png"
 local ROLE_SORT_PRIORITY = {
     TANK = 1,
     HEALER = 2,
@@ -47,20 +75,6 @@ local TEST_NAME_BY_UNIT = {
     party3 = "Party Member 3",
     party4 = "Party Member 4",
 }
-local DUMMY_BUFF_ICONS = {
-    "Interface\\Icons\\Spell_Holy_WordFortitude",
-    "Interface\\Icons\\Spell_Nature_Regeneration",
-    "Interface\\Icons\\Spell_Holy_MagicalSentry",
-    "Interface\\Icons\\Ability_Paladin_BlessedMending",
-    "Interface\\Icons\\Spell_Holy_SealOfProtection",
-}
-local DUMMY_DEBUFFS = {
-    { icon = "Interface\\Icons\\Spell_Shadow_CurseOfSargeras", debuffType = "Curse" },
-    { icon = "Interface\\Icons\\Ability_Creature_Poison_06", debuffType = "Poison" },
-    { icon = "Interface\\Icons\\Spell_Shadow_AbominationExplosion", debuffType = "Disease" },
-    { icon = "Interface\\Icons\\Spell_Frost_FrostNova", debuffType = "Magic" },
-}
-local DEFAULT_DISPEL_TYPES = { "Magic", "Curse", "Poison", "Disease" }
 local HEALER_SPEC_BY_CLASS = {
     PRIEST = { [256] = true, [257] = true }, -- Discipline / Holy
     PALADIN = { [65] = true }, -- Holy
@@ -68,110 +82,16 @@ local HEALER_SPEC_BY_CLASS = {
     DRUID = { [105] = true }, -- Restoration
     SHAMAN = { [264] = true }, -- Restoration
 }
-local POWER_TYPE_MANA = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.Mana) or _G.SPELL_POWER_MANA or 0
-local POWER_TYPE_RUNIC = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.RunicPower) or _G.SPELL_POWER_RUNIC_POWER or 6
-local HEALER_TRACKED_SPELLS_BY_CLASS = {
-    DEATHKNIGHT = {
-        { spellID = 51052, group = "externals" }, -- Anti-Magic Zone
-    },
-    DEMONHUNTER = {
-        { spellID = 196718, group = "externals" }, -- Darkness
-    },
-    DRUID = {
-        { spellID = 774, group = "hots", specIDs = { [105] = true } }, -- Rejuvenation
-        { spellID = 8936, group = "hots", specIDs = { [105] = true } }, -- Regrowth
-        { spellID = 33763, group = "hots", specIDs = { [105] = true } }, -- Lifebloom
-        { spellID = 48438, group = "hots", specIDs = { [105] = true } }, -- Wild Growth
-        { spellID = 102351, group = "hots", specIDs = { [105] = true } }, -- Cenarion Ward
-        { spellID = 102342, group = "externals", specIDs = { [105] = true } }, -- Ironbark
-    },
-    EVOKER = {
-        { spellID = 366155, group = "hots", specIDs = { [1468] = true } }, -- Reversion
-        { spellID = 364343, group = "absorbs", specIDs = { [1468] = true } }, -- Echo
-        { spellID = 355941, group = "hots", specIDs = { [1468] = true } }, -- Dream Breath
-        { spellID = 357170, group = "externals", specIDs = { [1468] = true } }, -- Time Dilation
-    },
-    HUNTER = {
-        { spellID = 34477, group = "externals" }, -- Misdirection
-    },
-    MAGE = {
-        { spellID = 1459, group = "externals" }, -- Arcane Intellect
-    },
-    MONK = {
-        { spellID = 119611, group = "hots", specIDs = { [270] = true } }, -- Renewing Mist
-        { spellID = 124682, group = "hots", specIDs = { [270] = true } }, -- Enveloping Mist
-        { spellID = 115175, group = "hots", specIDs = { [270] = true } }, -- Soothing Mist
-        { spellID = 116849, group = "absorbs", specIDs = { [270] = true } }, -- Life Cocoon
-    },
-    PALADIN = {
-        { spellID = 53563, group = "externals", specIDs = { [65] = true } }, -- Beacon of Light
-        { spellID = 223306, group = "hots", specIDs = { [65] = true } }, -- Bestow Faith
-        { spellID = 6940, group = "externals" }, -- Blessing of Sacrifice
-        { spellID = 1022, group = "externals" }, -- Blessing of Protection
-        { spellID = 1044, group = "externals" }, -- Blessing of Freedom
-    },
-    PRIEST = {
-        { spellID = 139, group = "hots", specIDs = { [257] = true } }, -- Renew
-        { spellID = 33076, group = "hots", specIDs = { [256] = true, [257] = true } }, -- Prayer of Mending
-        { spellID = 17, group = "absorbs", specIDs = { [256] = true, [257] = true } }, -- Power Word: Shield
-        { spellID = 194384, group = "hots", specIDs = { [256] = true } }, -- Atonement
-        { spellID = 33206, group = "externals" }, -- Pain Suppression
-        { spellID = 47788, group = "externals" }, -- Guardian Spirit
-    },
-    ROGUE = {
-        { spellID = 57934, group = "externals" }, -- Tricks of the Trade
-    },
-    SHAMAN = {
-        { spellID = 61295, group = "hots", specIDs = { [264] = true } }, -- Riptide
-        { spellID = 974, group = "absorbs", specIDs = { [264] = true } }, -- Earth Shield
-        { spellID = 98008, group = "externals" }, -- Spirit Link Totem aura
-    },
-    WARLOCK = {
-        { spellID = 20707, group = "externals" }, -- Soulstone
-    },
-    WARRIOR = {
-        { spellID = 3411, group = "externals" }, -- Intervene
-        { spellID = 97462, group = "externals" }, -- Rallying Cry
-    },
-}
-local PARTY_HEALER_GROUP_DEFAULTS = {
-    hots = { style = "icon", size = 14, color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 } },
-    absorbs = { style = "icon", size = 14, color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 } },
-    externals = { style = "icon", size = 14, color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 } },
-}
-local BLIZZARD_PARTY_FRAME_NAMES = {
-    "PartyFrame",
-    "CompactPartyFrame",
-    "CompactPartyFrameMember1",
-    "CompactPartyFrameMember2",
-    "CompactPartyFrameMember3",
-    "CompactPartyFrameMember4",
-    "CompactPartyFrameMember5",
-    "PartyMemberFrame1",
-    "PartyMemberFrame2",
-    "PartyMemberFrame3",
-    "PartyMemberFrame4",
-    "CompactPartyFrameMember1Selection",
-    "CompactPartyFrameMember2Selection",
-    "CompactPartyFrameMember3Selection",
-    "CompactPartyFrameMember4Selection",
-    "CompactPartyFrameMember5Selection",
-    "CompactPartyFrameMember1SelectionHighlight",
-    "CompactPartyFrameMember2SelectionHighlight",
-    "CompactPartyFrameMember3SelectionHighlight",
-    "CompactPartyFrameMember4SelectionHighlight",
-    "CompactPartyFrameMember5SelectionHighlight",
-    "PartyMemberFrame1Selection",
-    "PartyMemberFrame2Selection",
-    "PartyMemberFrame3Selection",
-    "PartyMemberFrame4Selection",
-    "PartyMemberFrame1SelectionTexture",
-    "PartyMemberFrame2SelectionTexture",
-    "PartyMemberFrame3SelectionTexture",
-    "PartyMemberFrame4SelectionTexture",
-}
+local POWER_TYPE_MANA = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.Mana) or ((type(_G.SPELL_POWER_MANA) ~= "nil" and _G.SPELL_POWER_MANA) or 0)
+local POWER_TYPE_RUNIC = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.RunicPower) or (type(_G.SPELL_POWER_RUNIC_POWER) ~= "nil" and _G.SPELL_POWER_RUNIC_POWER or 6)
+local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
+local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 
--- Show unit tooltip.
+-- ============================================================================
+-- HELPER FUNCTIONS
+-- ============================================================================
+
+-- Display unit tooltip on mouse-over; supports both secure frames and fallback tooltip APIs.
 local function showUnitTooltip(frame)
     if not frame then
         return
@@ -213,91 +133,195 @@ local function hideUnitTooltip(frame)
     GameTooltip:Hide()
 end
 
--- Return safe numeric value.
-local function addZero(value)
-    return value + 0
-end
+-- Compute health/power as a percentage (0-100).
 local function computePercent(value, maxValue)
     return (value / maxValue) * 100
 end
+-- Check strict boolean equality.
 local function equalsTrue(value)
-    return value == true
+    local ok, resolved = pcall(function()
+        return value == true
+    end)
+    if ok then
+        return resolved == true
+    end
+    return false
 end
-local function boolFromValue(value)
-    return value and true or false
-end
+
+-- Return boolean or fallback if value is not a boolean.
 local function getSafeBooleanValue(value, fallback)
-    if type(value) ~= "boolean" then
-        return fallback
+    local fallbackValue = equalsTrue(fallback)
+
+    -- Preferred path: shared secret-safe truthiness helper.
+    if AuraSafety and type(AuraSafety.SafeTruthy) == "function" then
+        local okSafeTruthy, resolved = pcall(AuraSafety.SafeTruthy, AuraSafety, value)
+        if okSafeTruthy then
+            return resolved == true
+        end
+        return fallbackValue
     end
 
-    local okValue, normalized = pcall(boolFromValue, value)
-    if okValue then
-        return normalized
+    -- Fallback path: never compare against boolean literals directly.
+    local okTruthy, resolvedTruthy = pcall(function()
+        if value then
+            return true
+        end
+        return false
+    end)
+    if okTruthy then
+        return resolvedTruthy == true
     end
 
-    return fallback
+    return fallbackValue
 end
+-- Check if unit is beyond interaction range (currently disabled for security).
+-- Prefer UnitInRange (party-aware, cheap). Unknown/nil results are treated as
+-- "in range" to avoid false dimming during combat or roster churn.
 local function isUnitOutOfRange(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
+    if unitToken == "player" then
+        return false
+    end
+
+    if type(UnitExists) == "function" and not UnitExists(unitToken) then
+        return false
+    end
 
     if type(UnitInRange) == "function" then
-        local inRange = getSafeBooleanValue(UnitInRange(unitToken), nil)
-        if inRange ~= nil then
-            return inRange == false
+        local okInRange, inRange = pcall(UnitInRange, unitToken)
+        if okInRange and type(inRange) == "boolean" then
+            return not inRange
+        end
+    end
+
+    -- Fallback for units where UnitInRange is unavailable/unknown.
+    if type(CheckInteractDistance) == "function" then
+        local okInteract, canInteract = pcall(CheckInteractDistance, unitToken, 4)
+        if okInteract and type(canInteract) == "boolean" then
+            return not canInteract
         end
     end
 
     return false
 end
-local function iterateAuraUpdateList(list, callback)
-    if type(list) ~= "table" or type(callback) ~= "function" then
-        return false
-    end
 
-    local numericCount = #list
-    if numericCount > 0 then
-        for i = 1, numericCount do
-            if callback(list[i]) then
-                return true
-            end
-        end
-        return false
-    end
-
-    for _, value in pairs(list) do
-        if callback(value) then
-            return true
-        end
-    end
-    return false
-end
-
+-- Return numeric value or fallback, safely coercing via tostring() roundtrip.
 local function getSafeNumericValue(value, fallback)
-    local numeric = nil
     if type(value) == "number" then
-        local okDirect, direct = pcall(addZero, value)
-        if okDirect and type(direct) == "number" then
-            numeric = direct
+        local okString, asString = pcall(tostring, value)
+        if okString and type(asString) == "string" then
+            local parsed = tonumber(asString)
+            if type(parsed) == "number" then
+                return parsed
+            end
         end
+        return fallback
     end
 
-    if numeric == nil then
-        local coerced = tonumber(value)
-        if type(coerced) == "number" then
-            local okCoerced, normalized = pcall(addZero, coerced)
-            if okCoerced and type(normalized) == "number" then
-                numeric = normalized
+    if type(value) == "string" then
+        local parsed = tonumber(value)
+        if type(parsed) == "number" then
+            return parsed
+        end
+        return fallback
+    end
+
+    local okCoerced, coerced = pcall(tonumber, value)
+    if okCoerced and type(coerced) == "number" then
+        return coerced
+    end
+
+    return fallback
+end
+
+-- Look up which displayed unit token is currently assigned to a given GUID.
+-- Look up which displayed unit token was last assigned to a GUID.
+local function getDisplayedUnitForGUID(guidToUnitMap, guid)
+    if type(guidToUnitMap) ~= "table" or type(guid) ~= "string" or guid == "" then
+        return nil
+    end
+
+    local okMapped, mappedUnit = pcall(function()
+        return guidToUnitMap[guid]
+    end)
+    if okMapped and type(mappedUnit) == "string" and mappedUnit ~= "" then
+        return mappedUnit
+    end
+    return nil
+end
+
+-- Record that a GUID is currently displayed under a specific unit token.
+-- Record that a GUID is currently being displayed under a specific unit token.
+local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
+    if
+        type(guidToUnitMap) ~= "table"
+        or type(guid) ~= "string"
+        or guid == ""
+        or type(displayedUnit) ~= "string"
+        or displayedUnit == ""
+    then
+        return
+    end
+
+    pcall(function()
+        guidToUnitMap[guid] = displayedUnit
+    end)
+end
+
+-- Safely retrieve a unit's GUID with error handling.
+-- Safely retrieve a unit's GUID with error handling for combat safety.
+local function getUnitGUIDSafe(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
+        return nil
+    end
+
+    local okGUID, guid = pcall(UnitGUID, unitToken)
+    if okGUID and type(guid) == "string" and guid ~= "" then
+        return guid
+    end
+    return nil
+end
+
+-- Validate that a unit token is a valid party member (player, party1-4).
+-- Validate and normalize a unit token to a valid party member (player or party1-4).
+local function normalizePartyDisplayedUnit(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if unitToken == "player" or string.match(unitToken, "^party%d+$") then
+        return unitToken
+    end
+    return nil
+end
+
+-- Check if a unit is being summoned (has pending incoming summon).
+-- Check if a unit is pending a summon (will arrive soon).
+local function hasIncomingSummonPending(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if C_IncomingSummon and type(C_IncomingSummon.IncomingSummonStatus) == "function" then
+        local okStatus, status = pcall(C_IncomingSummon.IncomingSummonStatus, unitToken)
+        if okStatus then
+            local numericStatus = getSafeNumericValue(status, nil)
+            if type(numericStatus) == "number" then
+                local roundedStatus = math.floor(numericStatus + 0.5)
+                return roundedStatus == 1
             end
         end
     end
 
-    if type(numeric) == "number" then
-        return numeric
+    if C_IncomingSummon and type(C_IncomingSummon.HasIncomingSummon) == "function" then
+        local okHas, hasSummon = pcall(C_IncomingSummon.HasIncomingSummon, unitToken)
+        if okHas then
+            return getSafeBooleanValue(hasSummon, false)
+        end
     end
-    return fallback
+
+    return false
 end
 
 -- Set status bar value safely.
@@ -315,42 +339,6 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     if not okValue then
         statusBar:SetValue(0)
     end
-end
-
--- Return random item from table.
-local function getRandomItem(list)
-    if type(list) ~= "table" or #list == 0 then
-        return nil
-    end
-    local index = math.random(1, #list)
-    return list[index]
-end
-
--- Return debuff types dispellable by current player class.
-local function getPlayerDispelTypes()
-    local _, classToken = UnitClass("player")
-    if classToken == "PRIEST" then
-        return { "Magic", "Disease" }
-    end
-    if classToken == "PALADIN" then
-        return { "Poison", "Disease", "Magic" }
-    end
-    if classToken == "SHAMAN" then
-        return { "Curse", "Magic" }
-    end
-    if classToken == "DRUID" then
-        return { "Curse", "Poison", "Magic" }
-    end
-    if classToken == "MONK" then
-        return { "Poison", "Disease", "Magic" }
-    end
-    if classToken == "MAGE" then
-        return { "Curse" }
-    end
-    if classToken == "EVOKER" then
-        return { "Poison" }
-    end
-    return DEFAULT_DISPEL_TYPES
 end
 
 -- Return player specialization id.
@@ -372,523 +360,25 @@ local function getPlayerSpecializationID()
     return specID
 end
 
--- Return spell name and icon by spell ID.
-local function getSpellNameAndIcon(spellID)
-    local name, _, icon
-    if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
-        local spellInfo = C_Spell.GetSpellInfo(spellID)
-        if type(spellInfo) == "table" then
-            name = spellInfo.name
-            icon = spellInfo.iconID
-        end
-    end
-
-    if not name and type(GetSpellInfo) == "function" then
-        name, _, icon = GetSpellInfo(spellID)
-    end
-
-    return name, icon
-end
-
--- Return normalized healer group key.
-local function normalizeHealerGroupKey(groupKey)
-    if groupKey == "absorbs" then
-        return "absorbs"
-    end
-    if groupKey == "externals" then
-        return "externals"
-    end
-    return "hots"
-end
-
--- Return resolved spell id from raw identifier.
-local function resolveSpellIDFromIdentifier(rawIdentifier)
-    local numeric = tonumber(rawIdentifier)
-    if numeric then
-        local rounded = math.floor(numeric + 0.5)
-        return rounded > 0 and rounded or nil
-    end
-
-    if type(rawIdentifier) ~= "string" then
-        return nil
-    end
-
-    local identifier = string.match(rawIdentifier, "^%s*(.-)%s*$")
-    if not identifier or identifier == "" then
-        return nil
-    end
-
-    local spellIDFromLink = tonumber(string.match(identifier, "spell:(%d+)"))
-    if spellIDFromLink then
-        spellIDFromLink = math.floor(spellIDFromLink + 0.5)
-        return spellIDFromLink > 0 and spellIDFromLink or nil
-    end
-
-    numeric = tonumber(identifier)
-    if numeric then
-        local rounded = math.floor(numeric + 0.5)
-        return rounded > 0 and rounded or nil
-    end
-
-    if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
-        local okInfo, spellInfo = pcall(C_Spell.GetSpellInfo, identifier)
-        if okInfo and type(spellInfo) == "table" then
-            local spellID = tonumber(spellInfo.spellID or spellInfo.spellId)
-            if spellID then
-                spellID = math.floor(spellID + 0.5)
-                if spellID > 0 then
-                    return spellID
-                end
-            end
-        end
-    end
-
-    if type(GetSpellLink) == "function" then
-        local okLink, link = pcall(GetSpellLink, identifier)
-        if okLink and type(link) == "string" then
-            local spellID = tonumber(string.match(link, "spell:(%d+)"))
-            if spellID then
-                spellID = math.floor(spellID + 0.5)
-                if spellID > 0 then
-                    return spellID
-                end
-            end
-        end
-    end
-
-    return nil
-end
-
--- Check whether player currently knows spell.
-local function isSpellKnownByPlayer(spellID)
-    if type(IsPlayerSpell) == "function" then
-        local okKnown, known = pcall(IsPlayerSpell, spellID)
-        if okKnown and known then
-            return true
-        end
-    end
-
-    if C_SpellBook and type(C_SpellBook.IsSpellKnown) == "function" then
-        local okKnown, known = pcall(C_SpellBook.IsSpellKnown, spellID)
-        if okKnown and known then
-            return true
-        end
-    end
-
-    return false
-end
-
--- Return tracked spell catalog for all classes.
-function PartyFrames:GetHealerSpellCatalog()
-    return HEALER_TRACKED_SPELLS_BY_CLASS
-end
-
--- Return party healer group defaults.
-function PartyFrames:GetPartyHealerGroupDefaults()
-    return PARTY_HEALER_GROUP_DEFAULTS
-end
-
--- Return party healer config with guaranteed defaults.
+-- Return party healer config.
 function PartyFrames:GetPartyHealerConfig()
-    if not self.dataHandle then
-        return nil
-    end
-
-    local profile = self.dataHandle:GetProfile()
-    if type(profile.loveHealers) ~= "table" then
-        if type(profile.partyHealer) == "table" then
-            profile.loveHealers = profile.partyHealer
-        elseif type(profile.raidHealer) == "table" then
-            profile.loveHealers = profile.raidHealer
-        else
-            profile.loveHealers = {}
-        end
-    end
-    local config = profile.loveHealers
-
-    if config.enabled == nil then
-        config.enabled = true
-    end
-    config.groups = config.groups or {}
-    config.spells = config.spells or {}
-    config.customSpells = config.customSpells or {}
-
-    for groupKey, defaults in pairs(PARTY_HEALER_GROUP_DEFAULTS) do
-        config.groups[groupKey] = config.groups[groupKey] or {}
-        local groupConfig = config.groups[groupKey]
-        if type(groupConfig.style) ~= "string" or groupConfig.style == "" then
-            groupConfig.style = defaults.style
-        end
-        groupConfig.size = Util:Clamp(tonumber(groupConfig.size) or defaults.size, 6, 48)
-        groupConfig.color = groupConfig.color or {}
-        groupConfig.color.r = Util:Clamp(tonumber(groupConfig.color.r) or defaults.color.r, 0, 1)
-        groupConfig.color.g = Util:Clamp(tonumber(groupConfig.color.g) or defaults.color.g, 0, 1)
-        groupConfig.color.b = Util:Clamp(tonumber(groupConfig.color.b) or defaults.color.b, 0, 1)
-        groupConfig.color.a = Util:Clamp(tonumber(groupConfig.color.a) or defaults.color.a, 0, 1)
-    end
-
-    return config
+    return ns.AuraHandle and ns.AuraHandle:GetHealerConfig() or nil
 end
 
--- Invalidate cached healer spell data.
-function PartyFrames:InvalidateHealerSpellCaches()
-    self._healerCacheRevision = (self._healerCacheRevision or 0) + 1
-    self._availableHealerSpellsCache = nil
-    self._availableHealerSpellsCacheClassToken = nil
-    self._availableHealerSpellsCacheSpecID = nil
-    self._availableHealerSpellsCacheRevision = self._healerCacheRevision
-    self._activeTrackedHealerSpellSetCache = nil
-    self._activeTrackedHealerSpellSetCacheRevision = self._healerCacheRevision
-end
+-- ============================================================================
+-- PARTYFRAMES CLASS DEFINITION
+-- ============================================================================
 
--- Return current healer spell cache revision.
-function PartyFrames:GetHealerCacheRevision()
-    return self._healerCacheRevision or 0
-end
-
--- Return whether healer trackers should refresh for this aura update.
-function PartyFrames:ShouldRefreshHealerTrackersForAuraUpdate(unitToken, auraUpdateInfo)
-    if type(auraUpdateInfo) ~= "table" then
-        return true
-    end
-    if auraUpdateInfo.isFullUpdate == true then
-        return true
-    end
-
-    local removed = auraUpdateInfo.removedAuraInstanceIDs
-    if type(removed) == "table" and next(removed) ~= nil then
-        return true
-    end
-
-    local function isHelpfulOrUnknown(auraData)
-        if type(auraData) ~= "table" then
-            return true
-        end
-        if auraData.isHelpful ~= nil then
-            local okHelpful, helpful = pcall(equalsTrue, auraData.isHelpful)
-            if okHelpful then
-                return helpful
-            end
-            return true
-        end
-        if auraData.isHarmful ~= nil then
-            local okHarmful, harmful = pcall(equalsTrue, auraData.isHarmful)
-            if okHarmful then
-                return not harmful
-            end
-            return true
-        end
-        return true
-    end
-
-    if iterateAuraUpdateList(auraUpdateInfo.addedAuras, isHelpfulOrUnknown) then
-        return true
-    end
-
-    if C_UnitAuras and type(C_UnitAuras.GetAuraDataByAuraInstanceID) == "function" then
-        if iterateAuraUpdateList(auraUpdateInfo.updatedAuraInstanceIDs, function(auraInstanceID)
-            local okAura, auraData = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unitToken, auraInstanceID)
-            if not okAura then
-                return true
-            end
-            return isHelpfulOrUnknown(auraData)
-        end) then
-            return true
-        end
-    else
-        local updated = auraUpdateInfo.updatedAuraInstanceIDs
-        if type(updated) == "table" and next(updated) ~= nil then
-            return true
-        end
-    end
-
-    return false
-end
-
--- Invalidate helpful-aura cache for one unit, or all units.
-function PartyFrames:InvalidateHelpfulAuraCache(unitToken)
-    if type(unitToken) == "string" and unitToken ~= "" then
-        if type(self._helpfulAuraCacheByUnit) == "table" then
-            self._helpfulAuraCacheByUnit[unitToken] = nil
-        end
-        return
-    end
-
-    self._helpfulAuraCacheByUnit = {}
-end
-
--- Build helpful-aura map by spell id for one unit.
-function PartyFrames:BuildHelpfulAuraMapForUnit(unitToken)
-    local map = {}
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return map
-    end
-
-    for index = 1, MAX_HELPFUL_AURA_SCAN do
-        local auraData = nil
-        if C_UnitAuras and type(C_UnitAuras.GetAuraDataByIndex) == "function" then
-            local okAura, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unitToken, index, "HELPFUL")
-            if okAura then
-                auraData = aura
-            end
-        elseif type(UnitAura) == "function" then
-            local name, icon, _, _, _, _, _, _, _, spellID = UnitAura(unitToken, index, "HELPFUL")
-            if icon then
-                auraData = {
-                    name = name,
-                    icon = icon,
-                    spellId = spellID,
-                }
-            end
-        end
-
-        if type(auraData) ~= "table" then
-            break
-        end
-
-        local spellID = getSafeNumericValue(auraData.spellId, nil)
-        spellID = spellID and math.floor(spellID + 0.5) or nil
-        if spellID and spellID > 0 and map[spellID] == nil then
-            map[spellID] = {
-                spellID = spellID,
-                icon = auraData.icon or auraData.iconFileID or auraData.texture,
-            }
-        end
-    end
-
-    return map
-end
-
--- Return cached helpful-aura map for one unit.
-function PartyFrames:GetHelpfulAuraMapForUnit(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return {}
-    end
-
-    self._helpfulAuraCacheByUnit = self._helpfulAuraCacheByUnit or {}
-    local cached = self._helpfulAuraCacheByUnit[unitToken]
-    if type(cached) == "table" then
-        return cached
-    end
-
-    cached = self:BuildHelpfulAuraMapForUnit(unitToken)
-    self._helpfulAuraCacheByUnit[unitToken] = cached
-    return cached
-end
-
--- Return whether spell id is configured as custom party healer spell.
-function PartyFrames:IsCustomHealerSpell(spellID)
-    local config = self:GetPartyHealerConfig()
-    if not config or type(spellID) ~= "number" then
-        return false
-    end
-
-    return type(config.customSpells[tostring(math.floor(spellID + 0.5))]) == "table"
-end
-
--- Add custom party healer spell by spell id or spell name.
-function PartyFrames:AddCustomHealerSpell(rawIdentifier, groupKey)
-    local config = self:GetPartyHealerConfig()
-    if not config then
-        return nil, "missing_config"
-    end
-
-    local spellID = resolveSpellIDFromIdentifier(rawIdentifier)
-    if not spellID then
-        return nil, "invalid_spell"
-    end
-
-    local spellName = getSpellNameAndIcon(spellID)
-    if not spellName then
-        return nil, "unknown_spell"
-    end
-
-    local key = tostring(spellID)
-    config.customSpells[key] = config.customSpells[key] or {}
-    config.customSpells[key].spellID = spellID
-    config.customSpells[key].group = normalizeHealerGroupKey(groupKey)
-    self:InvalidateHealerSpellCaches()
-    return spellID, nil
-end
-
--- Remove one custom party healer spell by spell id.
-function PartyFrames:RemoveCustomHealerSpell(spellID)
-    local config = self:GetPartyHealerConfig()
-    if not config or type(spellID) ~= "number" then
-        return false
-    end
-
-    local key = tostring(math.floor(spellID + 0.5))
-    if config.customSpells[key] == nil then
-        return false
-    end
-    config.customSpells[key] = nil
-    self:InvalidateHealerSpellCaches()
-    return true
-end
-
--- Return currently available tracked spells for player spec/talents.
-function PartyFrames:GetAvailableHealerSpells()
-    local _, classToken = UnitClass("player")
-    local specID = getPlayerSpecializationID()
-    local cacheRevision = self._healerCacheRevision or 0
-    if
-        type(self._availableHealerSpellsCache) == "table"
-        and self._availableHealerSpellsCacheClassToken == classToken
-        and self._availableHealerSpellsCacheSpecID == specID
-        and self._availableHealerSpellsCacheRevision == cacheRevision
-    then
-        return self._availableHealerSpellsCache
-    end
-
-    local spellEntries = HEALER_TRACKED_SPELLS_BY_CLASS[classToken or ""] or {}
-    local config = self:GetPartyHealerConfig()
-    local available = {}
-    local availableByKey = {}
-
-    local function upsertSpell(spellID, spellName, spellIcon, groupKey, isCustom)
-        if type(spellID) ~= "number" then
-            return
-        end
-        local key = tostring(math.floor(spellID + 0.5))
-        local normalizedGroup = normalizeHealerGroupKey(groupKey)
-
-        local existing = availableByKey[key]
-        if existing then
-            existing.group = normalizedGroup or existing.group
-            if spellName and (not existing.name or string.match(existing.name, "^Spell ")) then
-                existing.name = spellName
-            end
-            if spellIcon then
-                existing.icon = spellIcon
-            end
-            if isCustom then
-                existing.isCustom = true
-            end
-            return
-        end
-
-        local entry = {
-            spellID = spellID,
-            name = spellName or ("Spell " .. tostring(spellID)),
-            icon = spellIcon,
-            group = normalizedGroup,
-            isCustom = isCustom and true or false,
-        }
-        availableByKey[key] = entry
-        available[#available + 1] = entry
-    end
-
-    for i = 1, #spellEntries do
-        local entry = spellEntries[i]
-        if entry and type(entry.spellID) == "number" then
-            local specAllowed = true
-            if type(entry.specIDs) == "table" then
-                specAllowed = specID and entry.specIDs[specID] == true or false
-            end
-
-            if specAllowed and isSpellKnownByPlayer(entry.spellID) then
-                local spellName, spellIcon = getSpellNameAndIcon(entry.spellID)
-                upsertSpell(entry.spellID, spellName, spellIcon, entry.group or "hots", false)
-            end
-        end
-    end
-
-    local customSpells = config and config.customSpells or nil
-    if type(customSpells) == "table" then
-        for key, customEntry in pairs(customSpells) do
-            local customSpellID = tonumber(key)
-            if type(customEntry) == "table" and tonumber(customEntry.spellID) then
-                customSpellID = tonumber(customEntry.spellID)
-            end
-
-            customSpellID = customSpellID and math.floor(customSpellID + 0.5) or nil
-            if customSpellID and customSpellID > 0 then
-                local spellName, spellIcon = getSpellNameAndIcon(customSpellID)
-                if spellName then
-                    local groupKey = normalizeHealerGroupKey(customEntry and customEntry.group)
-                    upsertSpell(customSpellID, spellName, spellIcon, groupKey, true)
-                    if type(customEntry) == "table" and customEntry.group ~= groupKey then
-                        customEntry.group = groupKey
-                    end
-                end
-            end
-        end
-    end
-
-    table.sort(available, function(a, b)
-        if a.group ~= b.group then
-            return tostring(a.group) < tostring(b.group)
-        end
-        return tostring(a.name) < tostring(b.name)
-    end)
-
-    self._availableHealerSpellsCache = available
-    self._availableHealerSpellsCacheClassToken = classToken
-    self._availableHealerSpellsCacheSpecID = specID
-    self._availableHealerSpellsCacheRevision = cacheRevision
-    return available
-end
-
--- Return set of active tracked healer spell ids.
-function PartyFrames:GetActiveTrackedHealerSpellSet()
-    local cacheRevision = self._healerCacheRevision or 0
-    if
-        type(self._activeTrackedHealerSpellSetCache) == "table"
-        and self._activeTrackedHealerSpellSetCacheRevision == cacheRevision
-    then
-        return self._activeTrackedHealerSpellSetCache
-    end
-
-    local config = self:GetPartyHealerConfig()
-    if not config or config.enabled == false then
-        self._activeTrackedHealerSpellSetCache = {}
-        self._activeTrackedHealerSpellSetCacheRevision = cacheRevision
-        return self._activeTrackedHealerSpellSetCache
-    end
-
-    local available = self:GetAvailableHealerSpells()
-    local spellSet = {}
-    for i = 1, #available do
-        local spellEntry = available[i]
-        local spellID = spellEntry and spellEntry.spellID
-        if type(spellID) == "number" then
-            local spellConfig = config.spells[tostring(spellID)] or {}
-            if spellConfig.enabled ~= false then
-                spellSet[spellID] = true
-            end
-        end
-    end
-
-    self._activeTrackedHealerSpellSetCache = spellSet
-    self._activeTrackedHealerSpellSetCacheRevision = cacheRevision
-    return spellSet
-end
-
--- Return aura data for a specific spell ID on unit.
-function PartyFrames:GetUnitAuraBySpellID(unitToken, spellID)
-    if not unitToken or type(spellID) ~= "number" then
-        return nil
-    end
-
-    local roundedSpellID = math.floor(spellID + 0.5)
-    local auraMap = self:GetHelpfulAuraMapForUnit(unitToken)
-    local auraInfo = type(auraMap) == "table" and auraMap[roundedSpellID] or nil
-    if type(auraInfo) == "table" then
-        return auraInfo
-    end
-
-    return nil
-end
-
--- Initialize party frames state.
+-- Initialize party frames state. Called once on class instantiation.
 function PartyFrames:Constructor()
     self.addon = nil
     self.dataHandle = nil
     self.globalFrames = nil
     self.unitFrames = nil
     self.container = nil
-    self.frames = {}
+    self.header = nil          -- SecureGroupHeaderTemplate frame
+    self.testFrames = {}       -- fixed pool for preview/test mode only
+    self.frames = {}           -- active frame set; populated by RefreshAll
     self._testTicker = nil
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
@@ -897,23 +387,16 @@ function PartyFrames:Constructor()
     self._testMemberStateByUnit = nil
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
-    self._availableHealerSpellsCache = nil
-    self._availableHealerSpellsCacheClassToken = nil
-    self._availableHealerSpellsCacheSpecID = nil
-    self._availableHealerSpellsCacheRevision = 0
-    self._activeTrackedHealerSpellSetCache = nil
-    self._activeTrackedHealerSpellSetCacheRevision = 0
-    self._healerCacheRevision = 0
-    self._helpfulAuraCacheByUnit = {}
-    self._unmappedUnitRefreshAt = 0
+    self._combatRemapRetryAt = 0
+    self._lastLiveUnitsToShow = nil
 end
 
--- Initialize party frames module.
+-- Initialize party frames module. Called by addon before OnEnable.
 function PartyFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
--- Enable party frames module.
+-- Enable party frames module. Sets up frames, events, and applies initial config.
 function PartyFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
@@ -921,7 +404,8 @@ function PartyFrames:OnEnable()
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
-    self._unmappedUnitRefreshAt = 0
+    self._combatRemapRetryAt = 0
+    self._lastLiveUnitsToShow = nil
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     if self.editModeActive then
         self:EnsureEditModeSelection()
@@ -929,25 +413,22 @@ function PartyFrames:OnEnable()
             self.container.EditModeSelection:Show()
         end
     end
-    self:InvalidateHealerSpellCaches()
-    self:InvalidateHelpfulAuraCache()
     self:ApplyBlizzardPartyFrameVisibility()
     self:RefreshAll(true)
 end
 
--- Disable party frames module.
+-- Disable party frames module. Cleans up frames, unregisters events, and hides UI.
 function PartyFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
-    self._unmappedUnitRefreshAt = 0
+    self._combatRemapRetryAt = 0
     self._testMemberStateByUnit = nil
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
-    self:InvalidateHealerSpellCaches()
-    self:InvalidateHelpfulAuraCache()
+    self._lastLiveUnitsToShow = nil
     self:StopTestTicker()
     self:SetBlizzardPartyFramesHidden(false)
     if self.container then
@@ -960,46 +441,11 @@ function PartyFrames:OnDisable()
     end
 end
 
--- Return static dummy aura state for one test member.
-function PartyFrames:CreateStaticDummyAuraState()
-    local state = {
-        buffs = {},
-        debuffs = {},
-        dispelType = nil,
-    }
+-- ============================================================================
+-- TEST MODE UTILITIES
+-- ============================================================================
 
-    local dispelTypes = getPlayerDispelTypes()
-    local buffCount = math.random(2, 4)
-    for i = 1, buffCount do
-        state.buffs[i] = {
-            icon = getRandomItem(DUMMY_BUFF_ICONS),
-            count = math.random(0, 3),
-            duration = 0,
-            expirationTime = 0,
-            debuffType = nil,
-        }
-    end
-
-    local debuffCount = math.random(1, 3)
-    for i = 1, debuffCount do
-        local dispelType = getRandomItem(dispelTypes) or getRandomItem(DEFAULT_DISPEL_TYPES)
-        local dummy = getRandomItem(DUMMY_DEBUFFS) or DUMMY_DEBUFFS[1]
-        state.debuffs[i] = {
-            icon = dummy.icon,
-            count = math.random(0, 2),
-            duration = 0,
-            expirationTime = 0,
-            debuffType = dispelType,
-        }
-        if i == 1 then
-            state.dispelType = dispelType
-        end
-    end
-
-    return state
-end
-
--- Return static test state for one member.
+-- Generate random static test data for one member (health, power, absorb).
 function PartyFrames:CreateStaticTestMemberState(unitToken, showPowerBar)
     local displayName = TEST_NAME_BY_UNIT[unitToken] or unitToken
     if unitToken == "player" then
@@ -1013,13 +459,12 @@ function PartyFrames:CreateStaticTestMemberState(unitToken, showPowerBar)
         power = showPowerBar and math.random(20, 100) or 0,
         maxPower = showPowerBar and 100 or 1,
         absorb = math.random(0, 35),
-        auras = self:CreateStaticDummyAuraState(),
     }
 
     return state
 end
 
--- Return static test state for member, creating it if needed.
+-- Get or create cached static test state for a specific unit.
 function PartyFrames:GetOrCreateStaticTestMemberState(unitToken, showPowerBar)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -1036,7 +481,7 @@ function PartyFrames:GetOrCreateStaticTestMemberState(unitToken, showPowerBar)
     return state
 end
 
--- Ensure static test states for listed units and drop stale ones.
+-- Ensure test member states exist for all units in the show list; prune others.
 function PartyFrames:EnsureStaticTestMemberStates(unitsToShow)
     if type(unitsToShow) ~= "table" then
         return
@@ -1059,7 +504,16 @@ function PartyFrames:EnsureStaticTestMemberStates(unitsToShow)
     end
 end
 
--- Create party frames.
+-- ============================================================================
+-- FRAME CREATION & VISUALS
+-- ============================================================================
+
+-- Create party frames container and secure header. Establishes Layer 2 (header)
+-- and prepares Layer 3 (visual sub-frames) for lazy attachment.
+-- Layer 1: Blizzard's CompactPartyFrame continues to run in the background, managed by AuraHandle.
+-- Layer 2: A SecureGroupHeaderTemplate header owns unit attribution for our custom frames.
+--          Visual sub-frames are attached lazily via SetupFrameHeaderChild hook.
+-- Layer 3: Blizzard frame visibility (alpha/scale) is managed by AuraHandle, never by this module.
 function PartyFrames:CreatePartyFrames()
     if self.container then
         return self.container
@@ -1069,189 +523,191 @@ function PartyFrames:CreatePartyFrames()
         return nil
     end
 
+    -- Positioning/EditMode container (plain, non-protected frame).
     local container = CreateFrame("Frame", "mummuFramesPartyContainer", UIParent)
     container:SetFrameStrata("LOW")
     container.unitToken = "party"
     container:Hide()
     self.container = container
 
+    -- SecureGroupHeaderTemplate header: manages unit attribution for real party members.
+    -- Children are SecureUnitButtonTemplate buttons created and assigned by the header's
+    -- restricted attribute code, so unit assignment is never done from normal Lua in combat.
+    local header = CreateFrame("Frame", "mummuFramesPartyHeader", container, "SecureGroupHeaderTemplate")
+    header:SetFrameStrata("LOW")
+    header:SetAttribute("groupFilter", "PARTY,PLAYER")
+    header:SetAttribute("showPlayer", true)
+    header:SetAttribute("showSolo", true)
+    header:SetAttribute("template", "SecureUnitButtonTemplate")
+    header:SetAttribute("sortMethod", "ROLE")
+    header:SetAttribute("point", "TOP")
+    header:SetAttribute("xOffset", 0)
+    header:SetAttribute("yOffset", -2)
+    header:SetAttribute("frameWidth", 180)
+    header:SetAttribute("frameHeight", 34)
+    header:SetAttribute("maxDisplayed", MAX_PARTY_TEST_FRAMES)
+    -- initialConfigFunction runs in the restricted execution environment; only
+    -- SetAttribute calls are permitted here.  Click registration and visual
+    -- sub-frames are applied in normal Lua by BuildFrameVisuals, called lazily
+    -- from the RefreshAll real-mode loop the first time each child is seen.
+    header:SetAttribute("initialConfigFunction", [[
+        self:SetAttribute("type1", "target")
+        self:SetAttribute("*type2", "togglemenu")
+    ]])
+    header:SetAllPoints(container)
+    self.header = header
+
+    -- Separate pool of test frames used exclusively in preview/test mode.
+    -- These are plain children of the container, never touched by the secure header.
+    self.testFrames = {}
     for i = 1, MAX_PARTY_TEST_FRAMES do
-        local frame = CreateFrame("Button", "mummuFramesPartyFrame" .. i, container, "SecureUnitButtonTemplate")
-        frame:SetFrameStrata("LOW")
-        frame:SetClampedToScreen(true)
-        frame._mummuIsPartyFrame = true
-        frame:RegisterForClicks("AnyDown", "AnyUp")
-        frame:SetAttribute("unit", "party1")
-        frame:SetAttribute("type1", "target")
-        frame:SetAttribute("*type2", "togglemenu")
-        frame.unit = "party1"
-        frame.displayedUnit = "party1"
+        local defaultUnitToken = (i <= 4) and ("party" .. i) or "player"
+        local testFrame = CreateFrame(
+            "Button",
+            "mummuFramesPartyTestFrame" .. i,
+            container,
+            "SecureUnitButtonTemplate"
+        )
+        testFrame:SetAttribute("unit", defaultUnitToken)
+        testFrame:SetAttribute("type1", "target")
+        testFrame:SetAttribute("*type2", "togglemenu")
+        testFrame:RegisterForClicks("AnyDown", "AnyUp")
+        testFrame.unit = defaultUnitToken
+        testFrame.displayedUnit = defaultUnitToken
         if self.globalFrames and type(self.globalFrames.RegisterClickCastFrame) == "function" then
-            self.globalFrames:RegisterClickCastFrame(frame)
+            self.globalFrames:RegisterClickCastFrame(testFrame)
         end
-        frame:SetScript("OnEnter", showUnitTooltip)
-        frame:SetScript("OnLeave", hideUnitTooltip)
-
-        frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
-        frame.HealthBar = self.globalFrames:CreateStatusBar(frame)
-        frame.PowerBar = self.globalFrames:CreateStatusBar(frame)
-
-        frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
-        frame.NameText:SetJustifyH("LEFT")
-        frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
-        frame.HealthText:SetJustifyH("RIGHT")
-
-        frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
-        frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
-        frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
-        frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
-        frame.AbsorbOverlayFrame:Hide()
-
-        frame.AbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.AbsorbOverlayFrame)
-        frame.AbsorbOverlayBar:SetAllPoints(frame.AbsorbOverlayFrame)
-        frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
-        frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
-        frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
-        frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
-        frame.AbsorbOverlayBar:Hide()
-
-        frame.DispelOverlay = frame.HealthBar:CreateTexture(nil, "OVERLAY")
-        frame.DispelOverlay:SetAllPoints(frame.HealthBar)
-        frame.DispelOverlay:Hide()
-
-        frame.DisconnectedOverlay = CreateFrame("Frame", nil, frame)
-        frame.DisconnectedOverlay:SetAllPoints(frame)
-        frame.DisconnectedOverlay:SetFrameStrata(frame:GetFrameStrata())
-        frame.DisconnectedOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
-        frame.DisconnectedIcon = frame.DisconnectedOverlay:CreateTexture(nil, "OVERLAY")
-        frame.DisconnectedIcon:SetTexture(DISCONNECTED_ICON_TEXTURE)
-        frame.DisconnectedIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
-        frame.DisconnectedIcon:SetAlpha(0.95)
-        frame.DisconnectedIcon:Hide()
-
-        frame.TargetHighlight = CreateFrame("Frame", nil, frame)
-        frame.TargetHighlight:SetAllPoints(frame)
-        frame.TargetHighlight:SetFrameStrata(frame:GetFrameStrata())
-        frame.TargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 35)
-        frame.TargetHighlight:Hide()
-
-        local targetHighlightBorder = 2
-        local targetHighlightColor = { 1, 0.84, 0.18, 0.95 }
-        frame.TargetHighlight.Top = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
-        frame.TargetHighlight.Top:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
-        frame.TargetHighlight.Top:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
-        frame.TargetHighlight.Top:SetHeight(targetHighlightBorder)
-        frame.TargetHighlight.Top:SetColorTexture(
-            targetHighlightColor[1],
-            targetHighlightColor[2],
-            targetHighlightColor[3],
-            targetHighlightColor[4]
-        )
-
-        frame.TargetHighlight.Bottom = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
-        frame.TargetHighlight.Bottom:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
-        frame.TargetHighlight.Bottom:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
-        frame.TargetHighlight.Bottom:SetHeight(targetHighlightBorder)
-        frame.TargetHighlight.Bottom:SetColorTexture(
-            targetHighlightColor[1],
-            targetHighlightColor[2],
-            targetHighlightColor[3],
-            targetHighlightColor[4]
-        )
-
-        frame.TargetHighlight.Left = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
-        frame.TargetHighlight.Left:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
-        frame.TargetHighlight.Left:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
-        frame.TargetHighlight.Left:SetWidth(targetHighlightBorder)
-        frame.TargetHighlight.Left:SetColorTexture(
-            targetHighlightColor[1],
-            targetHighlightColor[2],
-            targetHighlightColor[3],
-            targetHighlightColor[4]
-        )
-
-        frame.TargetHighlight.Right = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
-        frame.TargetHighlight.Right:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
-        frame.TargetHighlight.Right:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
-        frame.TargetHighlight.Right:SetWidth(targetHighlightBorder)
-        frame.TargetHighlight.Right:SetColorTexture(
-            targetHighlightColor[1],
-            targetHighlightColor[2],
-            targetHighlightColor[3],
-            targetHighlightColor[4]
-        )
-
-        if self.unitFrames and type(self.unitFrames.EnsureAuraContainers) == "function" then
-            self.unitFrames:EnsureAuraContainers(frame)
-        end
-
-        frame:Hide()
-        self.frames[i] = frame
+        testFrame:Hide()
+        self:BuildFrameVisuals(testFrame)
+        self.testFrames[i] = testFrame
     end
 
-    return self.container
+    -- self.frames starts empty; RefreshAll populates it from either header children or testFrames.
+    self.frames = {}
+
+    return container
 end
 
--- Return all available Blizzard party frames.
-function PartyFrames:GetBlizzardPartyFrames()
-    local frames = {}
-    local seen = {}
-    for i = 1, #BLIZZARD_PARTY_FRAME_NAMES do
-        local frame = _G[BLIZZARD_PARTY_FRAME_NAMES[i]]
-        if frame and not seen[frame] then
-            seen[frame] = true
-            frames[#frames + 1] = frame
-        end
+-- Attach visual sub-frames to a party member button (health bar, power bar, auras, overlays).
+-- Idempotent: safe to call multiple times. Called for both header-managed children and test frames.
+function PartyFrames:BuildFrameVisuals(frame)
+    if not frame or frame._mummuVisualsBuilt then
+        return
     end
-    return frames
+
+    frame:SetFrameStrata("LOW")
+    frame:SetClampedToScreen(true)
+    frame._mummuIsPartyFrame = true
+
+    if type(frame.RegisterForClicks) == "function" then
+        frame:RegisterForClicks("AnyDown", "AnyUp")
+    end
+    if self.globalFrames and type(self.globalFrames.RegisterClickCastFrame) == "function" then
+        self.globalFrames:RegisterClickCastFrame(frame)
+    end
+    frame:SetScript("OnEnter", showUnitTooltip)
+    frame:SetScript("OnLeave", hideUnitTooltip)
+
+    frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
+    frame.HealthBar = self.globalFrames:CreateStatusBar(frame)
+    frame.PowerBar = self.globalFrames:CreateStatusBar(frame)
+
+    frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
+    frame.NameText:SetJustifyH("LEFT")
+    frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
+    frame.HealthText:SetJustifyH("RIGHT")
+
+    frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
+    frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+    frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
+    frame.AbsorbOverlayFrame:Hide()
+
+    frame.AbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.AbsorbOverlayFrame)
+    frame.AbsorbOverlayBar:SetAllPoints(frame.AbsorbOverlayFrame)
+    frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
+    frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+    frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
+    frame.AbsorbOverlayBar:Hide()
+
+    frame.DispelOverlay = frame.HealthBar:CreateTexture(nil, "OVERLAY")
+    frame.DispelOverlay:SetAllPoints(frame.HealthBar)
+    frame.DispelOverlay:Hide()
+
+    frame.DisconnectedOverlay = CreateFrame("Frame", nil, frame)
+    frame.DisconnectedOverlay:SetAllPoints(frame)
+    frame.DisconnectedOverlay:SetFrameStrata(frame:GetFrameStrata())
+    frame.DisconnectedOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+    frame.DisconnectedIcon = frame.DisconnectedOverlay:CreateTexture(nil, "OVERLAY")
+    frame.DisconnectedIcon:SetTexture(DISCONNECTED_ICON_TEXTURE)
+    frame.DisconnectedIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.DisconnectedIcon:SetAlpha(0.95)
+    frame.DisconnectedIcon:Hide()
+
+    frame.SummonOverlay = CreateFrame("Frame", nil, frame)
+    frame.SummonOverlay:SetAllPoints(frame)
+    frame.SummonOverlay:SetFrameStrata(frame:GetFrameStrata())
+    frame.SummonOverlay:SetFrameLevel(frame:GetFrameLevel() + 39)
+    frame.SummonIcon = frame.SummonOverlay:CreateTexture(nil, "OVERLAY")
+    frame.SummonIcon:SetTexture(SUMMON_ICON_TEXTURE)
+    frame.SummonIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.SummonIcon:SetAlpha(0.95)
+    frame.SummonIcon:Hide()
+
+    frame.TargetHighlight = CreateFrame("Frame", nil, frame)
+    frame.TargetHighlight:SetAllPoints(frame)
+    frame.TargetHighlight:SetFrameStrata(frame:GetFrameStrata())
+    frame.TargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 35)
+    frame.TargetHighlight:Hide()
+
+    local targetHighlightBorder = 2
+    local targetHighlightColor = { 1, 0.84, 0.18, 0.95 }
+    frame.TargetHighlight.Top = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.TargetHighlight.Top:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
+    frame.TargetHighlight.Top:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
+    frame.TargetHighlight.Top:SetHeight(targetHighlightBorder)
+    frame.TargetHighlight.Top:SetColorTexture(
+        targetHighlightColor[1], targetHighlightColor[2],
+        targetHighlightColor[3], targetHighlightColor[4]
+    )
+    frame.TargetHighlight.Bottom = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.TargetHighlight.Bottom:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
+    frame.TargetHighlight.Bottom:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
+    frame.TargetHighlight.Bottom:SetHeight(targetHighlightBorder)
+    frame.TargetHighlight.Bottom:SetColorTexture(
+        targetHighlightColor[1], targetHighlightColor[2],
+        targetHighlightColor[3], targetHighlightColor[4]
+    )
+    frame.TargetHighlight.Left = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.TargetHighlight.Left:SetPoint("TOPLEFT", frame.TargetHighlight, "TOPLEFT", 0, 0)
+    frame.TargetHighlight.Left:SetPoint("BOTTOMLEFT", frame.TargetHighlight, "BOTTOMLEFT", 0, 0)
+    frame.TargetHighlight.Left:SetWidth(targetHighlightBorder)
+    frame.TargetHighlight.Left:SetColorTexture(
+        targetHighlightColor[1], targetHighlightColor[2],
+        targetHighlightColor[3], targetHighlightColor[4]
+    )
+    frame.TargetHighlight.Right = frame.TargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.TargetHighlight.Right:SetPoint("TOPRIGHT", frame.TargetHighlight, "TOPRIGHT", 0, 0)
+    frame.TargetHighlight.Right:SetPoint("BOTTOMRIGHT", frame.TargetHighlight, "BOTTOMRIGHT", 0, 0)
+    frame.TargetHighlight.Right:SetWidth(targetHighlightBorder)
+    frame.TargetHighlight.Right:SetColorTexture(
+        targetHighlightColor[1], targetHighlightColor[2],
+        targetHighlightColor[3], targetHighlightColor[4]
+    )
+
+    frame._mummuVisualsBuilt = true
 end
 
--- Set Blizzard party frames hidden or shown.
+-- ============================================================================
+-- BLIZZARD FRAME & CONFIG MANAGEMENT
+-- ============================================================================
+
+-- Hide or show Blizzard's party frame based on config. Controls visibility via
+-- AuraHandle (alpha/scale only), never direct frame Show/Hide.
 function PartyFrames:SetBlizzardPartyFramesHidden(shouldHide)
-    local frames = self:GetBlizzardPartyFrames()
-    for i = 1, #frames do
-        local frame = frames[i]
-        if not frame._mummuPartyHideInit then
-            frame._mummuPartyHideInit = true
-            frame._mummuPartyOriginalAlpha = frame:GetAlpha()
-            if type(frame.IsMouseEnabled) == "function" then
-                frame._mummuPartyOriginalMouseEnabled = frame:IsMouseEnabled()
-            end
-        end
-
-        if not frame._mummuPartyHideHooked and type(frame.HookScript) == "function" then
-            pcall(frame.HookScript, frame, "OnShow", function(shownFrame)
-                if shownFrame._mummuPartyHideRequested then
-                    shownFrame:SetAlpha(0)
-                    if not InCombatLockdown() and type(shownFrame.EnableMouse) == "function" then
-                        shownFrame:EnableMouse(false)
-                    end
-                end
-            end)
-            pcall(frame.HookScript, frame, "OnUpdate", function(shownFrame)
-                if shownFrame._mummuPartyHideRequested then
-                    shownFrame:SetAlpha(0)
-                end
-            end)
-            frame._mummuPartyHideHooked = true
-        end
-
-        frame._mummuPartyHideRequested = shouldHide and true or false
-        if shouldHide then
-            frame:SetAlpha(0)
-            if not InCombatLockdown() and type(frame.EnableMouse) == "function" then
-                frame:EnableMouse(false)
-            end
-        else
-            frame:SetAlpha(frame._mummuPartyOriginalAlpha or 1)
-            if not InCombatLockdown() and type(frame.EnableMouse) == "function" then
-                if frame._mummuPartyOriginalMouseEnabled ~= nil then
-                    frame:EnableMouse(frame._mummuPartyOriginalMouseEnabled)
-                else
-                    frame:EnableMouse(true)
-                end
-            end
-        end
+    if ns.AuraHandle then
+        ns.AuraHandle:SetBlizzardFramesHidden("party", shouldHide, "partyFrames")
     end
 end
 
@@ -1271,24 +727,16 @@ end
 -- Register party frame events.
 function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "PLAYER_REGEN_DISABLED", self.OnCombatStarted)
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
-    ns.EventRouter:Register(self, "UNIT_HEALTH", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_MAXHEALTH", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_POWER_UPDATE", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_MAXPOWER", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_DISPLAYPOWER", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_CONNECTION", self.OnUnitEvent)
-    ns.EventRouter:Register(self, "UNIT_FLAGS", self.OnUnitEvent)
+    -- Group unit events are routed centrally by AuraHandle dispatcher.
 end
 
--- Register edit mode callbacks.
+-- Register for EditMode callbacks (enter/exit events).
 function PartyFrames:RegisterEditModeCallbacks()
     if self.editModeCallbacksRegistered then
         return
@@ -1303,7 +751,7 @@ function PartyFrames:RegisterEditModeCallbacks()
     self.editModeCallbacksRegistered = true
 end
 
--- Unregister edit mode callbacks.
+-- Unregister from EditMode callbacks.
 function PartyFrames:UnregisterEditModeCallbacks()
     if not self.editModeCallbacksRegistered then
         return
@@ -1317,7 +765,7 @@ function PartyFrames:UnregisterEditModeCallbacks()
     self.editModeCallbacksRegistered = false
 end
 
--- Ensure edit mode selection for party container.
+-- Ensure EditMode selection frame exists for the party container.
 function PartyFrames:EnsureEditModeSelection()
     if not self.container or not self.unitFrames then
         return
@@ -1333,7 +781,7 @@ function PartyFrames:EnsureEditModeSelection()
     end
 end
 
--- Handle edit mode enter event.
+-- Handle EditMode entering; show selection UI and refresh frames.
 function PartyFrames:OnEditModeEnter()
     self.editModeActive = true
     self:EnsureEditModeSelection()
@@ -1343,7 +791,7 @@ function PartyFrames:OnEditModeEnter()
     self:RefreshAll(true)
 end
 
--- Handle edit mode exit event.
+-- Handle EditMode exiting; hide selection UI and restore live frames.
 function PartyFrames:OnEditModeExit()
     self.editModeActive = false
     if self.container then
@@ -1356,37 +804,258 @@ function PartyFrames:OnEditModeExit()
     self:RefreshAll(true)
 end
 
--- Handle world/roster/spec events.
+-- Handle world/roster/specialization change events; rebuild unit maps with combat awareness.
 function PartyFrames:OnWorldEvent()
-    self:InvalidateHealerSpellCaches()
-    self:InvalidateHelpfulAuraCache()
+    if InCombatLockdown() then
+        self.pendingLayoutRefresh = true
+        self:RebuildDisplayedUnitMap(true)
+        self:ScheduleMapRebuildSafetyNet("world_combat", true)
+        return
+    end
     self:RefreshAll(true)
+    self:RebuildDisplayedUnitMap(false)
+    self:ScheduleMapRebuildSafetyNet("world", false)
 end
 
--- Handle target changed event.
+-- Handle player's current target changing; refresh target highlight.
 function PartyFrames:OnTargetChanged()
     self:RefreshAll(false)
 end
 
--- Handle combat ended event.
+-- Handle entering combat; prevent layout/visibility churn and keep map warm.
+function PartyFrames:OnCombatStarted()
+    self:RefreshAll(false)
+    self:RebuildDisplayedUnitMap(true)
+    self:ScheduleMapRebuildSafetyNet("combat_started", true)
+    self.pendingLayoutRefresh = true
+end
+
+-- Handle exiting combat; apply any deferred layout changes and rebuild unit maps.
 function PartyFrames:OnCombatEnded()
     if self.pendingLayoutRefresh then
         self.pendingLayoutRefresh = false
-        self:InvalidateHealerSpellCaches()
         self:RefreshAll(true)
+        self:ScheduleMapRebuildSafetyNet("combat_ended_layout", false)
         return
     end
 
     self:RefreshAll(false)
+    self:ScheduleMapRebuildSafetyNet("combat_ended", false)
 end
 
--- Refresh one currently displayed party unit frame.
-function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateInfo)
-    if type(unitToken) ~= "string" or unitToken == "" then
+-- ============================================================================
+-- UNIT MAPPING & RESOLUTION
+-- ============================================================================
+-- Maps maintain consistency between:
+--   1. GUID -> DisplayedUnit (which unit token is showing that player)
+--   2. DisplayedUnit -> Frame (which frame is showing that unit)
+-- These maps are rebuilt at safe times (non-combat) or with combat workarounds.
+
+-- Rebuild displayed-unit map from the SecureGroupHeaderTemplate header's current children.
+-- In real mode, the header owns unit attribution; we just read its current state.
+-- In preview/test mode, we read self.testFrames instead.
+-- allowHidden=true retains the previous map entry for any unit that existed before (combat safety).
+function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
+    local frameByDisplayedUnit = {}
+    local displayedUnitByGUID = {}
+    local includeHidden = allowHidden == true
+    local previousFrameByDisplayedUnit =
+        type(self._frameByDisplayedUnit) == "table" and self._frameByDisplayedUnit or {}
+
+    -- Determine the candidate frame pool.
+    local candidateFrames
+    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
+    local isPreview = (profile and profile.testMode == true) or self.editModeActive
+    if isPreview and type(self.testFrames) == "table" then
+        candidateFrames = self.testFrames
+    elseif type(self.frames) == "table" and #self.frames > 0 then
+        -- Use the live active frame list from the last RefreshAll.
+        -- This includes the solo player frame when not in a group.
+        candidateFrames = self.frames
+    elseif self.header then
+        -- Fallback before first RefreshAll has run.
+        candidateFrames = {}
+        local children = { self.header:GetChildren() }
+        for i = 1, #children do
+            local child = children[i]
+            if child and child._mummuVisualsBuilt then
+                candidateFrames[#candidateFrames + 1] = child
+            end
+        end
+    end
+
+    if not candidateFrames then
+        self._frameByDisplayedUnit = frameByDisplayedUnit
+        self._displayedUnitByGUID = displayedUnitByGUID
+        return 0
+    end
+
+    for i = 1, #candidateFrames do
+        local frame = candidateFrames[i]
+        if frame then
+            local isShown = type(frame.IsShown) == "function" and frame:IsShown() or true
+
+            if includeHidden or isShown then
+                -- Prefer the non-tainted backup fields; fall back to GetAttribute only when clean.
+                local displayedUnit = normalizePartyDisplayedUnit(frame.displayedUnit or frame.unit)
+                if not displayedUnit and type(frame.GetAttribute) == "function" then
+                    local ok, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+                    if ok then
+                        displayedUnit = normalizePartyDisplayedUnit(attrUnit)
+                    end
+                end
+
+                local shouldMapUnit = false
+                if displayedUnit == "player" then
+                    shouldMapUnit = true
+                elseif displayedUnit and UnitExists(displayedUnit) then
+                    shouldMapUnit = true
+                elseif displayedUnit and includeHidden and InCombatLockdown() then
+                    shouldMapUnit = previousFrameByDisplayedUnit[displayedUnit] == frame
+                end
+
+                if displayedUnit and shouldMapUnit and not frameByDisplayedUnit[displayedUnit] then
+                    frameByDisplayedUnit[displayedUnit] = frame
+                    frame.unit = displayedUnit
+                    frame.displayedUnit = displayedUnit
+                    local guid = getUnitGUIDSafe(displayedUnit)
+                    if guid then
+                        setDisplayedUnitForGUID(displayedUnitByGUID, guid, displayedUnit)
+                    end
+                end
+            end
+        end
+    end
+
+    -- In combat: carry forward any previously-mapped units that are still valid but
+    -- whose frames may temporarily be hidden by the header mid-roster-transition.
+    if includeHidden and InCombatLockdown() then
+        for unitToken, previousFrame in pairs(previousFrameByDisplayedUnit) do
+            local isPartyUnit = type(unitToken) == "string"
+                and (unitToken == "player" or string.match(unitToken, "^party%d+$"))
+            if isPartyUnit and previousFrame and not frameByDisplayedUnit[unitToken] then
+                if unitToken == "player" or UnitExists(unitToken) then
+                    frameByDisplayedUnit[unitToken] = previousFrame
+                    previousFrame.unit = unitToken
+                    previousFrame.displayedUnit = unitToken
+                    local guid = getUnitGUIDSafe(unitToken)
+                    if guid then
+                        setDisplayedUnitForGUID(displayedUnitByGUID, guid, unitToken)
+                    end
+                end
+            end
+        end
+    end
+
+    self._frameByDisplayedUnit = frameByDisplayedUnit
+    self._displayedUnitByGUID = displayedUnitByGUID
+
+    local mappedCount = 0
+    for _ in pairs(frameByDisplayedUnit) do
+        mappedCount = mappedCount + 1
+    end
+    return mappedCount
+end
+
+-- Schedule repeated map rebuilds (safety net) to heal secure-header/roster transition drift.
+-- Runs immediately and at delayed intervals to ensure map consistency during transitions.
+function PartyFrames:ScheduleMapRebuildSafetyNet(reason, allowHidden)
+    local includeHidden = allowHidden == true
+    self._mapRebuildSafetyToken = (self._mapRebuildSafetyToken or 0) + 1
+    local token = self._mapRebuildSafetyToken
+
+    local function runPass(tag)
+        if self._mapRebuildSafetyToken ~= token then
+            return
+        end
+        if not self.dataHandle then
+            return
+        end
+
+        self:RebuildDisplayedUnitMap(includeHidden)
+    end
+
+    runPass("immediate")
+    if not C_Timer or type(C_Timer.After) ~= "function" then
         return
     end
+    C_Timer.After(0.1, function() runPass("delay_0.1") end)
+    C_Timer.After(0.4, function() runPass("delay_0.4") end)
+    C_Timer.After(1.0, function() runPass("delay_1.0") end)
+end
+
+-- Ensure one party unit token is mapped to the header child that already owns it.
+-- This is intentionally strict: we never "borrow" an arbitrary child for another
+-- unit token, because that can render incorrect data during combat remaps.
+function PartyFrames:EnsureMappedFrameForUnit(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if unitToken ~= "player" and not string.match(unitToken, "^party%d+$") then
+        return nil
+    end
+    if not self.header then
+        return nil
+    end
+
+    self._frameByDisplayedUnit = self._frameByDisplayedUnit or {}
+    local existing = self._frameByDisplayedUnit[unitToken]
+    if existing then
+        return existing
+    end
+
+    -- Collect header children and look for one already holding this unit.
+    local children = { self.header:GetChildren() }
+    local matched = nil
+    for i = 1, #children do
+        local child = children[i]
+        if child and child._mummuVisualsBuilt then
+            local childUnit = normalizePartyDisplayedUnit(child.displayedUnit or child.unit)
+            if not childUnit and not InCombatLockdown() and type(child.GetAttribute) == "function" then
+                local okAttr, attrUnit = pcall(child.GetAttribute, child, "unit")
+                if okAttr then
+                    childUnit = normalizePartyDisplayedUnit(attrUnit)
+                end
+            end
+            if childUnit == unitToken then
+                matched = child
+                break
+            end
+        end
+    end
+
+    if not matched then
+        return nil
+    end
+
+    -- Update backup fields (safe in combat since these are plain Lua fields, not secure attributes).
+    for mappedUnit, mappedFrame in pairs(self._frameByDisplayedUnit) do
+        if mappedFrame == matched and mappedUnit ~= unitToken then
+            self._frameByDisplayedUnit[mappedUnit] = nil
+        end
+    end
+
+    matched.unit = unitToken
+    matched.displayedUnit = unitToken
+
+    self._frameByDisplayedUnit[unitToken] = matched
+    self._displayedUnitByGUID = self._displayedUnitByGUID or {}
+    local unitGUID = getUnitGUIDSafe(unitToken)
+    if unitGUID then
+        setDisplayedUnitForGUID(self._displayedUnitByGUID, unitGUID, unitToken)
+    end
+
+    return matched
+end
+
+-- Refresh one currently-displayed party unit frame (full refresh).
+-- Never forces secure frame visibility in combat; only updates existing visuals.
+function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
     if not self.dataHandle or not self.container then
-        return
+        return false
     end
 
     local profile = self.dataHandle:GetProfile()
@@ -1395,58 +1064,144 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, auraUpdateI
     local previewMode = testMode or self.editModeActive
     if previewMode then
         self:RefreshAll(false)
-        return
+        return true
     end
 
     local addonEnabled = profile and profile.enabled ~= false
     if not addonEnabled or partyConfig.enabled == false then
-        return
+        return false
     end
 
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit and InCombatLockdown() then
+        self:RebuildDisplayedUnitMap(true)
+        displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    end
+    if not displayedUnit and InCombatLockdown() then
+        local ensuredFrame = self:EnsureMappedFrameForUnit(unitToken)
+        if ensuredFrame then
+            displayedUnit = unitToken
+        end
+    end
     if not displayedUnit then
-        return
+        return false
     end
 
     local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
-        return
+        return false
     end
 
-    local availableHealerSpells = self:GetAvailableHealerSpells()
     self:RefreshMember(
         frame,
         frame.displayedUnit or displayedUnit,
         partyConfig,
         false,
-        availableHealerSpells,
         false,
         false,
-        refreshOptions or MEMBER_REFRESH_FULL,
-        auraUpdateInfo
+        refreshOptions or MEMBER_REFRESH_FULL
     )
+    return true
 end
 
--- Resolve a unit token to currently displayed party unit token.
+-- Refresh one already-resolved party frame directly (hook-path parity with Danders addon).
+-- Never forces secure frame visibility in combat; only updates existing visuals.
+function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions)
+    if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    if previewMode then
+        self:RefreshAll(false)
+        return true
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    if not addonEnabled or partyConfig.enabled == false then
+        return false
+    end
+
+    local displayedUnit = frame.displayedUnit or unitToken
+    self:RefreshMember(
+        frame,
+        displayedUnit,
+        partyConfig,
+        false,
+        false,
+        false,
+        refreshOptions or MEMBER_REFRESH_AURAS_ONLY
+    )
+
+    return true
+end
+
+-- Resolve a unit token to its currently-displayed party unit token.
+-- Uses GUID->DisplayedUnit map first, then direct lookup, then GUID comparison,
+-- finally UnitIsUnit() fallback for maximum reliability.
 function PartyFrames:ResolveDisplayedUnitToken(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
     end
 
     local frameByDisplayedUnit = self._frameByDisplayedUnit
-    if type(frameByDisplayedUnit) == "table" then
-        local okDirect, directFrame = pcall(function()
-            return frameByDisplayedUnit[unitToken]
-        end)
-        if okDirect and directFrame then
-            return unitToken
-        end
+    if type(frameByDisplayedUnit) ~= "table" then
+        return nil
+    end
 
-        if type(UnitIsUnit) == "function" then
-            for displayedUnit in pairs(frameByDisplayedUnit) do
-                local okMatch, isSameUnit = pcall(UnitIsUnit, unitToken, displayedUnit)
-                if okMatch and getSafeBooleanValue(isSameUnit, false) then
+    local displayedUnitByGUID = self._displayedUnitByGUID
+    if type(displayedUnitByGUID) == "table" then
+        local guid = getUnitGUIDSafe(unitToken)
+        if guid then
+            local mappedUnit = getDisplayedUnitForGUID(displayedUnitByGUID, guid)
+            if type(mappedUnit) == "string" and frameByDisplayedUnit[mappedUnit] then
+                return mappedUnit
+            end
+        end
+    end
+
+    local okDirect, directFrame = pcall(function()
+        return frameByDisplayedUnit[unitToken]
+    end)
+    if okDirect and directFrame then
+        return unitToken
+    end
+
+    local guid = getUnitGUIDSafe(unitToken)
+    if guid then
+        for displayedUnit, frame in pairs(frameByDisplayedUnit) do
+            if frame then
+                local displayedGUID = getUnitGUIDSafe(displayedUnit)
+                if displayedGUID and displayedGUID == guid then
                     return displayedUnit
+                end
+            end
+        end
+    end
+
+    if type(self.frames) == "table" then
+        for i = 1, #self.frames do
+            local frame = self.frames[i]
+            if frame then
+                local candidateUnit = frame.displayedUnit
+                    or frame.unit
+                    or (type(frame.GetAttribute) == "function" and frame:GetAttribute("unit"))
+                if type(candidateUnit) == "string" and candidateUnit ~= "" then
+                    if guid and getUnitGUIDSafe(candidateUnit) == guid then
+                        return candidateUnit
+                    end
+                    if type(UnitIsUnit) == "function" then
+                        local okMatch, isSameUnit = pcall(UnitIsUnit, candidateUnit, unitToken)
+                        if okMatch and isSameUnit then
+                            return candidateUnit
+                        end
+                    end
                 end
             end
         end
@@ -1455,46 +1210,46 @@ function PartyFrames:ResolveDisplayedUnitToken(unitToken)
     return nil
 end
 
--- Request a throttled full refresh when unit-token mapping misses.
-function PartyFrames:RequestFallbackVitalsRefresh()
-    local now = (type(GetTime) == "function" and GetTime()) or 0
-    local lastRefreshAt = tonumber(self._unmappedUnitRefreshAt) or 0
-    if (now - lastRefreshAt) < UNMAPPED_UNIT_REFRESH_THROTTLE then
+-- Refresh only vitals on currently shown party frames.
+function PartyFrames:RefreshAllVitalsOnly()
+    if not self.dataHandle or not self.container then
         return
     end
 
-    self._unmappedUnitRefreshAt = now
-    self:RefreshAll(false)
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    local addonEnabled = profile and profile.enabled ~= false
+    if previewMode then
+        self:RefreshAll(false)
+        return
+    end
+    if not addonEnabled or partyConfig.enabled == false then
+        return
+    end
+
+    local frameByDisplayedUnit = self._frameByDisplayedUnit
+    if type(frameByDisplayedUnit) ~= "table" then
+        return
+    end
+
+    for displayedUnit, frame in pairs(frameByDisplayedUnit) do
+        if frame then
+            self:RefreshMember(
+                frame,
+                frame.displayedUnit or displayedUnit,
+                partyConfig,
+                false,
+                false,
+                false,
+                MEMBER_REFRESH_VITALS_ONLY
+            )
+        end
+    end
 end
 
--- Handle unit updates.
-function PartyFrames:OnUnitEvent(eventName, unitToken, auraUpdateInfo)
-    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
-    if not displayedUnit then
-        if type(unitToken) == "string" and (unitToken == "player" or string.match(unitToken, "^party%d+$")) then
-            self:RequestFallbackVitalsRefresh()
-        end
-        return
-    end
-
-    if eventName == "UNIT_AURA" then
-        local refreshHealerTrackers = self:ShouldRefreshHealerTrackersForAuraUpdate(displayedUnit, auraUpdateInfo)
-        if refreshHealerTrackers then
-            self:InvalidateHelpfulAuraCache(displayedUnit)
-            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_ONLY, auraUpdateInfo)
-        else
-            self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_AURAS_NO_TRACKERS, auraUpdateInfo)
-        end
-        return
-    end
-
-    self:RefreshDisplayedUnit(displayedUnit, MEMBER_REFRESH_VITALS_ONLY)
-    if type(unitToken) == "string" and (unitToken == "player" or string.match(unitToken, "^party%d+$")) then
-        self:RequestFallbackVitalsRefresh()
-    end
-end
-
--- Stop periodic test ticker.
+-- Stop the periodic test mode ticker (updates fake data for preview).
 function PartyFrames:StopTestTicker()
     local ticker = self._testTicker
     if ticker and type(ticker.Cancel) == "function" then
@@ -1503,7 +1258,8 @@ function PartyFrames:StopTestTicker()
     self._testTicker = nil
 end
 
--- Ensure periodic test ticker.
+-- Start periodic test mode ticker if not already running.
+-- Ticker periodically refreshes frames to animate test data.
 function PartyFrames:EnsureTestTicker()
     if self._testTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
         return
@@ -1514,7 +1270,12 @@ function PartyFrames:EnsureTestTicker()
     end)
 end
 
--- Apply style to one party member frame.
+-- ============================================================================
+-- FRAME STYLING & LAYOUT
+-- ============================================================================
+
+-- Apply frame styling: dimensions, borders, text insets, power bar height.
+-- Deferred to combat-end if called during combat (pendingLayoutRefresh flag).
 function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
     if not frame or not partyConfig then
         return
@@ -1587,10 +1348,18 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
         end
         frame.DisconnectedIcon:SetSize(disconnectedIconSize, disconnectedIconSize)
     end
+    if frame.SummonIcon then
+        local summonIconSize = math.max(12, math.floor((height * 0.6) + 0.5))
+        if pixelPerfect then
+            summonIconSize = Style:Snap(summonIconSize)
+        end
+        frame.SummonIcon:SetSize(summonIconSize, summonIconSize)
+    end
     return true
 end
 
--- Check whether power bar should be visible for party unit.
+-- Determine if power bar should be shown for a party unit.
+-- Shows for all Death Knights (runic power) and healer spec members (mana).
 function PartyFrames:ShouldShowPowerBar(unitToken)
     local _, classToken = UnitClass(unitToken)
     if classToken == "DEATHKNIGHT" then
@@ -1610,13 +1379,14 @@ function PartyFrames:ShouldShowPowerBar(unitToken)
     return UnitGroupRolesAssigned(unitToken) == "HEALER"
 end
 
--- Return sort priority for role token.
+-- Get sort priority value for a given role (for ranking in frame layout).
 function PartyFrames:GetRoleSortPriority(roleToken)
     local normalized = type(roleToken) == "string" and roleToken or "NONE"
     return ROLE_SORT_PRIORITY[normalized] or ROLE_SORT_PRIORITY.NONE
 end
 
--- Sort party units by role: tank, healer, dps, unknown.
+-- Sort party unit list in-place by role: tanks first, healers second, dps third, others last.
+-- Preserves original order within each role tier.
 function PartyFrames:SortUnitsByRole(unitsToShow)
     if type(unitsToShow) ~= "table" or #unitsToShow <= 1 then
         return
@@ -1639,204 +1409,14 @@ function PartyFrames:SortUnitsByRole(unitsToShow)
     end)
 end
 
--- Apply dummy aura test state.
-function PartyFrames:ApplyDummyAuras(frame, partyConfig, dummyAuraState)
-    if not (self.unitFrames and frame and frame.AuraContainers) then
-        return nil
-    end
+-- ============================================================================
+-- MEMBER REFRESH (SINGLE UNIT)
+-- ============================================================================
 
-    local unitFrames = self.unitFrames
-    unitFrames:ApplyAuraLayout(frame, partyConfig)
-
-    local dispelTypes = getPlayerDispelTypes()
-    local dispelTypeToShow = nil
-
-    local buffsContainer = frame.AuraContainers.buffs
-    if buffsContainer and buffsContainer.enabled ~= false then
-        local staticBuffs = dummyAuraState and dummyAuraState.buffs or nil
-        local buffCount = 0
-        if type(staticBuffs) == "table" then
-            buffCount = math.min(buffsContainer.maxIcons or 6, #staticBuffs)
-        else
-            buffCount = math.min(buffsContainer.maxIcons or 6, math.random(2, 4))
-        end
-        for i = 1, buffCount do
-            local auraData = staticBuffs and staticBuffs[i] or {
-                icon = getRandomItem(DUMMY_BUFF_ICONS),
-                count = math.random(0, 3),
-                duration = 0,
-                expirationTime = 0,
-                debuffType = nil,
-            }
-            unitFrames:ApplyAuraToIcon(buffsContainer, "buffs", i, auraData)
-        end
-        unitFrames:HideUnusedAuraIcons(buffsContainer, buffCount)
-        buffsContainer:SetShown(buffCount > 0)
-    end
-
-    local debuffsContainer = frame.AuraContainers.debuffs
-    if debuffsContainer and debuffsContainer.enabled ~= false then
-        local staticDebuffs = dummyAuraState and dummyAuraState.debuffs or nil
-        local debuffCount = 0
-        if type(staticDebuffs) == "table" then
-            debuffCount = math.min(debuffsContainer.maxIcons or 6, #staticDebuffs)
-            dispelTypeToShow = dummyAuraState and dummyAuraState.dispelType or nil
-        else
-            debuffCount = math.min(debuffsContainer.maxIcons or 6, math.random(1, 3))
-        end
-        for i = 1, debuffCount do
-            local auraData = staticDebuffs and staticDebuffs[i] or nil
-            if not auraData then
-                local dispelType = getRandomItem(dispelTypes) or getRandomItem(DEFAULT_DISPEL_TYPES)
-                local dummy = getRandomItem(DUMMY_DEBUFFS) or DUMMY_DEBUFFS[1]
-                auraData = {
-                    icon = dummy.icon,
-                    count = math.random(0, 2),
-                    duration = 0,
-                    expirationTime = 0,
-                    debuffType = dispelType,
-                }
-            end
-            unitFrames:ApplyAuraToIcon(debuffsContainer, "debuffs", i, auraData)
-            if i == 1 and not dispelTypeToShow then
-                dispelTypeToShow = auraData and auraData.debuffType or nil
-            end
-        end
-        unitFrames:HideUnusedAuraIcons(debuffsContainer, debuffCount)
-        debuffsContainer:SetShown(debuffCount > 0)
-    end
-
-    return dispelTypeToShow
-end
-
--- Return (and create if needed) healer tracker element for spell.
-function PartyFrames:GetHealerTrackerElement(frame, spellID)
-    if not frame or type(spellID) ~= "number" then
-        return nil
-    end
-
-    frame.HealerTrackerElements = frame.HealerTrackerElements or {}
-    local key = tostring(spellID)
-    if frame.HealerTrackerElements[key] then
-        return frame.HealerTrackerElements[key]
-    end
-
-    local element = CreateFrame("Frame", nil, frame)
-    element:SetFrameStrata("MEDIUM")
-    element:SetFrameLevel(frame:GetFrameLevel() + 40)
-    element:Hide()
-
-    element.Icon = element:CreateTexture(nil, "ARTWORK")
-    element.Icon:SetAllPoints()
-    element.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    element.Rect = element:CreateTexture(nil, "ARTWORK")
-    element.Rect:SetAllPoints()
-    element.Rect:Hide()
-
-    frame.HealerTrackerElements[key] = element
-    return element
-end
-
--- Hide all unused healer tracker elements.
-function PartyFrames:HideUnusedHealerTrackerElements(frame, usedByKey)
-    if not frame or type(frame.HealerTrackerElements) ~= "table" then
-        return
-    end
-
-    for key, element in pairs(frame.HealerTrackerElements) do
-        if not usedByKey[key] and element then
-            element:Hide()
-        end
-    end
-end
-
--- Refresh healer tracked buffs on one party member frame.
-function PartyFrames:RefreshHealerTrackers(frame, unitToken, previewMode, availableSpells)
-    if not frame then
-        return
-    end
-
-    local config = self:GetPartyHealerConfig()
-    if not config or config.enabled == false then
-        self:HideUnusedHealerTrackerElements(frame, {})
-        return
-    end
-
-    availableSpells = availableSpells or self:GetAvailableHealerSpells()
-    local usedByKey = {}
-    local defaultTexture = "Interface\\Icons\\INV_Misc_QuestionMark"
-    local auraMap = nil
-    if not previewMode then
-        auraMap = self:GetHelpfulAuraMapForUnit(unitToken)
-    end
-
-    for i = 1, #availableSpells do
-        local spellEntry = availableSpells[i]
-        local spellID = spellEntry.spellID
-        local key = tostring(spellID)
-        local spellConfig = config.spells[key] or {}
-        if spellConfig.enabled ~= false then
-            local auraInfo = previewMode and { icon = spellEntry.icon } or (auraMap and auraMap[spellID]) or self:GetUnitAuraBySpellID(unitToken, spellID)
-            if auraInfo then
-                local groupKey = spellEntry.group or "hots"
-                local groupConfig = config.groups[groupKey] or PARTY_HEALER_GROUP_DEFAULTS[groupKey]
-                local size = Util:Clamp(tonumber(spellConfig.size) or tonumber(groupConfig and groupConfig.size) or 14, 6, 48)
-                local anchorPoint = (type(spellConfig.anchorPoint) == "string" and spellConfig.anchorPoint) or "CENTER"
-                local x = tonumber(spellConfig.x) or 0
-                local y = tonumber(spellConfig.y) or 0
-                local style = spellConfig.style or "group"
-                if style == "group" then
-                    style = (groupConfig and groupConfig.style) or "icon"
-                end
-                if style ~= "rectangle" then
-                    style = "icon"
-                end
-
-                local colorSource = spellConfig.color or (groupConfig and groupConfig.color) or { r = 1, g = 1, b = 1, a = 1 }
-                local colorR = Util:Clamp(tonumber(colorSource.r) or 1, 0, 1)
-                local colorG = Util:Clamp(tonumber(colorSource.g) or 1, 0, 1)
-                local colorB = Util:Clamp(tonumber(colorSource.b) or 1, 0, 1)
-                local colorA = Util:Clamp(tonumber(colorSource.a) or 1, 0, 1)
-
-                if Style:IsPixelPerfectEnabled() then
-                    size = Style:Snap(size)
-                    x = Style:Snap(x)
-                    y = Style:Snap(y)
-                else
-                    size = math.floor(size + 0.5)
-                    x = math.floor(x + 0.5)
-                    y = math.floor(y + 0.5)
-                end
-
-                local element = self:GetHealerTrackerElement(frame, spellID)
-                if element then
-                    element:SetSize(size, size)
-                    element:ClearAllPoints()
-                    element:SetPoint(anchorPoint, frame, anchorPoint, x, y)
-
-                    if style == "rectangle" then
-                        element.Icon:Hide()
-                        element.Rect:Show()
-                        element.Rect:SetColorTexture(colorR, colorG, colorB, colorA)
-                    else
-                        element.Rect:Hide()
-                        element.Icon:Show()
-                        element.Icon:SetTexture(auraInfo.icon or spellEntry.icon or defaultTexture)
-                    end
-
-                    element:Show()
-                    usedByKey[key] = true
-                end
-            end
-        end
-    end
-
-    self:HideUnusedHealerTrackerElements(frame, usedByKey)
-end
-
--- Update one party member.
-function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, availableSpells, testMode, forceStyle, refreshOptions, auraUpdateInfo)
+-- Refresh visual state of one party member frame: apply style, update vitals,
+-- display status icons (disconnected, summon), and update aura visuals.
+-- Supports preview mode (fake data), test mode (periodic animation), and real mode.
+function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, testMode, forceStyle, refreshOptions)
     if not frame then
         return
     end
@@ -1844,7 +1424,6 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
     refreshOptions = refreshOptions or MEMBER_REFRESH_FULL
     local refreshVitals = refreshOptions.vitals == true
     local refreshAuras = refreshOptions.auras == true
-    local refreshHealerTrackers = refreshOptions.healerTrackers == true
 
     local showPowerBar = self:ShouldShowPowerBar(unitToken)
     local needsStyle = forceStyle == true or frame._mummuStyleApplied ~= true or frame._mummuShowPowerBar ~= showPowerBar
@@ -1853,6 +1432,11 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         if applied then
             frame._mummuStyleApplied = true
             frame._mummuShowPowerBar = showPowerBar
+        elseif frame._mummuStyleApplied ~= true then
+            -- Style never applied (e.g. new frame created in combat lockdown).
+            -- FontStrings have no font yet; skip refresh to avoid "Font not set" errors.
+            -- pendingLayoutRefresh is set by ApplyMemberStyle so this will be retried post-combat.
+            return
         end
     end
 
@@ -1861,6 +1445,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
     local isConnected = true
     local isAFK = false
     local isOutOfRange = false
+    local hasPendingSummon = false
 
     if not previewMode and not testMode and exists then
         if type(UnitIsConnected) == "function" then
@@ -1872,9 +1457,12 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         if isConnected and unitToken ~= "player" then
             isOutOfRange = isUnitOutOfRange(unitToken)
         end
+        if isConnected then
+            hasPendingSummon = hasIncomingSummonPending(unitToken)
+        end
     end
 
-    if not refreshVitals and not refreshAuras and not refreshHealerTrackers then
+    if not refreshVitals and not refreshAuras then
         return
     end
 
@@ -2005,7 +1593,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         frame.NameText:SetText(name)
         local healthPercent = 0
         if useLiveUnitValues and type(UnitHealthPercent) == "function" then
-            local curve = CurveConstants and CurveConstants.ScaleTo100 or nil
+            local curve = (_G.CurveConstants and _G.CurveConstants.ScaleTo100) or nil
             local okPercent, rawPercent = pcall(UnitHealthPercent, unitToken, true, curve)
             if okPercent and type(rawPercent) == "number" then
                 healthPercent = rawPercent
@@ -2037,6 +1625,9 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
 
         if frame.DisconnectedIcon then
             frame.DisconnectedIcon:SetShown(not previewMode and not testMode and exists and not isConnected)
+        end
+        if frame.SummonIcon then
+            frame.SummonIcon:SetShown(not previewMode and not testMode and exists and isConnected and hasPendingSummon)
         end
 
         if frame.TargetHighlight then
@@ -2070,39 +1661,45 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, a
         end
     end
 
-    local dispelType = nil
-    if refreshAuras and self.unitFrames and type(self.unitFrames.EnsureAuraContainers) == "function" then
-        self.unitFrames:EnsureAuraContainers(frame)
-        if previewMode then
-            dispelType = self:ApplyDummyAuras(frame, partyConfig, testState and testState.auras or nil)
-        else
-            self.unitFrames:RefreshAuras(frame, unitToken, exists, false, partyConfig, auraUpdateInfo)
-        end
-    end
-
-    if refreshAuras and frame.DispelOverlay then
-        local color = dispelType and DebuffTypeColor and DebuffTypeColor[dispelType] or nil
-        if color then
-            frame.DispelOverlay:SetColorTexture(color.r, color.g, color.b, DISPEL_OVERLAY_ALPHA)
-            frame.DispelOverlay:Show()
-        else
+    if refreshAuras and (previewMode or not exists) then
+        if frame.DispelOverlay then
             frame.DispelOverlay:Hide()
         end
+        if type(frame.HealerTrackerElements) == "table" then
+            for _, trackerElement in pairs(frame.HealerTrackerElements) do
+                if trackerElement and type(trackerElement.Hide) == "function" then
+                    trackerElement:Hide()
+                end
+            end
+        end
     end
 
-    if refreshHealerTrackers then
-        self:RefreshHealerTrackers(frame, unitToken, previewMode, availableSpells)
-    end
 end
 
--- Refresh party frames.
+-- ============================================================================
+-- FULL REFRESH (ALL FRAMES)
+-- ============================================================================
+
+-- Refresh all party frames and container layout.
+-- Handles both real mode (header-managed frames) and preview/test mode (fake data).
+--
+-- Real mode (Layer 2 / Layer 3):
+--   The SecureGroupHeaderTemplate header manages which children are shown and
+--   what unit each child is assigned to — entirely via secure attributes.
+--   We only push layout configuration into the header's attributes and call
+--   RefreshMember on currently-assigned children to update their display.
+--   No Show()/Hide() or SetAttribute("unit") calls on children in combat.
+--
+-- Preview / test mode:
+--   The header is hidden; test frames are shown with static/animated fake data.
+--   User can position and style without a real party present.
 function PartyFrames:RefreshAll(forceLayout)
     if not self.dataHandle then
         return
     end
 
     self:CreatePartyFrames()
-    if not self.container then
+    if not self.container or not self.header then
         return
     end
 
@@ -2113,73 +1710,31 @@ function PartyFrames:RefreshAll(forceLayout)
     local addonEnabled = profile and profile.enabled ~= false
     local inCombat = InCombatLockdown()
     local shouldApplyLayout = (forceLayout == true) or (self.layoutInitialized ~= true)
-    if forceLayout then
-        self:InvalidateHealerSpellCaches()
-    end
+
+    -- Layer 3: delegate Blizzard frame visibility to AuraHandle (alpha/scale only).
     self:ApplyBlizzardPartyFrameVisibility()
 
+    -- Addon disabled: hide everything.
     if not previewMode and (not addonEnabled or partyConfig.enabled == false) then
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
+        self:StopTestTicker()
         if inCombat then
             self.pendingLayoutRefresh = true
         else
-            self.container:Hide()
-        end
-        self:StopTestTicker()
-        return
-    end
-
-    local showPlayer = partyConfig.showPlayer ~= false
-    local showSelfWithoutGroup = partyConfig.showSelfWithoutGroup == true
-    local unitsToShow = {}
-    if previewMode then
-        local source = showPlayer and TEST_UNITS_WITH_PLAYER or TEST_UNITS_NO_PLAYER
-        for i = 1, #source do
-            unitsToShow[#unitsToShow + 1] = source[i]
-        end
-        if testMode then
-            self:StopTestTicker()
-            self:EnsureStaticTestMemberStates(unitsToShow)
-        else
-            self:StopTestTicker()
-            self._testMemberStateByUnit = nil
-        end
-    else
-        self:StopTestTicker()
-        self._testMemberStateByUnit = nil
-        local inGroupHome = (type(IsInGroup) == "function") and IsInGroup(LE_PARTY_CATEGORY_HOME) or false
-        local inGroupInstance = (type(IsInGroup) == "function") and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) or false
-        local inRaidHome = (type(IsInRaid) == "function") and IsInRaid(LE_PARTY_CATEGORY_HOME) or false
-        local inRaidInstance = (type(IsInRaid) == "function") and IsInRaid(LE_PARTY_CATEGORY_INSTANCE) or false
-        local inGroup = inGroupHome or inGroupInstance
-        local inRaid = inRaidHome or inRaidInstance
-
-        if showPlayer and not inRaid and (inGroup or showSelfWithoutGroup) then
-            unitsToShow[#unitsToShow + 1] = "player"
-        end
-        for i = 1, 4 do
-            local unitToken = "party" .. i
-            if UnitExists(unitToken) then
-                unitsToShow[#unitsToShow + 1] = unitToken
+            self.header:Hide()
+            for i = 1, #self.testFrames do
+                self.testFrames[i]:Hide()
             end
-        end
-        self:SortUnitsByRole(unitsToShow)
-    end
-
-    if #unitsToShow == 0 then
-        self._frameByDisplayedUnit = {}
-        self._displayedUnitByGUID = {}
-        if inCombat then
-            self.pendingLayoutRefresh = true
-        else
             self.container:Hide()
         end
         return
     end
 
-    local availableHealerSpells = self:GetAvailableHealerSpells()
-    local spacing = Util:Clamp(tonumber(partyConfig.spacing) or 24, 0, 80)
+    -- Read layout config.
+    local showPlayer = partyConfig.showPlayer ~= false
+    local showSelfWithoutGroup = partyConfig.showSelfWithoutGroup ~= false
+    local spacing = Util:Clamp(tonumber(partyConfig.spacing) or 2, 0, 80)
     local width = Util:Clamp(tonumber(partyConfig.width) or 180, 80, 500)
     local height = Util:Clamp(tonumber(partyConfig.height) or 34, 16, 120)
     local x = tonumber(partyConfig.x) or 0
@@ -2188,102 +1743,271 @@ function PartyFrames:RefreshAll(forceLayout)
 
     if Style:IsPixelPerfectEnabled() then
         spacing = Style:Snap(spacing)
-        width = Style:Snap(width)
-        height = Style:Snap(height)
-        x = Style:Snap(x)
-        y = Style:Snap(y)
+        width   = Style:Snap(width)
+        height  = Style:Snap(height)
+        x       = Style:Snap(x)
+        y       = Style:Snap(y)
     else
         spacing = math.floor(spacing + 0.5)
-        width = math.floor(width + 0.5)
-        height = math.floor(height + 0.5)
-        x = math.floor(x + 0.5)
-        y = math.floor(y + 0.5)
+        width   = math.floor(width + 0.5)
+        height  = math.floor(height + 0.5)
+        x       = math.floor(x + 0.5)
+        y       = math.floor(y + 0.5)
     end
 
-    local totalWidth = width
-    local totalHeight = height
-    if orientation == "horizontal" then
-        totalWidth = (width * #unitsToShow) + (spacing * math.max(0, #unitsToShow - 1))
-    else
-        totalHeight = (height * #unitsToShow) + (spacing * math.max(0, #unitsToShow - 1))
+    -- -----------------------------------------------------------------------
+    -- Preview / test mode: header hidden, test frames shown with fake data.
+    -- -----------------------------------------------------------------------
+    if previewMode then
+        self:StopTestTicker()
+        -- Do not transition secure frame visibility/layout in combat.
+        -- Defer preview/test presentation until PLAYER_REGEN_ENABLED.
+        if inCombat then
+            self.pendingLayoutRefresh = true
+            return
+        end
+        self.header:Hide()
+
+        local unitsToShow = showPlayer and TEST_UNITS_WITH_PLAYER or TEST_UNITS_NO_PLAYER
+        if testMode then
+            self:EnsureStaticTestMemberStates(unitsToShow)
+            self:EnsureTestTicker()
+        else
+            self._testMemberStateByUnit = nil
+        end
+
+        -- Build the test frame map and lay them out.
+        local frameByDisplayedUnit = {}
+        local displayedUnitByGUID = {}
+        local totalWidth = orientation == "horizontal"
+            and (width * #unitsToShow) + (spacing * math.max(0, #unitsToShow - 1))
+            or width
+        local totalHeight = orientation == "horizontal"
+            and height
+            or (height * #unitsToShow) + (spacing * math.max(0, #unitsToShow - 1))
+
+        if shouldApplyLayout then
+            self.container:SetSize(totalWidth, totalHeight)
+            self.container:ClearAllPoints()
+            self.container:SetPoint(
+                partyConfig.point or "LEFT",
+                UIParent,
+                partyConfig.relativePoint or "LEFT",
+                x, y
+            )
+        end
+
+        for i = 1, MAX_PARTY_TEST_FRAMES do
+            local frame = self.testFrames[i]
+            local unitToken = unitsToShow[i]
+            if frame and unitToken then
+                frame.unit = unitToken
+                frame.displayedUnit = unitToken
+                frameByDisplayedUnit[unitToken] = frame
+                local guid = getUnitGUIDSafe(unitToken)
+                if guid then
+                    setDisplayedUnitForGUID(displayedUnitByGUID, guid, unitToken)
+                end
+                if shouldApplyLayout then
+                    frame:ClearAllPoints()
+                    if i == 1 then
+                        frame:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, 0)
+                    elseif orientation == "horizontal" then
+                        frame:SetPoint("LEFT", self.testFrames[i - 1], "RIGHT", spacing, 0)
+                    else
+                        frame:SetPoint("TOP", self.testFrames[i - 1], "BOTTOM", 0, -spacing)
+                    end
+                end
+                self:RefreshMember(frame, unitToken, partyConfig, true, testMode, shouldApplyLayout, MEMBER_REFRESH_FULL)
+                if type(frame.EnableMouse) == "function" then
+                    frame:EnableMouse(true)
+                end
+                frame:Show()
+            elseif frame then
+                frame:Hide()
+            end
+        end
+        -- Hide any header children that might still be visible.
+        self.frames = self.testFrames
+        self._frameByDisplayedUnit = frameByDisplayedUnit
+        self._displayedUnitByGUID = displayedUnitByGUID
+        self.container:Show()
+        if shouldApplyLayout then
+            self.layoutInitialized = true
+        end
+        return
     end
 
+    -- -----------------------------------------------------------------------
+    -- Real mode: SecureGroupHeaderTemplate owns unit attribution and
+    -- show/hide of children. We configure the header's layout attributes and
+    -- call RefreshMember on whatever children it currently has assigned.
+    -- -----------------------------------------------------------------------
+    self:StopTestTicker()
+    self._testMemberStateByUnit = nil
+
+    -- Hide all test frames — only the header's children are active here.
+    if not inCombat then
+        for i = 1, #self.testFrames do
+            self.testFrames[i]:Hide()
+        end
+    end
+
+    -- Push layout and roster-config into the header's secure attributes.
+    -- These updates are safe to call at any time (plain frame attributes on our own frame).
     if shouldApplyLayout and not inCombat then
+        -- Header layout attributes drive child positioning.
+        if orientation == "horizontal" then
+            self.header:SetAttribute("point", "LEFT")
+            self.header:SetAttribute("xOffset", spacing)
+            self.header:SetAttribute("yOffset", 0)
+        else
+            self.header:SetAttribute("point", "TOP")
+            self.header:SetAttribute("xOffset", 0)
+            self.header:SetAttribute("yOffset", -spacing)
+        end
+        self.header:SetAttribute("frameWidth", width)
+        self.header:SetAttribute("frameHeight", height)
+        self.header:SetAttribute("showPlayer", showPlayer)
+        self.header:SetAttribute("showSolo", showSelfWithoutGroup)
+
+        -- Determine container size from live party count (up to MAX_PARTY_TEST_FRAMES).
+        local liveCount = 0
+        for i = 1, 4 do
+            if UnitExists("party" .. i) then
+                liveCount = liveCount + 1
+            end
+        end
+        if showPlayer then
+            local inRaid = (type(IsInRaid) == "function")
+                and (IsInRaid(PARTY_CATEGORY_HOME) or IsInRaid(PARTY_CATEGORY_INSTANCE))
+                or false
+            if not inRaid and (liveCount > 0 or showSelfWithoutGroup) then
+                liveCount = liveCount + 1
+            end
+        end
+        liveCount = math.max(liveCount, 1)
+        local totalWidth = orientation == "horizontal"
+            and (width * liveCount) + (spacing * math.max(0, liveCount - 1))
+            or width
+        local totalHeight = orientation == "horizontal"
+            and height
+            or (height * liveCount) + (spacing * math.max(0, liveCount - 1))
+
         self.container:SetSize(totalWidth, totalHeight)
         self.container:ClearAllPoints()
         self.container:SetPoint(
             partyConfig.point or "LEFT",
             UIParent,
             partyConfig.relativePoint or "LEFT",
-            x,
-            y
+            x, y
         )
     end
 
+    -- Collect header children and refresh their display.
+    -- Unit attribution is already done by the header's restricted attribute code;
+    -- we read the backup .displayedUnit / .unit fields (plain Lua, safe in combat).
+    local children = { self.header:GetChildren() }
     local frameByDisplayedUnit = {}
     local displayedUnitByGUID = {}
-    for i = 1, MAX_PARTY_TEST_FRAMES do
-        local frame = self.frames[i]
-        local unitToken = unitsToShow[i]
-        if frame and unitToken then
-            local displayedUnit = unitToken
-            if not inCombat then
-                frame:SetAttribute("unit", unitToken)
-            else
-                displayedUnit = (type(frame.GetAttribute) == "function" and frame:GetAttribute("unit")) or frame.unit or unitToken
-            end
-            frame.unit = displayedUnit
-            frame.displayedUnit = displayedUnit
-            frameByDisplayedUnit[displayedUnit] = frame
-            if type(UnitGUID) == "function" then
-                local displayedUnitGUID = UnitGUID(displayedUnit)
-                if displayedUnitGUID then
-                    displayedUnitByGUID[displayedUnitGUID] = displayedUnit
-                end
-            end
+    local activeFrames = {}
 
-            if shouldApplyLayout then
-                if not inCombat then
-                    frame:ClearAllPoints()
-                    if i == 1 then
-                        frame:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, 0)
-                    elseif orientation == "horizontal" then
-                        frame:SetPoint("LEFT", self.frames[i - 1], "RIGHT", spacing, 0)
-                    else
-                        frame:SetPoint("TOP", self.frames[i - 1], "BOTTOM", 0, -spacing)
-                    end
-                else
-                    self.pendingLayoutRefresh = true
-                end
-            end
-
-            self:RefreshMember(
-                frame,
-                displayedUnit,
-                partyConfig,
-                previewMode,
-                availableHealerSpells,
-                testMode,
-                shouldApplyLayout,
-                MEMBER_REFRESH_FULL
-            )
-            if not inCombat then
-                frame:Show()
-            else
+    for i = 1, #children do
+        local child = children[i]
+        if child and not child._mummuVisualsBuilt then
+            -- Lazily attach visual sub-frames the first time each child is seen.
+            -- BuildFrameVisuals is idempotent and also calls RegisterForClicks in
+            -- normal Lua (it cannot be called from initialConfigFunction's restricted env).
+            -- During combat we defer this work to avoid mutating secure child scripts/clicks.
+            if inCombat then
                 self.pendingLayoutRefresh = true
+            else
+                self:BuildFrameVisuals(child)
             end
-        elseif frame then
+        end
+        if child and child._mummuVisualsBuilt then
+            -- Read the unit the header has assigned to this child.
+            local unitToken = child.displayedUnit or child.unit
+            if not unitToken and not InCombatLockdown() and type(child.GetAttribute) == "function" then
+                local ok, attrUnit = pcall(child.GetAttribute, child, "unit")
+                if ok and type(attrUnit) == "string" and attrUnit ~= "" then
+                    unitToken = normalizePartyDisplayedUnit(attrUnit)
+                    -- Warm up the backup fields so we can use them in combat.
+                    if unitToken then
+                        child.unit = unitToken
+                        child.displayedUnit = unitToken
+                    end
+                end
+            end
+
+            if unitToken then
+                local isShown = type(child.IsShown) == "function" and child:IsShown() or false
+                if isShown or inCombat then
+                    frameByDisplayedUnit[unitToken] = child
+                    local guid = getUnitGUIDSafe(unitToken)
+                    if guid then
+                        setDisplayedUnitForGUID(displayedUnitByGUID, guid, unitToken)
+                    end
+                    activeFrames[#activeFrames + 1] = child
+                    self:RefreshMember(
+                        child, unitToken, partyConfig,
+                        false, false, shouldApplyLayout,
+                        MEMBER_REFRESH_FULL
+                    )
+                end
+            end
+        end
+    end
+
+    -- Solo player fallback: SecureGroupHeaderTemplate only iterates actual group members,
+    -- so it never creates child buttons when the player is solo (showSolo only controls
+    -- header visibility, not child creation). Explicitly show testFrames[MAX_PARTY_TEST_FRAMES]
+    -- (unit = "player") with real data when not in any group.
+    -- Visibility/position updates are deferred if combat is active.
+    if showSelfWithoutGroup and not IsInGroup() and not frameByDisplayedUnit["player"] then
+        local soloFrame = self.testFrames and self.testFrames[MAX_PARTY_TEST_FRAMES]
+        if soloFrame then
+            soloFrame.unit = "player"
+            soloFrame.displayedUnit = "player"
+            frameByDisplayedUnit["player"] = soloFrame
+            local guid = getUnitGUIDSafe("player")
+            if guid then
+                setDisplayedUnitForGUID(displayedUnitByGUID, guid, "player")
+            end
+            activeFrames[#activeFrames + 1] = soloFrame
+            if shouldApplyLayout and not inCombat then
+                soloFrame:ClearAllPoints()
+                soloFrame:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, 0)
+                soloFrame:SetSize(width, height)
+            end
+            self:RefreshMember(soloFrame, "player", partyConfig, false, false, shouldApplyLayout, MEMBER_REFRESH_FULL)
+            if not inCombat and type(soloFrame.EnableMouse) == "function" then
+                soloFrame:EnableMouse(true)
+            end
             if not inCombat then
-                frame:Hide()
+                soloFrame:Show()
             else
                 self.pendingLayoutRefresh = true
             end
         end
     end
+
+    self.frames = activeFrames
     self._frameByDisplayedUnit = frameByDisplayedUnit
     self._displayedUnitByGUID = displayedUnitByGUID
 
+    -- Publish active frame list so AuraHandle can find all mummu frames,
+    -- including the solo player frame. Then rebuild the shared unit map
+    -- immediately so UNIT_AURA dispatches hit the fast path from the start.
+    ns.activeMummuGroupFrames = activeFrames
+    if ns.AuraHandle and type(ns.AuraHandle.RebuildSharedUnitFrameMap) == "function" then
+        -- In combat include hidden stand-by frames so UNIT_AURA dispatch can
+        -- still resolve units during secure-header roster transitions.
+        ns.AuraHandle:RebuildSharedUnitFrameMap(inCombat, inCombat and "party_refresh_combat" or "party_refresh")
+    end
+
     if not inCombat then
+        self.header:Show()
         self.container:Show()
         if shouldApplyLayout then
             self.layoutInitialized = true
@@ -2293,4 +2017,9 @@ function PartyFrames:RefreshAll(forceLayout)
     end
 end
 
+-- ============================================================================
+-- MODULE REGISTRATION
+-- ============================================================================
+
+-- Register the PartyFrames module with the addon framework.
 addon:RegisterModule("partyFrames", PartyFrames:New())

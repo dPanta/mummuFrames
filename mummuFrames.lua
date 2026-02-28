@@ -1,3 +1,11 @@
+-- ============================================================================
+-- MUMMUFRAMES ADDON ENTRYPOINT
+-- ============================================================================
+-- Boot flow:
+--   1. ADDON_LOADED -> initialize module tables and defaults.
+--   2. PLAYER_LOGIN -> enable modules after Blizzard UI is fully ready.
+-- Modules register themselves into ModuleManager during file load.
+
 local addonName, ns = ...
 
 ns = ns or {}

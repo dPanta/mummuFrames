@@ -29,6 +29,8 @@ Core\EventRouter.lua
 Core\FontCatalog.lua
 Core\Style.lua
 Core\Util.lua
+Core\AuraSafety.lua
+Core\AuraHandle.lua
 mummuFrames.lua
 
 # Modules
@@ -36,5 +38,4 @@ Modules\dataHandle.lua
 Modules\globalFrames.lua
 Modules\unitFrames.lua
 Modules\partyFrames.lua
-Modules\raidFrames.lua
 Modules\configuration.lua

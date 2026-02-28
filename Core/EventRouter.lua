@@ -1,3 +1,6 @@
+-- Shared event multiplexer.
+-- A single hidden frame listens to WoW events and dispatches to module handlers.
+
 local _, ns = ...
 
 -- Create class holding event router behavior.
@@ -71,6 +74,8 @@ function EventRouter:Dispatch(eventName, ...)
         return
     end
 
+    -- Snapshot listeners before dispatch so handlers may register/unregister
+    -- safely without mutating the table currently being iterated.
     local count = #list
     if count == 1 then
         local entry = list[1]

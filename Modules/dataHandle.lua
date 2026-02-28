@@ -1,3 +1,9 @@
+-- ============================================================================
+-- DATA HANDLE MODULE
+-- ============================================================================
+-- Owns SavedVariables defaults, profile selection, config reads/writes, and
+-- migration-safe accessors used by all UI/runtime modules.
+
 local _, ns = ...
 
 local addon = _G.mummuFrames
@@ -138,7 +144,7 @@ local DEFAULTS = {
                         enabled = true,
                         hideBlizzardFrame = false,
                         showPlayer = true,
-                        showSelfWithoutGroup = false,
+                        showSelfWithoutGroup = true,
                         point = "LEFT",
                         relativePoint = "LEFT",
                         x = 26,
@@ -147,32 +153,6 @@ local DEFAULTS = {
                         height = 34,
                         spacing = 24,
                         fontSize = 11,
-                        -- Create table holding aura.
-                        aura = {
-                            enabled = true,
-                            -- Create table holding buffs.
-                            buffs = {
-                                enabled = true,
-                                source = "important",
-                                anchorPoint = "TOPLEFT",
-                                relativePoint = "BOTTOMLEFT",
-                                x = 0,
-                                y = -3,
-                                size = 14,
-                                scale = 1,
-                                max = 6,
-                            },
-                            -- Create table holding debuffs.
-                            debuffs = {
-                                anchorPoint = "TOPRIGHT",
-                                relativePoint = "BOTTOMRIGHT",
-                                x = 0,
-                                y = -3,
-                                size = 14,
-                                scale = 1,
-                                max = 6,
-                            },
-                        },
                     },
                     -- Create table holding raid.
                     raid = {
@@ -192,81 +172,10 @@ local DEFAULTS = {
                         sortDirection = "asc",
                         testSize = 20,
                         fontSize = 10,
-                        -- Create table holding aura.
-                        aura = {
-                            enabled = true,
-                            -- Create table holding buffs.
-                            buffs = {
-                                enabled = true,
-                                source = "important",
-                                anchorPoint = "TOPLEFT",
-                                relativePoint = "BOTTOMLEFT",
-                                x = 0,
-                                y = -2,
-                                size = 10,
-                                scale = 1,
-                                max = 3,
-                            },
-                            -- Create table holding debuffs.
-                            debuffs = {
-                                anchorPoint = "TOPRIGHT",
-                                relativePoint = "BOTTOMRIGHT",
-                                x = 0,
-                                y = -2,
-                                size = 10,
-                                scale = 1,
-                                max = 3,
-                            },
-                        },
                     },
                 },
-                -- Create table holding party healer tracking.
-                loveHealers = {
-                    enabled = true,
-                    groups = {
-                        hots = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 },
-                        },
-                        absorbs = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 },
-                        },
-                        externals = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 },
-                        },
-                    },
-                    spells = {},
-                    customSpells = {},
-                },
-                partyHealer = {
-                    enabled = true,
-                    groups = {
-                        hots = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 },
-                        },
-                        absorbs = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 },
-                        },
-                        externals = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 },
-                        },
-                    },
-                    spells = {},
-                    customSpells = {},
-                },
-                -- Create table holding raid healer tracking.
-                raidHealer = {
+                -- Shared aura tracking configuration for party/raid frames.
+                auras = {
                     enabled = true,
                     groups = {
                         hots = {
@@ -631,40 +540,12 @@ function DataHandle:OnInitialize(addonRef)
                         end
                     end
 
-                    local partyConfig = profile.units.party
-                    if type(partyConfig) == "table" then
-                        partyConfig.aura = partyConfig.aura or {}
-                        partyConfig.aura.buffs = partyConfig.aura.buffs or {}
-                        if profile._partyBuffSourceImportantMigrated ~= true then
-                            if partyConfig.aura.buffs.source == nil or partyConfig.aura.buffs.source == "all" then
-                                partyConfig.aura.buffs.source = "important"
-                            end
-                            profile._partyBuffSourceImportantMigrated = true
-                        end
-                    end
-
-                    local raidConfig = profile.units.raid
-                    if type(raidConfig) == "table" then
-                        raidConfig.aura = raidConfig.aura or {}
-                        raidConfig.aura.buffs = raidConfig.aura.buffs or {}
-                        if profile._raidBuffSourceImportantMigrated ~= true then
-                            if raidConfig.aura.buffs.source == nil or raidConfig.aura.buffs.source == "all" then
-                                raidConfig.aura.buffs.source = "important"
-                            end
-                            profile._raidBuffSourceImportantMigrated = true
-                        end
-                    end
                 end
 
-                if type(profile.loveHealers) ~= "table" then
-                    if type(profile.partyHealer) == "table" then
-                        profile.loveHealers = deepCopy(profile.partyHealer)
-                    elseif type(profile.raidHealer) == "table" then
-                        profile.loveHealers = deepCopy(profile.raidHealer)
-                    else
-                        profile.loveHealers = deepCopy(DEFAULTS.global.profiles.Default.loveHealers)
-                    end
+                if type(profile.auras) ~= "table" then
+                    profile.auras = deepCopy(DEFAULTS.global.profiles.Default.auras)
                 end
+
             end
         end
     end
@@ -679,6 +560,9 @@ end
 
 -- Return character settings.
 function DataHandle:GetCharacterSettings()
+    if not self.db then
+        return nil
+    end
     local charKey = Util:GetCharacterKey()
     self.db.char[charKey] = self.db.char[charKey] or {
         activeProfile = "Default",
@@ -689,6 +573,9 @@ end
 -- Return current profile table.
 function DataHandle:GetProfile()
     local charSettings = self:GetCharacterSettings()
+    if not charSettings then
+        return nil
+    end
     local profileName = charSettings.activeProfile or "Default"
     local profiles = self.db.global.profiles
 
@@ -709,6 +596,9 @@ end
 -- Return active profile name.
 function DataHandle:GetActiveProfileName()
     local charSettings = self:GetCharacterSettings()
+    if not charSettings then
+        return "Default"
+    end
     return normalizeProfileName(charSettings.activeProfile) or "Default"
 end
 
@@ -949,6 +839,9 @@ end
 function DataHandle:GetUnitConfig(unitToken)
     local profile = self:GetProfile()
     local charSettings = self:GetCharacterSettings()
+    if not charSettings then
+        return nil
+    end
     local profileName = charSettings.activeProfile or "Default"
     local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
     if type(unitDefaultsApplied) ~= "table" then
