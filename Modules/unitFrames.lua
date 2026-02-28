@@ -42,6 +42,15 @@ local FRAME_ORDER = {
     "focus",
     "focustarget",
 }
+-- Dynamic units use secure visibility state drivers so they can appear/disappear
+-- during combat without insecure Show/Hide calls.
+local DYNAMIC_VISIBILITY_DRIVERS = {
+    pet = "[@pet,exists] show; hide",
+    target = "[@target,exists] show; hide",
+    targettarget = "[@targettarget,exists] show; hide",
+    focus = "[@focus,exists] show; hide",
+    focustarget = "[@focustarget,exists] show; hide",
+}
 -- Create table holding frame name by unit.
 local FRAME_NAME_BY_UNIT = {
     player = "mummuFramesPlayerFrame",
@@ -802,6 +811,7 @@ function UnitFrames:Constructor()
     -- Create table holding frames.
     self.frames = {}
     self.pendingVisibilityRefresh = false
+    self.pendingDriverVisibilityRefresh = false
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
 end
@@ -815,6 +825,8 @@ end
 function UnitFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
+    self.pendingVisibilityRefresh = false
+    self.pendingDriverVisibilityRefresh = false
     self:RegisterEditModeCallbacks()
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
 
@@ -825,6 +837,7 @@ function UnitFrames:OnEnable()
     self:CreateFocusFrame()
     self:CreateFocusTargetFrame()
     self:RegisterEvents()
+    self:RefreshVisibilityDrivers()
     self:RefreshAll(true)
 end
 
@@ -833,6 +846,11 @@ function UnitFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
+    self.pendingVisibilityRefresh = false
+    self.pendingDriverVisibilityRefresh = false
+    if not InCombatLockdown() then
+        self:RefreshVisibilityDrivers(true)
+    end
     self:RestoreAllBlizzardUnitFrames()
     self:HideAll()
 end
@@ -997,6 +1015,7 @@ end
 -- Handle edit mode enter event.
 function UnitFrames:OnEditModeEnter()
     self.editModeActive = true
+    self:RefreshVisibilityDrivers()
 
     for _, frame in pairs(self.frames) do
         if frame then
@@ -1049,6 +1068,7 @@ end
 -- Handle edit mode exit event.
 function UnitFrames:OnEditModeExit()
     self.editModeActive = false
+    self:RefreshVisibilityDrivers()
 
     for _, frame in pairs(self.frames) do
         if frame then
@@ -1131,6 +1151,115 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_SUCCEEDED", self.OnUnitSpellcastSucceeded)
 end
 
+-- Return whether this unit token is managed by secure visibility drivers.
+function UnitFrames:IsDriverVisibilityUnit(unitToken)
+    return DYNAMIC_VISIBILITY_DRIVERS[unitToken] ~= nil
+end
+
+-- Return whether live-mode conditions allow secure visibility driver ownership.
+function UnitFrames:CanUseSecureDriverVisibility(unitToken, profile, unitConfig)
+    if not self:IsDriverVisibilityUnit(unitToken) then
+        return false
+    end
+    if type(RegisterStateDriver) ~= "function" or type(UnregisterStateDriver) ~= "function" then
+        return false
+    end
+    if not profile or profile.enabled == false then
+        return false
+    end
+    if not unitConfig or unitConfig.enabled == false then
+        return false
+    end
+    if self.editModeActive or profile.testMode == true then
+        return false
+    end
+
+    return true
+end
+
+-- Apply/unapply secure visibility driver state for one frame.
+function UnitFrames:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)
+    if not frame or not self:IsDriverVisibilityUnit(unitToken) then
+        return
+    end
+
+    local driverExpr = DYNAMIC_VISIBILITY_DRIVERS[unitToken]
+    local isActive = frame._mummuVisibilityDriverActive == true
+
+    if shouldUseDriver then
+        if isActive and frame._mummuVisibilityDriverExpr == driverExpr then
+            frame._mummuVisibilityDriverDesired = nil
+            frame._mummuVisibilityDriverDesiredExpr = nil
+            return
+        end
+
+        if InCombatLockdown() then
+            frame._mummuVisibilityDriverDesired = true
+            frame._mummuVisibilityDriverDesiredExpr = driverExpr
+            self.pendingDriverVisibilityRefresh = true
+            return
+        end
+
+        if type(UnregisterStateDriver) == "function" then
+            pcall(UnregisterStateDriver, frame, "visibility")
+        end
+        local okRegister = (type(RegisterStateDriver) == "function")
+            and pcall(RegisterStateDriver, frame, "visibility", driverExpr)
+        if okRegister then
+            frame._mummuVisibilityDriverActive = true
+            frame._mummuVisibilityDriverExpr = driverExpr
+        else
+            frame._mummuVisibilityDriverActive = false
+            frame._mummuVisibilityDriverExpr = nil
+        end
+        frame._mummuVisibilityDriverDesired = nil
+        frame._mummuVisibilityDriverDesiredExpr = nil
+        return
+    end
+
+    if not isActive then
+        frame._mummuVisibilityDriverDesired = nil
+        frame._mummuVisibilityDriverDesiredExpr = nil
+        return
+    end
+
+    if InCombatLockdown() then
+        frame._mummuVisibilityDriverDesired = false
+        frame._mummuVisibilityDriverDesiredExpr = nil
+        self.pendingDriverVisibilityRefresh = true
+        return
+    end
+
+    if type(UnregisterStateDriver) == "function" then
+        pcall(UnregisterStateDriver, frame, "visibility")
+    end
+    frame._mummuVisibilityDriverActive = false
+    frame._mummuVisibilityDriverExpr = nil
+    frame._mummuVisibilityDriverDesired = nil
+    frame._mummuVisibilityDriverDesiredExpr = nil
+end
+
+-- Reconcile secure visibility drivers for all dynamic units.
+-- forceDisable=true unregisters drivers for every dynamic unit (used by disable/test flows).
+function UnitFrames:RefreshVisibilityDrivers(forceDisable, profileOverride)
+    if not self.frames then
+        return
+    end
+
+    local profile = profileOverride or (self.dataHandle and self.dataHandle:GetProfile()) or nil
+    for unitToken, _ in pairs(DYNAMIC_VISIBILITY_DRIVERS) do
+        local frame = self.frames[unitToken]
+        if frame then
+            local shouldUseDriver = false
+            if forceDisable ~= true and self.dataHandle then
+                local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+                shouldUseDriver = self:CanUseSecureDriverVisibility(unitToken, profile, unitConfig)
+            end
+            self:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)
+        end
+    end
+end
+
 -- Handle rune power update event.
 function UnitFrames:OnRunePowerUpdate()
     self:RefreshFrame("player", false, REFRESH_OPTIONS_SECONDARY_POWER)
@@ -1152,9 +1281,19 @@ end
 
 -- Handle combat ended event.
 function UnitFrames:OnCombatEnded()
+    local needsRefreshAll = false
+    if self.pendingDriverVisibilityRefresh then
+        self.pendingDriverVisibilityRefresh = false
+        needsRefreshAll = true
+    end
     if self.pendingVisibilityRefresh then
         self.pendingVisibilityRefresh = false
+        needsRefreshAll = true
+    end
+
+    if needsRefreshAll then
         self:RefreshAll()
+        return
     end
 
     self:RefreshFrame("player")
@@ -1315,6 +1454,10 @@ function UnitFrames:CreateUnitFrame(unitToken)
         cfg.width,
         cfg.height
     )
+    frame._mummuVisibilityDriverActive = false
+    frame._mummuVisibilityDriverExpr = nil
+    frame._mummuVisibilityDriverDesired = nil
+    frame._mummuVisibilityDriverDesiredExpr = nil
     self.frames[unitToken] = frame
     self:EnsureEditModeSelection(frame)
     return frame
@@ -1514,7 +1657,10 @@ end
 function UnitFrames:HideAll()
     for _, frame in pairs(self.frames) do
         if frame then
-            self:SetFrameVisibility(frame, false)
+            if frame.unitToken and self:IsDriverVisibilityUnit(frame.unitToken) then
+                self:ApplyVisibilityDriver(frame, frame.unitToken, false)
+            end
+            self:SetFrameVisibility(frame, false, true)
             if frame.CastBar then
                 stopCastBarTimer(frame.CastBar)
             end
@@ -1529,8 +1675,16 @@ function UnitFrames:HideAll()
 end
 
 -- Set frame visibility.
-function UnitFrames:SetFrameVisibility(frame, shouldShow)
+function UnitFrames:SetFrameVisibility(frame, shouldShow, forceManualVisibility)
     if not frame then
+        return
+    end
+
+    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
+    local previewMode = self.editModeActive or (profile and profile.testMode == true)
+    -- Driver-owned dynamic frames are shown/hidden by secure state handlers in
+    -- live mode. Manual Show/Hide is skipped to avoid insecure combat mutations.
+    if frame._mummuVisibilityDriverActive == true and not previewMode and not forceManualVisibility then
         return
     end
 
@@ -2627,6 +2781,7 @@ function UnitFrames:RefreshAll(forceLayout)
     self:ApplyBlizzardFrameVisibility()
 
     local profile = self.dataHandle:GetProfile()
+    self:RefreshVisibilityDrivers(false, profile)
     local testMode = profile and profile.testMode == true
     if profile.enabled == false and not self.editModeActive and not testMode then
         -- Return computed value.
@@ -2653,6 +2808,10 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
     local profile = self.dataHandle:GetProfile()
     local testMode = profile and profile.testMode == true
     local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+    if self:IsDriverVisibilityUnit(unitToken) then
+        local shouldUseDriver = self:CanUseSecureDriverVisibility(unitToken, profile, unitConfig)
+        self:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)
+    end
     if unitConfig.enabled == false and not self.editModeActive and not testMode then
         if options.castbar and frame.CastBar then
             stopCastBarTimer(frame.CastBar)

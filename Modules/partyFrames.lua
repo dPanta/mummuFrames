@@ -341,6 +341,49 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     end
 end
 
+-- Return whether player is grouped in the requested category.
+-- Uses pcall to stay resilient across API variants.
+local function isInGroupCategory(category)
+    if type(IsInGroup) ~= "function" then
+        return false
+    end
+
+    local okGrouped, isGrouped = pcall(IsInGroup, category)
+    if okGrouped and type(isGrouped) == "boolean" then
+        return isGrouped
+    end
+    return false
+end
+
+-- Return whether player is in a raid for the requested category.
+-- Uses pcall to avoid hard faults in restricted/edge API states.
+local function isInRaidCategory(category)
+    if type(IsInRaid) ~= "function" then
+        return false
+    end
+
+    local okRaid, inRaid = pcall(IsInRaid, category)
+    if okRaid and type(inRaid) == "boolean" then
+        return inRaid
+    end
+    return false
+end
+
+-- Count currently accessible party unit tokens (party1-party4).
+local function getLivePartyUnitCount()
+    if type(UnitExists) ~= "function" then
+        return 0
+    end
+
+    local liveCount = 0
+    for i = 1, 4 do
+        if UnitExists("party" .. i) then
+            liveCount = liveCount + 1
+        end
+    end
+    return liveCount
+end
+
 -- Return player specialization id.
 local function getPlayerSpecializationID()
     if type(GetSpecialization) ~= "function" or type(GetSpecializationInfo) ~= "function" then
@@ -535,9 +578,14 @@ function PartyFrames:CreatePartyFrames()
     -- restricted attribute code, so unit assignment is never done from normal Lua in combat.
     local header = CreateFrame("Frame", "mummuFramesPartyHeader", container, "SecureGroupHeaderTemplate")
     header:SetFrameStrata("LOW")
-    header:SetAttribute("groupFilter", "PARTY,PLAYER")
+    -- Prefer explicit party/raid toggles for secure headers. This is the same
+    -- model Blizzard-party headers use and is more reliable across home/instance
+    -- group categories than hard-coded groupFilter tokens.
+    header:SetAttribute("showParty", true)
+    header:SetAttribute("showRaid", false)
     header:SetAttribute("showPlayer", true)
     header:SetAttribute("showSolo", true)
+    header:SetAttribute("groupFilter", nil)
     header:SetAttribute("template", "SecureUnitButtonTemplate")
     header:SetAttribute("sortMethod", "ROLE")
     header:SetAttribute("point", "TOP")
@@ -1734,6 +1782,13 @@ function PartyFrames:RefreshAll(forceLayout)
     -- Read layout config.
     local showPlayer = partyConfig.showPlayer ~= false
     local showSelfWithoutGroup = partyConfig.showSelfWithoutGroup ~= false
+    local inHomeGroup = isInGroupCategory(PARTY_CATEGORY_HOME)
+    local inInstanceGroup = isInGroupCategory(PARTY_CATEGORY_INSTANCE)
+    local inAnyGroup = inHomeGroup or inInstanceGroup
+    local inHomeRaid = isInRaidCategory(PARTY_CATEGORY_HOME)
+    local inInstanceRaid = isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    local inAnyRaid = inHomeRaid or inInstanceRaid
+    local livePartyMemberCount = getLivePartyUnitCount()
     local spacing = Util:Clamp(tonumber(partyConfig.spacing) or 2, 0, 80)
     local width = Util:Clamp(tonumber(partyConfig.width) or 180, 80, 500)
     local height = Util:Clamp(tonumber(partyConfig.height) or 34, 16, 120)
@@ -1868,21 +1923,16 @@ function PartyFrames:RefreshAll(forceLayout)
         end
         self.header:SetAttribute("frameWidth", width)
         self.header:SetAttribute("frameHeight", height)
+        self.header:SetAttribute("showParty", true)
+        self.header:SetAttribute("showRaid", false)
         self.header:SetAttribute("showPlayer", showPlayer)
         self.header:SetAttribute("showSolo", showSelfWithoutGroup)
+        self.header:SetAttribute("groupFilter", nil)
 
         -- Determine container size from live party count (up to MAX_PARTY_TEST_FRAMES).
-        local liveCount = 0
-        for i = 1, 4 do
-            if UnitExists("party" .. i) then
-                liveCount = liveCount + 1
-            end
-        end
+        local liveCount = livePartyMemberCount
         if showPlayer then
-            local inRaid = (type(IsInRaid) == "function")
-                and (IsInRaid(PARTY_CATEGORY_HOME) or IsInRaid(PARTY_CATEGORY_INSTANCE))
-                or false
-            if not inRaid and (liveCount > 0 or showSelfWithoutGroup) then
+            if not inAnyRaid and (liveCount > 0 or showSelfWithoutGroup) then
                 liveCount = liveCount + 1
             end
         end
@@ -1963,8 +2013,21 @@ function PartyFrames:RefreshAll(forceLayout)
     -- so it never creates child buttons when the player is solo (showSolo only controls
     -- header visibility, not child creation). Explicitly show testFrames[MAX_PARTY_TEST_FRAMES]
     -- (unit = "player") with real data when not in any group.
+    --
+    -- Follower-dungeon edge case:
+    -- some instance-category groups can report grouped state while exposing zero
+    -- party1-party4 units to the secure header for a short period. In that case,
+    -- keep player visible instead of rendering nothing.
     -- Visibility/position updates are deferred if combat is active.
-    if showSelfWithoutGroup and not IsInGroup() and not frameByDisplayedUnit["player"] then
+    local shouldUseSoloFallback = false
+    if showSelfWithoutGroup and not frameByDisplayedUnit["player"] then
+        if not inAnyGroup then
+            shouldUseSoloFallback = true
+        elseif inInstanceGroup and not inAnyRaid and livePartyMemberCount == 0 then
+            shouldUseSoloFallback = true
+        end
+    end
+    if shouldUseSoloFallback then
         local soloFrame = self.testFrames and self.testFrames[MAX_PARTY_TEST_FRAMES]
         if soloFrame then
             soloFrame.unit = "player"
