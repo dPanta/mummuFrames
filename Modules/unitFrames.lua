@@ -123,6 +123,9 @@ local MAELSTROM_WEAPON_SPELL_ID = 344179
 local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
 local IRONFUR_BASE_DURATION = 7
 local SPELL_AURA_SCAN_MAX = 255
+local MIRROR_TIMER_TYPE_BREATH = "BREATH"
+local PLAYER_BREATH_UPDATE_INTERVAL = 0.1
+local BREATH_POWER_COLOR = { 0.00, 0.50, 1.00 }
 local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
 
@@ -150,6 +153,9 @@ local REFRESH_OPTIONS_VITALS = {
     secondaryPower = true,
     tertiaryPower = true,
     visibility = true,
+}
+local REFRESH_OPTIONS_PLAYER_VITALS_ONLY = {
+    vitals = true,
 }
 
 -- Create table holding refresh options auras.
@@ -277,6 +283,48 @@ local function safeBool(val, fallback)
         return evaluated
     end
     return fallback == true
+end
+
+-- Return active player breath mirror timer state.
+local function getMirrorTimerBreathState()
+    if type(GetMirrorTimerInfo) ~= "function" then
+        return nil
+    end
+
+    local timerCount = tonumber(_G.MIRRORTIMER_NUMTIMERS) or 3
+    for timerIndex = 1, timerCount do
+        local timerType, value, maxValue, _, paused = GetMirrorTimerInfo(timerIndex)
+        if timerType == MIRROR_TIMER_TYPE_BREATH then
+            local numericMax = tonumber(maxValue) or 0
+            if numericMax > 0 then
+                local numericValue = tonumber(value) or numericMax
+                numericValue = Util:Clamp(numericValue, 0, numericMax)
+                return {
+                    value = numericValue,
+                    maxValue = numericMax,
+                    paused = safeBool(paused, false),
+                }
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Resolve breath mirror timer color.
+local function resolveBreathPowerColor()
+    local mirrorColors = _G.MirrorTimerColors
+    local color = mirrorColors and mirrorColors[MIRROR_TIMER_TYPE_BREATH]
+    if type(color) == "table" then
+        local r = tonumber(color.r)
+        local g = tonumber(color.g)
+        local b = tonumber(color.b)
+        if r and g and b then
+            return r, g, b
+        end
+    end
+
+    return BREATH_POWER_COLOR[1], BREATH_POWER_COLOR[2], BREATH_POWER_COLOR[3]
 end
 
 -- Resolve health color.
@@ -1135,6 +1183,9 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_POWER_UPDATE", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_MAXPOWER", self.OnUnitEvent)
     ns.EventRouter:Register(self, "UNIT_DISPLAYPOWER", self.OnUnitEvent)
+    ns.EventRouter:Register(self, "MIRROR_TIMER_START", self.OnMirrorTimerEvent)
+    ns.EventRouter:Register(self, "MIRROR_TIMER_STOP", self.OnMirrorTimerEvent)
+    ns.EventRouter:Register(self, "MIRROR_TIMER_PAUSE", self.OnMirrorTimerEvent)
     ns.EventRouter:Register(self, "UNIT_NAME_UPDATE", self.OnUnitEvent)
     ns.EventRouter:Register(self, "RUNE_POWER_UPDATE", self.OnRunePowerUpdate)
     ns.EventRouter:Register(self, "UNIT_AURA", self.OnUnitAura)
@@ -1328,6 +1379,33 @@ function UnitFrames:OnPlayerMovement()
     self:RefreshTargetRangeAlpha(frame, UnitExists("target"), previewMode)
 end
 
+-- Refresh player breath ticker state.
+function UnitFrames:UpdatePlayerBreathTicker(frame, exists, previewMode, breathState)
+    if not frame or frame.unitToken ~= "player" then
+        return
+    end
+
+    local shouldTick = false
+    if exists and not previewMode then
+        breathState = breathState or getMirrorTimerBreathState()
+        shouldTick = breathState ~= nil and breathState.paused ~= true
+    end
+
+    frame._mummuBreathTickerActive = shouldTick
+    if not shouldTick then
+        frame._mummuBreathTickerElapsed = 0
+    end
+end
+
+-- Handle mirror timer event.
+function UnitFrames:OnMirrorTimerEvent(_, timerType)
+    if timerType ~= nil and timerType ~= MIRROR_TIMER_TYPE_BREATH then
+        return
+    end
+
+    self:RefreshFrame("player", false, REFRESH_OPTIONS_PLAYER_VITALS_ONLY)
+end
+
 -- Handle unit event.
 function UnitFrames:OnUnitEvent(_, unitToken)
     if SUPPORTED_UNITS[unitToken] then
@@ -1465,7 +1543,29 @@ end
 
 -- Create player frame.
 function UnitFrames:CreatePlayerFrame()
-    return self:CreateUnitFrame("player")
+    local frame = self:CreateUnitFrame("player")
+    if frame and frame._mummuBreathOnUpdateHooked ~= true then
+        frame._mummuBreathOnUpdateHooked = true
+        frame._mummuBreathTickerActive = false
+        frame._mummuBreathTickerElapsed = 0
+        frame:HookScript("OnUpdate", function(playerFrame, elapsed)
+            if not playerFrame._mummuBreathTickerActive then
+                return
+            end
+
+            playerFrame._mummuBreathTickerElapsed = (playerFrame._mummuBreathTickerElapsed or 0) + (elapsed or 0)
+            if playerFrame._mummuBreathTickerElapsed < PLAYER_BREATH_UPDATE_INTERVAL then
+                return
+            end
+            playerFrame._mummuBreathTickerElapsed = 0
+
+            if not self then
+                return
+            end
+            self:RefreshFrame("player", false, REFRESH_OPTIONS_PLAYER_VITALS_ONLY)
+        end)
+    end
+    return frame
 end
 
 -- Create pet frame.
@@ -1657,6 +1757,10 @@ end
 function UnitFrames:HideAll()
     for _, frame in pairs(self.frames) do
         if frame then
+            if frame.unitToken == "player" then
+                frame._mummuBreathTickerActive = false
+                frame._mummuBreathTickerElapsed = 0
+            end
             if frame.unitToken and self:IsDriverVisibilityUnit(frame.unitToken) then
                 self:ApplyVisibilityDriver(frame, frame.unitToken, false)
             end
@@ -2813,6 +2917,10 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         self:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)
     end
     if unitConfig.enabled == false and not self.editModeActive and not testMode then
+        if unitToken == "player" then
+            frame._mummuBreathTickerActive = false
+            frame._mummuBreathTickerElapsed = 0
+        end
         if options.castbar and frame.CastBar then
             stopCastBarTimer(frame.CastBar)
         end
@@ -2855,6 +2963,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         local maxHealth
         local power
         local maxPower
+        local breathState = nil
 
         if exists then
             name = UnitName(unitToken) or unitToken
@@ -2862,6 +2971,13 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             maxHealth = UnitHealthMax(unitToken) or 1
             power = UnitPower(unitToken)
             maxPower = UnitPowerMax(unitToken) or 1
+            if unitToken == "player" and not previewMode then
+                breathState = getMirrorTimerBreathState()
+                if breathState then
+                    power = breathState.value
+                    maxPower = breathState.maxValue
+                end
+            end
         else
             name = TEST_NAME_BY_UNIT[unitToken] or unitToken
             health = 100
@@ -2871,12 +2987,20 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
 
         local healthR, healthG, healthB = resolveHealthColor(unitToken, exists)
-        local powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
+        local powerR, powerG, powerB
+        if unitToken == "player" and breathState then
+            powerR, powerG, powerB = resolveBreathPowerColor()
+        else
+            powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
+        end
         frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, 1)
         frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
 
         setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
         setStatusBarValueSafe(frame.PowerBar, power, maxPower)
+        if unitToken == "player" then
+            self:UpdatePlayerBreathTicker(frame, exists, previewMode, breathState)
+        end
         updateAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
 
         if not frame.NameText:GetFont() and GameFontHighlightSmall then

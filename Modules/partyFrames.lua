@@ -191,16 +191,24 @@ local function isUnitOutOfRange(unitToken)
 
     if type(UnitInRange) == "function" then
         local okInRange, inRange = pcall(UnitInRange, unitToken)
-        if okInRange and type(inRange) == "boolean" then
-            return not inRange
+        if okInRange then
+            local isInRange = getSafeBooleanValue(inRange, true)
+            if isInRange then
+                return false
+            end
+            return true
         end
     end
 
     -- Fallback for units where UnitInRange is unavailable/unknown.
     if type(CheckInteractDistance) == "function" then
         local okInteract, canInteract = pcall(CheckInteractDistance, unitToken, 4)
-        if okInteract and type(canInteract) == "boolean" then
-            return not canInteract
+        if okInteract then
+            local canUse = getSafeBooleanValue(canInteract, true)
+            if canUse then
+                return false
+            end
+            return true
         end
     end
 
