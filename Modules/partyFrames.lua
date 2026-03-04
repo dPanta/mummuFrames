@@ -152,6 +152,14 @@ end
 local function getSafeBooleanValue(value, fallback)
     local fallbackValue = equalsTrue(fallback)
 
+    -- Preserve fallback for unknown values (e.g. UnitInRange returns nil when range is not checkable).
+    local okNil, isNil = pcall(function()
+        return value == nil
+    end)
+    if okNil and isNil then
+        return fallbackValue
+    end
+
     -- Preferred path: shared secret-safe truthiness helper.
     if AuraSafety and type(AuraSafety.SafeTruthy) == "function" then
         local okSafeTruthy, resolved = pcall(AuraSafety.SafeTruthy, AuraSafety, value)
@@ -190,8 +198,16 @@ local function isUnitOutOfRange(unitToken)
     end
 
     if type(UnitInRange) == "function" then
-        local okInRange, inRange = pcall(UnitInRange, unitToken)
+        local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
         if okInRange then
+            -- Two-return API variant: (inRange, checkedRange).
+            -- checkedRange=false means unknown/not checkable, so do not dim.
+            if checkedRange ~= nil then
+                local canCheckRange = getSafeBooleanValue(checkedRange, true)
+                if not canCheckRange then
+                    return false
+                end
+            end
             local isInRange = getSafeBooleanValue(inRange, true)
             if isInRange then
                 return false
