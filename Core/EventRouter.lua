@@ -3,20 +3,16 @@
 
 local _, ns = ...
 
--- Create class holding event router behavior.
+-- Lightweight event bus that fans one WoW event out to many owners.
 local EventRouter = ns.Object:Extend()
 
 -- Initialize event router state.
 function EventRouter:Constructor()
-    -- Create frame widget.
     self.frame = CreateFrame("Frame")
-    -- Create table holding events.
     self.events = {}
-    -- Create table holding reusable dispatch snapshot.
     self._dispatchScratch = {}
     self._dispatchScratchCount = 0
 
-    -- Handle OnEvent script callback.
     self.frame:SetScript("OnEvent", function(_, event, ...)
         self:Dispatch(event, ...)
     end)
@@ -30,7 +26,6 @@ function EventRouter:Register(owner, eventName, handler)
 
     local list = self.events[eventName]
     if not list then
-        -- Create table holding list.
         list = {}
         self.events[eventName] = list
         self.frame:RegisterEvent(eventName)

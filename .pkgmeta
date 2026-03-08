@@ -1,5 +1,7 @@
 package-as: mummuFrames
 
+manual-changelog: CHANGELOG.md
+
 ignore:
   - .git
   - .github

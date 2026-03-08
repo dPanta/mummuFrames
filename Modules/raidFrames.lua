@@ -46,6 +46,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 
+-- Show a tooltip for the unit currently assigned to the raid frame.
 local function showUnitTooltip(frame)
     if not frame then
         return
@@ -73,6 +74,7 @@ local function showUnitTooltip(frame)
     GameTooltip:Show()
 end
 
+-- Hide the tooltip opened by showUnitTooltip.
 local function hideUnitTooltip(frame)
     if not frame then
         return
@@ -86,6 +88,7 @@ local function hideUnitTooltip(frame)
     GameTooltip:Hide()
 end
 
+-- Compare against literal true inside pcall to tolerate secret booleans.
 local function equalsTrue(value)
     local ok, resolved = pcall(function()
         return value == true
@@ -96,6 +99,7 @@ local function equalsTrue(value)
     return false
 end
 
+-- Resolve a boolean-like value with AuraSafety and fallback handling.
 local function getSafeBooleanValue(value, fallback)
     local fallbackValue = equalsTrue(fallback)
 
@@ -127,6 +131,7 @@ local function getSafeBooleanValue(value, fallback)
     return fallbackValue
 end
 
+-- Coerce a numeric-like value without letting protected payloads escape.
 local function getSafeNumericValue(value, fallback)
     if type(value) == "number" then
         local okString, asString = pcall(tostring, value)
@@ -155,6 +160,7 @@ local function getSafeNumericValue(value, fallback)
     return fallback
 end
 
+-- Convert a value/max pair into a percentage.
 local function computePercent(value, maxValue)
     if type(maxValue) ~= "number" or maxValue <= 0 then
         return 0
@@ -162,6 +168,7 @@ local function computePercent(value, maxValue)
     return (value / maxValue) * 100
 end
 
+-- Apply a clamped value/range pair to a status bar safely.
 local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     if not statusBar then
         return
@@ -189,6 +196,7 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     end
 end
 
+-- Return a unit GUID without propagating UnitGUID failures.
 local function getUnitGUIDSafe(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
         return nil
@@ -201,6 +209,7 @@ local function getUnitGUIDSafe(unitToken)
     return nil
 end
 
+-- Accept only raid unit tokens this module can display.
 local function normalizeRaidDisplayedUnit(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -211,6 +220,7 @@ local function normalizeRaidDisplayedUnit(unitToken)
     return nil
 end
 
+-- Return the displayed raid unit mapped to a GUID.
 local function getDisplayedUnitForGUID(guidToUnitMap, guid)
     if type(guidToUnitMap) ~= "table" or type(guid) ~= "string" or guid == "" then
         return nil
@@ -225,6 +235,7 @@ local function getDisplayedUnitForGUID(guidToUnitMap, guid)
     return nil
 end
 
+-- Record which raid unit token a GUID is currently displayed as.
 local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
     if
         type(guidToUnitMap) ~= "table"
@@ -241,6 +252,7 @@ local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
     end)
 end
 
+-- Return whether the raid member should be considered out of range.
 local function isUnitOutOfRange(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
@@ -281,6 +293,7 @@ local function isUnitOutOfRange(unitToken)
     return false
 end
 
+-- Return whether the player is in a raid for the requested category.
 local function isInRaidCategory(category)
     if type(IsInRaid) ~= "function" then
         return false
@@ -293,6 +306,7 @@ local function isInRaidCategory(category)
     return false
 end
 
+-- Count members per raid subgroup and return the active subgroup order.
 local function getRaidGroupCounts()
     local counts = {}
     local activeGroups = {}
@@ -321,6 +335,7 @@ local function getRaidGroupCounts()
     return counts, orderedGroups
 end
 
+-- Build preview entries for test/edit mode raid layouts.
 local function getPreviewEntries(count)
     local entries = {}
     local total = Util:Clamp(math.floor((tonumber(count) or 20) + 0.5), 1, MAX_RAID_TEST_FRAMES)
@@ -341,6 +356,7 @@ local function getPreviewEntries(count)
     return entries
 end
 
+-- Sort preview entries within each raid group using the current config.
 local function sortEntriesWithinGroups(entries, sortBy, sortDirection)
     local sortMode = (sortBy == "name" or sortBy == "role") and sortBy or "group"
     local descending = sortDirection == "desc"
@@ -406,6 +422,7 @@ local function sortEntriesWithinGroups(entries, sortBy, sortDirection)
     return sorted, orderedGroups
 end
 
+-- Reverse group order when the live layout sorts groups descending.
 local function getLiveGroupOrder(groupIndices, sortBy, sortDirection)
     if sortBy ~= "group" or sortDirection ~= "desc" then
         return groupIndices
@@ -418,6 +435,7 @@ local function getLiveGroupOrder(groupIndices, sortBy, sortDirection)
     return reversed
 end
 
+-- Compute the size needed for one subgroup container.
 local function getGroupContainerSize(memberCount, width, height, spacingX, spacingY, groupLayout)
     local count = math.max(1, memberCount or 1)
     if groupLayout == "horizontal" then
@@ -426,6 +444,7 @@ local function getGroupContainerSize(memberCount, width, height, spacingX, spaci
     return width, (height * count) + (spacingY * math.max(0, count - 1))
 end
 
+-- Prefer the unit's live name, falling back to its token.
 local function getLiveDisplayName(unitToken)
     local name = UnitName(unitToken)
     if type(name) == "string" and name ~= "" then
@@ -434,6 +453,7 @@ local function getLiveDisplayName(unitToken)
     return unitToken
 end
 
+-- Initialize raid-frame module state and cached maps.
 function RaidFrames:Constructor()
     self.addon = nil
     self.dataHandle = nil
@@ -452,10 +472,12 @@ function RaidFrames:Constructor()
     self._displayedUnitByGUID = {}
 end
 
+-- Store addon references needed by the module.
 function RaidFrames:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
+-- Create UI, register events, and perform the first full refresh.
 function RaidFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
@@ -474,6 +496,7 @@ function RaidFrames:OnEnable()
     self:RefreshAll(true)
 end
 
+-- Tear down runtime state and restore Blizzard visibility.
 function RaidFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
@@ -488,6 +511,7 @@ function RaidFrames:OnDisable()
     self:HideAll()
 end
 
+-- Register world, roster, and combat events that affect raid frames.
 function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_REGEN_DISABLED", self.OnCombatStarted)
@@ -497,6 +521,7 @@ function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
 end
 
+-- Subscribe to Edit Mode enter/exit callbacks once.
 function RaidFrames:RegisterEditModeCallbacks()
     if self.editModeCallbacksRegistered then
         return
@@ -510,6 +535,7 @@ function RaidFrames:RegisterEditModeCallbacks()
     self.editModeCallbacksRegistered = true
 end
 
+-- Remove Edit Mode callbacks when the module disables.
 function RaidFrames:UnregisterEditModeCallbacks()
     if not self.editModeCallbacksRegistered then
         return
@@ -521,6 +547,7 @@ function RaidFrames:UnregisterEditModeCallbacks()
     self.editModeCallbacksRegistered = false
 end
 
+-- Ensure the raid container has an Edit Mode selection overlay.
 function RaidFrames:EnsureEditModeSelection()
     if not self.container or not self.unitFrames then
         return
@@ -536,6 +563,7 @@ function RaidFrames:EnsureEditModeSelection()
     end
 end
 
+-- Show edit-mode affordances and switch to preview presentation.
 function RaidFrames:OnEditModeEnter()
     self.editModeActive = true
     self:EnsureEditModeSelection()
@@ -545,6 +573,7 @@ function RaidFrames:OnEditModeEnter()
     self:RefreshAll(true)
 end
 
+-- Hide edit-mode affordances and return to live presentation.
 function RaidFrames:OnEditModeExit()
     self.editModeActive = false
     if self.container then
@@ -557,6 +586,7 @@ function RaidFrames:OnEditModeExit()
     self:RefreshAll(true)
 end
 
+-- Refresh layout or defer it when roster/world changes occur in combat.
 function RaidFrames:OnWorldEvent()
     if InCombatLockdown() then
         self.pendingLayoutRefresh = true
@@ -567,12 +597,14 @@ function RaidFrames:OnWorldEvent()
     self:RebuildDisplayedUnitMap(false)
 end
 
+-- Freeze layout churn while combat lockdown is active.
 function RaidFrames:OnCombatStarted()
     self:RefreshAll(false)
     self:RebuildDisplayedUnitMap(true)
     self.pendingLayoutRefresh = true
 end
 
+-- Apply any deferred raid layout work after combat ends.
 function RaidFrames:OnCombatEnded()
     if self.pendingLayoutRefresh then
         self.pendingLayoutRefresh = false
@@ -582,12 +614,14 @@ function RaidFrames:OnCombatEnded()
     self:RefreshAll(false)
 end
 
+-- Delegate Blizzard raid-frame suppression to AuraHandle.
 function RaidFrames:SetBlizzardRaidFramesHidden(shouldHide)
     if ns.AuraHandle then
         ns.AuraHandle:SetBlizzardFramesHidden("raid", shouldHide, "raidFrames")
     end
 end
 
+-- Apply the current config setting for Blizzard raid-frame visibility.
 function RaidFrames:ApplyBlizzardRaidFrameVisibility()
     if not self.dataHandle then
         return
@@ -599,10 +633,12 @@ function RaidFrames:ApplyBlizzardRaidFrameVisibility()
     self:SetBlizzardRaidFramesHidden(shouldHide)
 end
 
+-- Return the shared healer-aura config used by raid indicators.
 function RaidFrames:GetRaidHealerConfig()
     return ns.AuraHandle and ns.AuraHandle:GetHealerConfig() or nil
 end
 
+-- Create the raid container, secure subgroup headers, and preview frames.
 function RaidFrames:CreateRaidFrames()
     if self.container then
         return self.container
@@ -667,6 +703,7 @@ function RaidFrames:CreateRaidFrames()
     return container
 end
 
+-- Attach health text, absorb overlays, and tooltip behavior to a raid frame.
 function RaidFrames:BuildFrameVisuals(frame)
     if not frame or frame._mummuVisualsBuilt then
         return
@@ -687,7 +724,7 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame:SetScript("OnLeave", hideUnitTooltip)
 
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
-    frame.HealthBar = self.globalFrames:CreateStatusBar(frame)
+    frame.HealthBar = self.globalFrames:CreateStatusBar(frame, "health")
 
     frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.NameText:SetJustifyH("LEFT")
@@ -715,6 +752,7 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame._mummuVisualsBuilt = true
 end
 
+-- Apply sizing, fonts, and overlay layout to one raid frame.
 function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     if not frame or not raidConfig then
         return false
@@ -746,6 +784,7 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     local textInset = pixelPerfect and Style:Snap(4) or 4
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
+    Style:ApplyStatusBarBacking(frame.HealthBar, "health")
     frame.HealthBar:ClearAllPoints()
     frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
     frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
@@ -773,6 +812,7 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     return true
 end
 
+-- Return the spacing between subgroup containers for the chosen layout.
 local function getGroupContainerGap(groupLayout, spacingX, spacingY, groupSpacing)
     if groupLayout == "horizontal" then
         return spacingY + groupSpacing
@@ -780,6 +820,7 @@ local function getGroupContainerGap(groupLayout, spacingX, spacingY, groupSpacin
     return spacingX + groupSpacing
 end
 
+-- Push layout and sorting attributes into one secure raid header.
 function RaidFrames:ApplyHeaderConfiguration(header, groupIndex, width, height, spacingX, spacingY, sortBy, sortDirection, groupLayout)
     if not header then
         return
@@ -820,6 +861,7 @@ function RaidFrames:ApplyHeaderConfiguration(header, groupIndex, width, height, 
     end
 end
 
+-- Hide the raid container, subgroup containers, and preview frames.
 function RaidFrames:HideAll()
     if self.container then
         self.container:Hide()
@@ -838,6 +880,7 @@ function RaidFrames:HideAll()
     end
 end
 
+-- Refresh one raid frame's vitals, alpha state, and aura overlays.
 function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, forceStyle, refreshOptions)
     if not frame then
         return
@@ -885,9 +928,18 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
     end
 
     if refreshVitals then
+        local darkModeEnabled = Style:IsDarkModeEnabled()
+        local barFillAlpha = 1
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
         if not isConnected then
             healthColor = OFFLINE_HEALTH_COLOR
+        elseif darkModeEnabled then
+            healthColor = {
+                r = Style.DARK_MODE_GRANITE_COLOR[1],
+                g = Style.DARK_MODE_GRANITE_COLOR[2],
+                b = Style.DARK_MODE_GRANITE_COLOR[3],
+            }
+            barFillAlpha = Style.DARK_MODE_GRANITE_COLOR[4]
         elseif exists and UnitIsPlayer(unitToken) then
             local classColor = classToken and RAID_CLASS_COLORS[classToken]
             if classColor then
@@ -895,7 +947,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             end
         end
 
-        frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, 1)
+        frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, barFillAlpha)
         if not isConnected then
             health = 0
             maxHealth = 1
@@ -930,7 +982,16 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             frame.HealthText:SetTextColor(0.72, 0.72, 0.72, 1)
         else
             frame.HealthText:SetText(string.format("%.0f%%", healthPercent))
-            frame.NameText:SetTextColor(1, 1, 1, 1)
+            if darkModeEnabled then
+                local nameR, nameG, nameB = Style:GetClassTextColor(classToken)
+                if nameR and nameG and nameB then
+                    frame.NameText:SetTextColor(nameR, nameG, nameB, 1)
+                else
+                    frame.NameText:SetTextColor(1, 1, 1, 1)
+                end
+            else
+                frame.NameText:SetTextColor(1, 1, 1, 1)
+            end
             frame.HealthText:SetTextColor(1, 1, 1, 1)
         end
 
@@ -954,6 +1015,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
     end
 end
 
+-- Rebuild displayedUnit and GUID maps from active raid frames.
 function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
     local frameByDisplayedUnit = {}
     local displayedUnitByGUID = {}
@@ -1043,6 +1105,7 @@ function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
     return mappedCount
 end
 
+-- Find the secure child that already owns the requested raid unit token.
 function RaidFrames:EnsureMappedFrameForUnit(unitToken)
     if type(unitToken) ~= "string" or not string.match(unitToken, "^raid%d+$") then
         return nil
@@ -1087,6 +1150,7 @@ function RaidFrames:EnsureMappedFrameForUnit(unitToken)
     return nil
 end
 
+-- Resolve an incoming unit token to the currently displayed raid token.
 function RaidFrames:ResolveDisplayedUnitToken(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -1128,6 +1192,7 @@ function RaidFrames:ResolveDisplayedUnitToken(unitToken)
     return nil
 end
 
+-- Refresh the currently displayed raid frame for the given unit token.
 function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
@@ -1181,6 +1246,7 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
     return true
 end
 
+-- Refresh a known mapped frame directly without re-resolving it.
 function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
         return false
@@ -1209,6 +1275,7 @@ function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions
     return true
 end
 
+-- Refresh every raid frame in live mode or preview mode.
 function RaidFrames:RefreshAll(forceLayout)
     if not self.dataHandle then
         return

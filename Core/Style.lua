@@ -3,9 +3,9 @@
 
 local _, ns = ...
 
--- Create table holding style.
+-- Shared style/media helpers exposed to the rest of the addon.
 local Style = {}
--- Create table holding font validation cache.
+-- Cache of font-path usability checks.
 local fontValidationCache = {}
 local availableFontsCache = nil
 local availableBarTexturesCache = nil
@@ -15,8 +15,11 @@ local lsmCallbacksRegistered = false
 
 Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
+Style.DARK_MODE_GRANITE_COLOR = { 0.19, 0.20, 0.22, 0.95 }
+Style.DARK_MODE_BAR_BACKGROUND_COLOR = { 0.72, 0.50, 0.51, 0.55 }
+local DEFAULT_STATUS_BAR_BACKGROUND_COLOR = { 0.00, 0.00, 0.00, 0.55 }
 
--- Normalize media path. Bug parade continues.
+-- Normalize media paths so cache lookups ignore slash and case differences.
 local function normalizeMediaPath(path)
     if type(path) ~= "string" then
         return nil
@@ -41,7 +44,7 @@ local function getLSM()
     end
 
     if lsm and not lsmCallbacksRegistered and type(lsm.RegisterCallback) == "function" then
-        -- Invalidate media caches.
+        -- Clear cached lists when LibSharedMedia content changes at runtime.
         local function invalidateMediaCaches()
             availableFontsCache = nil
             availableBarTexturesCache = nil
@@ -55,7 +58,7 @@ local function getLSM()
     return lsm
 end
 
--- Return profile style.
+-- Return the current profile's style table, if available.
 local function getProfileStyle()
     local addon = _G.mummuFrames
     if not addon or type(addon.GetModule) ~= "function" then
@@ -71,13 +74,19 @@ local function getProfileStyle()
     return profile and profile.style or nil
 end
 
--- Check pixel perfect enabled.
+-- Return whether pixel-perfect snapping is enabled in the active profile.
 function Style:IsPixelPerfectEnabled()
     local style = getProfileStyle()
     return not (style and style.pixelPerfect == false)
 end
 
--- Return pixel size.
+-- Return whether Dark Mode is enabled in the active profile.
+function Style:IsDarkModeEnabled()
+    local style = getProfileStyle()
+    return style and style.darkMode == true or false
+end
+
+-- Return one physical screen pixel in UI coordinates.
 function Style:GetPixelSize()
     local scale = 1
     if UIParent and type(UIParent.GetEffectiveScale) == "function" then
@@ -96,7 +105,7 @@ function Style:Snap(value)
     return math.floor((n / pixel) + 0.5) * pixel
 end
 
--- Ensure font probe.
+-- Lazily create the hidden FontString used to validate font paths.
 local function ensureFontProbe()
     if fontProbe then
         return fontProbe
@@ -104,20 +113,18 @@ local function ensureFontProbe()
 
     local holder = UIParent
     if not holder then
-        -- Create frame widget.
         holder = CreateFrame("Frame")
         holder:Hide()
     end
 
     if holder and type(holder.CreateFontString) == "function" then
-        -- Create text font string.
         fontProbe = holder:CreateFontString(nil, "OVERLAY")
     end
 
     return fontProbe
 end
 
--- Check font path usable.
+-- Return whether the supplied font path can actually be applied.
 function Style:IsFontPathUsable(fontPath)
     if type(fontPath) ~= "string" or fontPath == "" then
         return false
@@ -133,7 +140,7 @@ function Style:IsFontPathUsable(fontPath)
         return false
     end
 
-    -- Try assigning font path with flags.
+    -- Some fonts only accept specific flags; try both common paths.
     local function tryAssign(flags)
         local ok, setResult = pcall(probe.SetFont, probe, fontPath, 12, flags)
         if not ok or setResult == false then
@@ -158,9 +165,7 @@ function Style:GetAvailableFonts(forceRefresh)
         return availableFontsCache
     end
 
-    -- Create table holding available.
     local available = {}
-    -- Create table holding seen paths.
     local seenPaths = {}
     local catalog = ns.FontCatalog and ns.FontCatalog.list or {}
 
@@ -203,7 +208,6 @@ function Style:GetAvailableFonts(forceRefresh)
         if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
             local fontTable = lsmRef:HashTable("font")
             if type(fontTable) == "table" then
-                -- Create table holding names.
                 names = {}
                 for name in pairs(fontTable) do
                     names[#names + 1] = name
@@ -243,12 +247,10 @@ function Style:GetAvailableBarTextures(forceRefresh)
         return availableBarTexturesCache
     end
 
-    -- Create table holding available.
     local available = {}
-    -- Create table holding seen paths.
     local seenPaths = {}
 
-    -- Add texture option. Nothing exploded yet.
+    -- Add one unique texture option to the dropdown list.
     local function addTextureOption(key, label, path)
         if type(path) ~= "string" or path == "" then
             return
@@ -281,7 +283,6 @@ function Style:GetAvailableBarTextures(forceRefresh)
         if type(names) ~= "table" and type(lsmRef.HashTable) == "function" then
             local textureTable = lsmRef:HashTable("statusbar")
             if type(textureTable) == "table" then
-                -- Create table holding names.
                 names = {}
                 for name in pairs(textureTable) do
                     names[#names + 1] = name
@@ -355,6 +356,40 @@ function Style:GetBarTexturePath()
     end
 
     return self:GetDefaultBarTexturePath()
+end
+
+-- Return the class text color for a class token, or nil when unavailable.
+function Style:GetClassTextColor(classToken)
+    if type(classToken) ~= "string" or classToken == "" then
+        return nil
+    end
+
+    local classColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS[classToken] or nil
+    if type(classColor) ~= "table" then
+        return nil
+    end
+
+    local r = tonumber(classColor.r)
+    local g = tonumber(classColor.g)
+    local b = tonumber(classColor.b)
+    if not r or not g or not b then
+        return nil
+    end
+
+    return r, g, b, 1
+end
+
+-- Return the class text color for a player unit token, or nil when unavailable.
+function Style:GetPlayerClassTextColor(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if type(UnitIsPlayer) ~= "function" or not UnitIsPlayer(unitToken) then
+        return nil
+    end
+
+    local _, classToken = UnitClass(unitToken)
+    return self:GetClassTextColor(classToken)
 end
 
 -- Apply font with fallback paths.
@@ -459,6 +494,36 @@ function Style:ApplyStatusBarTexture(statusBar)
         tex:SetHorizTile(false)
         tex:SetVertTile(false)
     end
+end
+
+-- Return the background tint for a status bar role.
+local function getStatusBarBackingColor(isDarkModeEnabled, role)
+    if isDarkModeEnabled and (role == "health" or role == "primaryPower") then
+        return Style.DARK_MODE_BAR_BACKGROUND_COLOR[1],
+            Style.DARK_MODE_BAR_BACKGROUND_COLOR[2],
+            Style.DARK_MODE_BAR_BACKGROUND_COLOR[3],
+            Style.DARK_MODE_BAR_BACKGROUND_COLOR[4]
+    end
+
+    return DEFAULT_STATUS_BAR_BACKGROUND_COLOR[1],
+        DEFAULT_STATUS_BAR_BACKGROUND_COLOR[2],
+        DEFAULT_STATUS_BAR_BACKGROUND_COLOR[3],
+        DEFAULT_STATUS_BAR_BACKGROUND_COLOR[4]
+end
+
+-- Apply the background tint for a status bar based on its semantic role.
+function Style:ApplyStatusBarBacking(statusBar, role)
+    if not statusBar or not statusBar.Background then
+        return
+    end
+
+    local resolvedRole = role or statusBar._mummuStatusBarRole or "generic"
+    if type(role) == "string" and role ~= "" then
+        statusBar._mummuStatusBarRole = role
+    end
+
+    local r, g, b, a = getStatusBarBackingColor(self:IsDarkModeEnabled(), resolvedRole)
+    statusBar.Background:SetColorTexture(r, g, b, a)
 end
 
 -- Create background texture layer.

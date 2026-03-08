@@ -32,7 +32,7 @@ local L = ns.L
 local Style = ns.Style
 local Util = ns.Util
 
--- Create class holding configuration behavior.
+-- Owns the settings UI, dropdown data sources, and config-side refresh hooks.
 local Configuration = ns.Object:Extend()
 local MINIMAP_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\mummuF.png"
 local MINIMAP_ICON_MASK_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
@@ -44,8 +44,7 @@ local MINIMAP_BACKGROUND_TEXTURE = "Interface\\Minimap\\UI-Minimap-Background"
 -- CONFIGURATION CONSTANTS
 -- ============================================================================
 
--- Unit tab order and labels for configurable frames.
--- Create table holding unit tab order.
+-- Fixed ordering for the unit tabs shown in the settings panel.
 local UNIT_TAB_ORDER = {
     "party",
     "raid",
@@ -57,7 +56,7 @@ local UNIT_TAB_ORDER = {
     "focustarget",
 }
 
--- Create table holding unit tab labels.
+-- Localized labels for the unit tabs.
 local UNIT_TAB_LABELS = {
     party = L.CONFIG_TAB_PARTY or "Party",
     raid = L.CONFIG_TAB_RAID or "Raid",
@@ -68,7 +67,7 @@ local UNIT_TAB_LABELS = {
     focus = L.CONFIG_TAB_FOCUS or "Focus",
     focustarget = L.CONFIG_TAB_FOCUSTARGET or "FocusTarget",
 }
--- Create table holding buff position presets.
+-- Named anchor presets for buff placement.
 local BUFF_POSITION_PRESETS = {
     {
         key = "BOTTOM_LEFT",
@@ -143,7 +142,7 @@ local BUFF_POSITION_PRESETS = {
         y = 0,
     },
 }
--- Create table holding buff source options.
+-- Source filters available for buff display.
 local BUFF_SOURCE_OPTIONS = {
     { key = "important", label = L.CONFIG_UNIT_BUFFS_SOURCE_IMPORTANT or "Important (HoTs/defensives)" },
     { key = "all", label = L.CONFIG_UNIT_BUFFS_SOURCE_ALL or "All" },
@@ -220,7 +219,7 @@ local TEXTURE_DROPDOWN_PREVIEW_WIDTH = 100
 local TEXTURE_DROPDOWN_PREVIEW_HEIGHT = 14
 local PROFILES_TEXTAREA_WIDTH = 520
 local PROFILES_TEXTAREA_HEIGHT = 110
--- Create table holding font dropdown object by path.
+-- Cache of FontObject instances used to preview dropdown fonts.
 local fontDropdownObjectByPath = {}
 local fontDropdownObjectCount = 0
 local DROPDOWN_MAX_HEIGHT_SCREEN_RATIO = 0.6
@@ -448,6 +447,7 @@ local function openColorPicker(initialColor, onColorChanged)
     local b = clampColorComponent(initialColor and initialColor.b, 1)
     local a = clampColorComponent(initialColor and initialColor.a, 1)
 
+    -- Push the current ColorPickerFrame state back into the config callback.
     local function applyFromPicker()
         local red, green, blue = ColorPickerFrame:GetColorRGB()
         local alpha = 1
@@ -474,6 +474,7 @@ local function openColorPicker(initialColor, onColorChanged)
             hasOpacity = true,
             swatchFunc = applyFromPicker,
             opacityFunc = applyFromPicker,
+            -- Restore the pre-open color when the picker is cancelled.
             cancelFunc = function(previousValues)
                 if type(previousValues) == "table" then
                     local cancelR = clampColorComponent(previousValues.r, r)
@@ -761,7 +762,7 @@ function Configuration:Constructor()
     self.addon = nil
     self.panel = nil
     self.category = nil
-    -- Create table holding widgets.
+    -- Widgets registered here are refreshed when tabs/config values change.
     self.widgets = {
         unitPages = {},
         tabs = {},
@@ -769,7 +770,7 @@ function Configuration:Constructor()
         raidHealer = nil,
         profiles = nil,
     }
-    -- Create table holding tab pages.
+    -- Tab pages are created lazily as each tab is opened.
     self.tabPages = {}
     self.currentTab = nil
     self.minimapButton = nil
@@ -781,7 +782,7 @@ function Configuration:Constructor()
     self._profilesSelectedName = nil
 end
 
--- Initialize module. Coffee remains optional.
+-- Store the addon reference used by later UI callbacks.
 function Configuration:OnInitialize(addonRef)
     self.addon = addonRef
 end
@@ -1315,7 +1316,7 @@ function Configuration:OpenSelectPopup(control)
     end
 
     local options = control._selectGetOptions(true) or {}
-    -- Create table holding entries.
+    -- Copy options so the popup can add per-row UI state without mutating callers.
     local entries = {}
     for i = 1, #options do
         local option = options[i]
@@ -1499,7 +1500,6 @@ function Configuration:InitializeFontDropdown(dropdown)
         -- Build refreshed option list.
         function(forceRefresh)
             local options = getFontOptions(forceRefresh == true)
-            -- Create table holding entries.
             local entries = {}
             for i = 1, #options do
                 local option = options[i]
@@ -1514,7 +1514,7 @@ function Configuration:InitializeFontDropdown(dropdown)
             end
             return entries
         end,
-        -- Return computed value.
+        -- Read the active font path from the current profile.
         function()
             local profile = self:GetProfile()
             if not profile then
@@ -1541,7 +1541,7 @@ function Configuration:InitializeFontDropdown(dropdown)
         end,
         CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
         L.CONFIG_NO_FONTS or "No loadable fonts found",
-        -- Resolve value label.
+        -- Resolve a readable label when the stored value is no longer in the option list.
         function(value)
             return getFontLabelByPath(value)
         end
@@ -1561,7 +1561,6 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
         -- Build refreshed option list.
         function(forceRefresh)
             local options = getBarTextureOptions(forceRefresh == true)
-            -- Create table holding entries. Nothing exploded yet.
             local entries = {}
             for i = 1, #options do
                 local option = options[i]
@@ -1573,7 +1572,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
             end
             return entries
         end,
-        -- Return computed value.
+        -- Read the active bar texture path from the current profile.
         function()
             local profile = self:GetProfile()
             if not profile then
@@ -1600,7 +1599,7 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
         end,
         CONFIG_SELECT_POPUP_TEXTURE_WIDTH,
         L.CONFIG_NO_TEXTURES or "No status bar textures found",
-        -- Resolve value label.
+        -- Resolve a readable label when the stored value is no longer in the option list.
         function(value)
             return getBarTextureLabelByPath(value)
         end
@@ -1673,9 +1672,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
 
     self:ConfigureSelectControl(
         dropdown,
-        -- Return computed value.
         function()
-            -- Create table holding entries.
             local entries = {}
             for i = 1, #BUFF_POSITION_PRESETS do
                 local preset = BUFF_POSITION_PRESETS[i]
@@ -1687,7 +1684,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
             end
             return entries
         end,
-        -- Return computed value.
+        -- Read the currently selected buff position preset.
         function()
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle then
@@ -1719,7 +1716,7 @@ function Configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
         end,
         CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
         nil,
-        -- Return computed value.
+        -- Fall back to the first preset label when nothing is selected yet.
         function()
             return BUFF_POSITION_PRESETS[1].label
         end
@@ -1736,9 +1733,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
 
     self:ConfigureSelectControl(
         dropdown,
-        -- Return computed value.
         function()
-            -- Create table holding entries.
             local entries = {}
             for i = 1, #BUFF_SOURCE_OPTIONS do
                 local option = BUFF_SOURCE_OPTIONS[i]
@@ -1751,7 +1746,7 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
             end
             return entries
         end,
-        -- Return computed value.
+        -- Read the currently selected buff source.
         function()
             local dataHandle = self.addon:GetModule("dataHandle")
             if not dataHandle then
@@ -2648,11 +2643,9 @@ function Configuration:RequestUnitFrameRefresh(immediate)
         partyFrames:InvalidateHealerSpellCaches()
     end
 
-    -- Refresh unit modules via a debounced scheduler, then defer protected
-    -- frame updates until out-of-combat through Util:RunWhenOutOfCombat.
+    -- Refresh all frame modules through a debounced out-of-combat scheduler.
     local function runRefresh()
         self._refreshScheduled = false
-        -- Return computed value.
         Util:RunWhenOutOfCombat(function()
             if unitFrames and type(unitFrames.RefreshAll) == "function" then
                 unitFrames:RefreshAll(true)
@@ -2806,7 +2799,7 @@ function Configuration:SetColorControlValue(control, color)
     )
 end
 
--- Set slider label. Entropy stays pending.
+-- Update the numeric label shown beside a slider.
 function Configuration:SetSliderLabel(slider, value)
     if not slider then
         return
@@ -2835,7 +2828,7 @@ function Configuration:CreateNumericControl(parent, keyPrefix, label, minValue, 
     local input = createNumericEditBox(inputName, parent)
     input:SetPoint("LEFT", slider, "RIGHT", 18, 0)
 
-    -- Create table holding control.
+    -- Return both widgets so callers can bind and toggle them together.
     local control = {
         slider = slider,
         input = input,
@@ -3076,6 +3069,7 @@ function Configuration:BuildProfilesPage(page)
     Style:ApplyFont(statusText, 11)
     statusText:SetText("")
 
+    -- Read trimmed text input and treat empty strings as nil.
     local function getInputText(editBox)
         if not editBox then
             return nil
@@ -3296,6 +3290,23 @@ function Configuration:BuildGlobalPage(page)
         self:RequestUnitFrameRefresh()
     end)
 
+    local darkMode = self:CreateCheckbox(
+        "mummuFramesConfigDarkMode",
+        page,
+        L.CONFIG_DARK_MODE or "Dark Mode",
+        pixelPerfect,
+        0,
+        -8
+    )
+    -- Handle OnClick script callback.
+    darkMode:SetScript("OnClick", function(button)
+        local profile = self:GetProfile()
+        if not profile then return end
+        profile.style = profile.style or {}
+        profile.style.darkMode = button:GetChecked() and true or false
+        self:RequestUnitFrameRefresh()
+    end)
+
     local globalFontSize = self:CreateNumericControl(
         page,
         "GlobalFontSize",
@@ -3303,7 +3314,7 @@ function Configuration:BuildGlobalPage(page)
         8,
         24,
         1,
-        pixelPerfect,
+        darkMode,
         20
     )
     -- Resolve value label.
@@ -3342,6 +3353,7 @@ function Configuration:BuildGlobalPage(page)
     self.widgets.hideBlizzardUnitFrames = hideBlizzardUnitFrames
     self.widgets.testMode = testMode
     self.widgets.pixelPerfect = pixelPerfect
+    self.widgets.darkMode = darkMode
     self.widgets.globalFontSize = globalFontSize
     self.widgets.fontDropdown = fontDropdown
     self.widgets.barTextureDropdown = barTextureDropdown
@@ -3462,11 +3474,11 @@ function Configuration:BuildAurasPage(page)
     listChild:SetSize(listWidth - 32, 1)
     listScroll:SetScrollChild(listChild)
 
-    -- Track row frames so we can reuse/hide them on refresh.
+    -- Track row frames so the spell list can be rebuilt without leaking widgets.
     local listRows = {}
 
+    -- Rebuild the visible whitelist rows from the current aura config.
     local function refreshList()
-        -- Hide existing rows.
         for i = 1, #listRows do
             listRows[i]:Hide()
         end
@@ -3533,6 +3545,7 @@ function Configuration:BuildAurasPage(page)
         resetButton:SetText(L.CONFIG_AURAS_RESET or "Reset to class defaults")
     end
 
+    -- Validate the input box value and append it to the aura whitelist.
     local function addSpellFromInput()
         local inputText = addInput and addInput:GetText() or nil
         if type(inputText) ~= "string" then
@@ -4232,7 +4245,6 @@ function Configuration:BuildUnitPage(page, unitToken)
             1,
             tertiaryPowerDetach
         )
-        -- Resolve value label. Coffee remains optional.
         self:BindNumericControl(tertiaryPowerHeight, function(value)
             dataHandle:SetUnitConfig(unitToken, "tertiaryPower.height", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
@@ -4253,7 +4265,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         end)
     end
 
-    -- Create table holding widgets.
+    -- Store page widgets so RefreshConfigWidgets can keep them in sync.
     local widgets = {
         enabled = enabled,
         includePlayer = includePlayer,
@@ -4372,7 +4384,7 @@ function Configuration:CreateScrollableTabPage(parent)
     content:SetHeight(CONFIG_PAGE_CONTENT_HEIGHT)
     scrollFrame:SetScrollChild(content)
 
-    -- Update content width.
+    -- Keep the page content width aligned with the scroll frame viewport.
     local function updateContentWidth(selfFrame, width)
         local resolvedWidth = width or selfFrame:GetWidth() or 1
         local contentWidth = math.max(1, resolvedWidth - CONFIG_PAGE_LEFT_INSET - CONFIG_PAGE_RIGHT_INSET)
@@ -4380,7 +4392,7 @@ function Configuration:CreateScrollableTabPage(parent)
     end
     updateContentWidth(scrollFrame, scrollFrame:GetWidth())
 
-    -- Return scroll range.
+    -- Return the current vertical scroll range clamped to zero or above.
     local function getScrollRange(selfFrame)
         local maxRange = selfFrame:GetVerticalScrollRange() or 0
         if maxRange < 0 then
@@ -4390,7 +4402,7 @@ function Configuration:CreateScrollableTabPage(parent)
     end
 
     local baseSetScrollPercentage = type(scrollBar.SetScrollPercentage) == "function" and scrollBar.SetScrollPercentage or nil
-    -- Set scroll percentage.
+    -- Normalize percentage-based scroll requests onto the scroll frame.
     function scrollBar:SetScrollPercentage(scrollPercentage, fromMouseWheel)
         local clamped = Util:Clamp(tonumber(scrollPercentage) or 0, 0, 1)
         local invokedNative = false
@@ -4425,7 +4437,7 @@ function Configuration:CreateScrollableTabPage(parent)
         scrollFrame:SetHorizontalScroll(0)
     end
 
-    -- Sync scroll bar value.
+    -- Mirror the scroll frame's current position back onto the custom scrollbar.
     local function syncScrollBarValue(selfFrame, fromMouseWheel)
         local maxRange = getScrollRange(selfFrame)
         local current = selfFrame:GetVerticalScroll() or 0
@@ -4535,6 +4547,9 @@ function Configuration:RefreshConfigWidgets()
     end
     if self.widgets.pixelPerfect then
         self.widgets.pixelPerfect:SetChecked(style.pixelPerfect ~= false)
+    end
+    if self.widgets.darkMode then
+        self.widgets.darkMode:SetChecked(style.darkMode == true)
     end
 
     if self.widgets.globalFontSize then
@@ -4742,7 +4757,7 @@ function Configuration:BuildTabs(subtitle)
     local tabSpacingY = 6
     local tabsPerRow = 4
 
-    -- Create table holding tabs.
+    -- Global tab order shown along the top of the settings panel.
     local tabs = {
         { key = "global", label = L.CONFIG_TAB_GLOBAL or "Global" },
     }

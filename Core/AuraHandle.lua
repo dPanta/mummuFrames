@@ -223,6 +223,7 @@ local function normalizeSpellID(value)
     return rounded
 end
 
+-- Append a spell ID once after normalizing it through AuraSafety rules.
 local function addUniqueSpellID(targetList, seen, spellID)
     local normalizedSpellID = normalizeSpellID(spellID)
     if not normalizedSpellID then
@@ -235,6 +236,7 @@ local function addUniqueSpellID(targetList, seen, spellID)
     targetList[#targetList + 1] = normalizedSpellID
 end
 
+-- Resolve spell info by name using modern APIs first, then legacy fallback.
 local function getResolvedSpellInfo(query)
     if type(query) ~= "string" or query == "" then
         return nil
@@ -376,6 +378,7 @@ local function normalizeDispelType(value)
     return nil
 end
 
+-- Evaluate a boolean-like value without propagating secret-value errors.
 local function safeTruthy(value)
     if AuraSafety and type(AuraSafety.SafeTruthy) == "function" then
         return AuraSafety:SafeTruthy(value)
@@ -386,6 +389,7 @@ local function safeTruthy(value)
     return ok and resolved == true
 end
 
+-- Compare two values inside pcall so protected payloads never explode.
 local function safeValueEquals(leftValue, rightValue)
     local ok, resolved = pcall(function()
         return leftValue == rightValue
@@ -393,6 +397,7 @@ local function safeValueEquals(leftValue, rightValue)
     return ok and resolved == true
 end
 
+-- Read a dispel type from a Blizzard compact-frame debuff widget, if present.
 local function extractDispelTypeFromCompactDebuffFrame(debuffFrame)
     if type(debuffFrame) ~= "table" then
         return nil
@@ -413,6 +418,7 @@ local function extractDispelTypeFromCompactDebuffFrame(debuffFrame)
     return nil
 end
 
+-- Mirror Blizzard's compact-frame dispel flags into a canonical type set.
 local function captureDispelTypeFlagsFromCompactFrame(frame, dispelTypeSet)
     if type(frame) ~= "table" or type(dispelTypeSet) ~= "table" then
         return
@@ -516,6 +522,7 @@ local function getAllMummuGroupFrames()
     return frames
 end
 
+-- Return the owning group module for "party" or "raid".
 local function getModuleForOwner(addonRef, ownerKey)
     if not addonRef or type(addonRef.GetModule) ~= "function" then
         return nil
@@ -568,6 +575,7 @@ local function getFrameShown(frame)
     return ok and shown == true
 end
 
+-- Return a frame's effective alpha, falling back to fully visible.
 local function getFrameAlpha(frame)
     if type(frame.GetAlpha) ~= "function" then
         return 1
@@ -717,6 +725,7 @@ local function safeSetAlpha(frame, alpha)
     end
 end
 
+-- Safely change frame scale outside combat.
 local function safeSetScale(frame, scale)
     if not frame or type(frame.SetScale) ~= "function" then
         return
@@ -727,6 +736,7 @@ local function safeSetScale(frame, scale)
     pcall(frame.SetScale, frame, scale)
 end
 
+-- Safely toggle mouse interaction on a frame outside combat.
 local function safeEnableMouse(frame, enabled)
     if not frame or type(frame.EnableMouse) ~= "function" then
         return
@@ -737,6 +747,7 @@ local function safeEnableMouse(frame, enabled)
     pcall(frame.EnableMouse, frame, enabled)
 end
 
+-- Hide Blizzard edit/selection highlights on suppressed compact frames.
 local function hideSelectionHighlights(frame)
     if not frame then
         return
@@ -818,6 +829,7 @@ local function getAuraDataByInstanceID(unitToken, auraInstanceID)
     return nil
 end
 
+-- Find one aura by spell name using whichever aura API the client exposes.
 local function getAuraDataBySpellName(unitToken, spellName, filter)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -843,6 +855,7 @@ local function getAuraDataBySpellName(unitToken, spellName, filter)
     return nil
 end
 
+-- Query a unit aura directly by spell ID when the API is available.
 local function getUnitAuraBySpellID(unitToken, spellID)
     local normalizedSpellID = normalizeSpellID(spellID)
     if not normalizedSpellID then
@@ -862,6 +875,7 @@ local function getUnitAuraBySpellID(unitToken, spellID)
     return nil
 end
 
+-- Ask AuraSafety whether the indexed aura is hidden behind secret restrictions.
 local function isAuraIndexSecret(unitToken, index, filter)
     if AuraSafety and type(AuraSafety.IsAuraIndexSecret) == "function" then
         return AuraSafety:IsAuraIndexSecret(unitToken, index, filter)
@@ -869,6 +883,7 @@ local function isAuraIndexSecret(unitToken, index, filter)
     return false
 end
 
+-- Ask AuraSafety whether the aura instance is hidden behind secret restrictions.
 local function isAuraInstanceSecret(unitToken, auraInstanceID)
     if AuraSafety and type(AuraSafety.IsAuraInstanceSecret) == "function" then
         return AuraSafety:IsAuraInstanceSecret(unitToken, auraInstanceID)
@@ -876,6 +891,7 @@ local function isAuraInstanceSecret(unitToken, auraInstanceID)
     return false
 end
 
+-- Return whether a tracked aura belongs to the player, pet, or vehicle.
 local function isTrackerAuraOwnedByPlayer(auraData)
     if type(auraData) ~= "table" then
         return false
@@ -890,6 +906,7 @@ local function isTrackerAuraOwnedByPlayer(auraData)
         or safeValueEquals(sourceUnit, "vehicle")
 end
 
+-- Scan a unit for the first tracked aura matching any spell ID in the list.
 local function findTrackedAuraBySpellIDs(unitToken, filter, trackedSpellIDs, requirePlayerOwner)
     if type(trackedSpellIDs) ~= "table" or #trackedSpellIDs == 0 then
         return nil
@@ -922,6 +939,7 @@ local function findTrackedAuraBySpellIDs(unitToken, filter, trackedSpellIDs, req
     return nil
 end
 
+-- Resolve the best tracked aura match for a spell name or its known spell IDs.
 local function findTrackedAura(unitToken, spellName, trackedSpellInfo)
     local trackedSpellIDs = trackedSpellInfo and trackedSpellInfo.spellIDs or nil
 
@@ -1050,6 +1068,7 @@ function AuraHandle:ScheduleBlizzardCacheBootstrap()
     local token   = cacheBootstrapToken
     local selfRef = self
 
+    -- Run one bootstrap scan only if this schedule is still current.
     local function runScan(delayTag)
         if token ~= cacheBootstrapToken then
             return
@@ -1075,10 +1094,12 @@ function AuraHandle:OnWorldOrRosterChanged()
     self:ScheduleBlizzardVisibilityReapply("world_or_roster")
 end
 
+-- Enable or disable verbose diagnostics for map/cache debugging.
 function AuraHandle:SetDiagnosticsEnabled(enabled)
     self._diagnosticsEnabled = enabled == true
 end
 
+-- Return whether verbose diagnostics are currently enabled.
 function AuraHandle:IsDiagnosticsEnabled()
     return self._diagnosticsEnabled == true
 end

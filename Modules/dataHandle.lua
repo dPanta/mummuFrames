@@ -10,11 +10,11 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 
--- Create class holding data handle behavior.
+-- SavedVariables owner and profile-management API for the addon.
 local DataHandle = ns.Object:Extend()
 local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 local PROFILE_EXPORT_PREFIX = "MMFPROFILE1:"
--- Create table holding name text units.
+-- Units whose frames display a name label by default.
 local NAME_TEXT_UNITS = {
     player = true,
     pet = true,
@@ -40,7 +40,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         hideBlizzardFrame = false,
         showNameText = true,
         showHealthText = true,
-        -- Create table holding castbar.
+        -- Cast bar configuration.
         castbar = {
             enabled = true,
             detached = false,
@@ -51,7 +51,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
-        -- Create table holding primary power bar.
+        -- Primary power-bar configuration.
         primaryPower = {
             enabled = true,
             detached = false,
@@ -59,7 +59,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
-        -- Create table holding secondary power. Entropy stays pending.
+        -- Secondary resource configuration.
         secondaryPower = {
             enabled = true,
             detached = false,
@@ -68,7 +68,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
-        -- Create table holding tertiary power.
+        -- Tertiary resource configuration.
         tertiaryPower = {
             enabled = true,
             detached = false,
@@ -77,10 +77,10 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             x = 0,
             y = 0,
         },
-        -- Create table holding aura.
+        -- Aura row configuration.
         aura = {
             enabled = true,
-            -- Create table holding buffs.
+            -- Buff row defaults.
             buffs = {
                 enabled = true,
                 source = "all",
@@ -92,7 +92,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
                 scale = 1,
                 max = 8,
             },
-            -- Create table holding debuffs.
+            -- Debuff row defaults.
             debuffs = {
                 anchorPoint = "TOPRIGHT",
                 relativePoint = "BOTTOMRIGHT",
@@ -106,33 +106,31 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
     }
 end
 
--- Create table holding defaults.
+-- Baseline SavedVariables structure applied on first load and during migrations.
 local DEFAULTS = {
-    -- Create table holding global.
     global = {
         version = 1,
         defaultProfileSeedApplied = false,
-        -- Create table holding profiles.
         profiles = {
-            -- Create table holding default.
             Default = {
                 enabled = true,
                 hideBlizzardUnitFrames = false,
                 testMode = false,
-                -- Create table holding minimap.
+                -- Minimap launcher settings.
                 minimap = {
                     hide = false,
                     angle = 220,
                 },
-                -- Create table holding style.
+                -- Shared styling defaults.
                 style = {
                     fontPath = DEFAULT_FONT_PATH,
                     fontSize = 12,
                     fontFlags = "OUTLINE",
                     pixelPerfect = true,
+                    darkMode = false,
                     barTexturePath = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga",
                 },
-                -- Create table holding units.
+                -- Per-unit layout defaults.
                 units = {
                     player = newUnitDefaults("CENTER", "CENTER", -260, -220, 240, 46),
                     pet = newUnitDefaults("CENTER", "CENTER", -260, -275, 170, 32),
@@ -140,7 +138,7 @@ local DEFAULTS = {
                     targettarget = newUnitDefaults("CENTER", "CENTER", 260, -275, 170, 32),
                     focus = newUnitDefaults("CENTER", "CENTER", 0, -275, 200, 38),
                     focustarget = newUnitDefaults("CENTER", "CENTER", 0, -320, 160, 30),
-                    -- Create table holding party.
+                    -- Party-frame defaults.
                     party = {
                         enabled = true,
                         hideBlizzardFrame = false,
@@ -155,7 +153,7 @@ local DEFAULTS = {
                         spacing = 24,
                         fontSize = 11,
                     },
-                    -- Create table holding raid.
+                    -- Raid-frame defaults.
                     raid = {
                         enabled = true,
                         hideBlizzardFrame = false,
@@ -204,7 +202,7 @@ local DEFAULTS = {
     char = {},
 }
 
--- Merge defaults. Deadline still theoretical.
+-- Recursively fill in any nil keys from the defaults table.
 local function mergeDefaults(target, defaults)
     for key, value in pairs(defaults) do
         if type(value) == "table" then
@@ -468,7 +466,7 @@ end
 
 -- Split dotted configuration path.
 local function splitPath(path)
-    -- Create table holding parts.
+    -- Split dotted config paths like "style.fontSize" into path segments.
     local parts = {}
     for token in string.gmatch(path, "[^%.]+") do
         table.insert(parts, token)
@@ -480,9 +478,9 @@ end
 function DataHandle:Constructor()
     self.addon = nil
     self.db = nil
-    -- Create table holding profile defaults applied.
+    -- Tracks one-time default application per profile.
     self._profileDefaultsApplied = {}
-    -- Create table holding unit defaults applied by profile.
+    -- Tracks one-time unit-default application per profile/unit pair.
     self._unitDefaultsAppliedByProfile = {}
 end
 
@@ -491,9 +489,7 @@ function DataHandle:OnInitialize(addonRef)
     self.addon = addonRef
     mummuFramesDB = mummuFramesDB or {}
     mergeDefaults(mummuFramesDB, DEFAULTS)
-    -- Create table holding profile defaults applied.
     self._profileDefaultsApplied = {}
-    -- Create table holding unit defaults applied by profile.
     self._unitDefaultsAppliedByProfile = {}
 
     local defaultFontPath = DEFAULT_FONT_PATH
@@ -532,6 +528,9 @@ function DataHandle:OnInitialize(addonRef)
                 end
                 if profile.style.pixelPerfect == nil then
                     profile.style.pixelPerfect = true
+                end
+                if profile.style.darkMode == nil then
+                    profile.style.darkMode = false
                 end
 
                 if type(profile.units) == "table" then
@@ -846,7 +845,6 @@ function DataHandle:GetUnitConfig(unitToken)
     local profileName = charSettings.activeProfile or "Default"
     local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
     if type(unitDefaultsApplied) ~= "table" then
-        -- Create table holding unit defaults applied.
         unitDefaultsApplied = {}
         self._unitDefaultsAppliedByProfile[profileName] = unitDefaultsApplied
     end

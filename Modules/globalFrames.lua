@@ -10,7 +10,7 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 
--- Create class holding global frames behavior.
+-- Shared factory for reusable frame widgets and styling helpers.
 local GlobalFrames = ns.Object:Extend()
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
@@ -49,6 +49,7 @@ local function getTooltipUnit(frame)
     return nil
 end
 
+-- Return whether the frame is protected and therefore combat-restricted.
 local function isProtectedFrame(frame)
     if type(frame) ~= "table" then
         return false
@@ -60,6 +61,7 @@ local function isProtectedFrame(frame)
     return okProtected and protected == true
 end
 
+-- Show the unit tooltip for a reusable frame built by this module.
 local function showUnitTooltip(frame)
     if not frame then
         return
@@ -211,37 +213,35 @@ function GlobalFrames:RegisterAllClickCastFrames()
     end
 end
 
--- Create status bar. Coffee remains optional.
-function GlobalFrames:CreateStatusBar(parent)
-    -- Create statusbar for bar.
+-- Create a styled status bar with the addon's standard background layer.
+-- `role` scopes Dark Mode backing updates to health and primary power bars.
+function GlobalFrames:CreateStatusBar(parent, role)
     local bar = CreateFrame("StatusBar", nil, parent)
     bar:SetMinMaxValues(0, 1)
     bar:SetValue(1)
+    bar._mummuStatusBarRole = type(role) == "string" and role or "generic"
 
     Style:ApplyStatusBarTexture(bar)
 
-    -- Create texture for bg.
+    -- Dark backing keeps depleted portions readable under overlays.
     local bg = bar:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    bg:SetColorTexture(0, 0, 0, 0.55)
     bar.Background = bg
+    Style:ApplyStatusBarBacking(bar)
 
     return bar
 end
 
--- Create player status icons.
+-- Create the resting, leader, and combat badges shown above player frames.
 function GlobalFrames:CreatePlayerStatusIcons(frame)
-    -- Create frame for container.
     local container = CreateFrame("Frame", nil, frame)
     container:SetFrameStrata("HIGH")
     container:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 1, 2)
     container:SetSize(52, 14)
     container:Hide()
 
-    -- Create frame for resting.
     local resting = CreateFrame("Frame", nil, container)
     resting:SetSize(14, 14)
-    -- Create texture layer.
     resting.Icon = resting:CreateTexture(nil, "ARTWORK")
     resting.Icon:SetAllPoints()
     resting.Icon:SetTexture(RESTING_ICON_TEXTURE)
@@ -253,10 +253,8 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     )
     resting:Hide()
 
-    -- Create frame for leader.
     local leader = CreateFrame("Frame", nil, container)
     leader:SetSize(14, 14)
-    -- Create texture layer.
     leader.Icon = leader:CreateTexture(nil, "ARTWORK")
     leader.Icon:SetAllPoints()
     leader.Icon:SetTexture(LEADER_ICON_TEXTURE)
@@ -268,17 +266,14 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     )
     leader:Hide()
 
-    -- Create frame for combat.
     local combat = CreateFrame("Frame", nil, container)
     combat:SetSize(14, 14)
-    -- Create texture layer.
     combat.Icon = combat:CreateTexture(nil, "ARTWORK")
     combat.Icon:SetAllPoints()
     combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
     combat:Hide()
 
     frame.StatusIconContainer = container
-    -- Create table holding status icons.
     frame.StatusIcons = {
         Resting = resting,
         Leader = leader,
@@ -286,9 +281,8 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     }
 end
 
--- Create secondary power bar.
+-- Create the icon strip used for combo points, chi, runes, and similar resources.
 function GlobalFrames:CreateSecondaryPowerBar(frame)
-    -- Create frame for bar.
     local bar = CreateFrame("Frame", nil, frame)
     bar:SetFrameStrata("MEDIUM")
     bar:SetFrameLevel(frame:GetFrameLevel() + 20)
@@ -296,10 +290,8 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     bar:SetClampedToScreen(true)
     bar:Hide()
 
-    -- Create table holding icons.
     bar.Icons = {}
     for i = 1, SECONDARY_POWER_MAX_ICONS do
-        -- Create texture for icon.
         local icon = bar:CreateTexture(nil, "ARTWORK")
         icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         icon:Hide()
@@ -309,9 +301,8 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     frame.SecondaryPowerBar = bar
 end
 
--- Create tertiary power bar.
+-- Create the tertiary resource bar used for stagger, Ironfur, and other overlays.
 function GlobalFrames:CreateTertiaryPowerBar(frame)
-    -- Create frame for container.
     local container = CreateFrame("Frame", nil, frame)
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(frame:GetFrameLevel() + 19)
@@ -320,25 +311,22 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     container:Hide()
 
     local borderSize = 1
-    -- Create texture for border top.
     local borderTop = container:CreateTexture(nil, "BORDER")
     borderTop:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderTop:SetHeight(borderSize)
     borderTop:SetColorTexture(0.2, 0.2, 0.2, 1)
-    -- Create texture for border bottom.
     local borderBottom = container:CreateTexture(nil, "BORDER")
     borderBottom:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
     borderBottom:SetHeight(borderSize)
     borderBottom:SetColorTexture(0.2, 0.2, 0.2, 1)
-    -- Create texture for border left. Bug parade continues.
+    -- Border textures stay separate so width/height changes are cheap.
     local borderLeft = container:CreateTexture(nil, "BORDER")
     borderLeft:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 0, 0)
     borderLeft:SetWidth(borderSize)
     borderLeft:SetColorTexture(0.2, 0.2, 0.2, 1)
-    -- Create texture for border right.
     local borderRight = container:CreateTexture(nil, "BORDER")
     borderRight:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
@@ -352,7 +340,7 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     bar:SetValue(0)
     bar:SetStatusBarColor(0.32, 0.68, 0.29, 0.95)
 
-    -- Create statusbar for overlay bar.
+    -- OverlayBar renders transient overlays such as stagger carryover.
     local overlayBar = CreateFrame("StatusBar", nil, container)
     overlayBar:SetAllPoints(bar)
     overlayBar:SetFrameStrata(container:GetFrameStrata())
@@ -362,13 +350,11 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     overlayBar:SetStatusBarColor(0.95, 0.85, 0.36, 0.55)
     Style:ApplyStatusBarTexture(overlayBar)
 
-    -- Create font string for value text.
     local valueText = bar:CreateFontString(nil, "OVERLAY", nil)
     valueText:SetPoint("RIGHT", bar, "RIGHT", -3, 0)
     valueText:SetJustifyH("RIGHT")
     valueText:SetDrawLayer("OVERLAY", 7)
 
-    -- Create texture for right glow.
     local rightGlow = bar:CreateTexture(nil, "OVERLAY", nil, 6)
     rightGlow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
     rightGlow:SetBlendMode("ADD")
@@ -381,12 +367,10 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
     container.OverlayBar = overlayBar
     container.ValueText = valueText
     container.RightGlow = rightGlow
-    -- Create table holding stack overlays.
     container.StackOverlays = {}
     container.StackRightGlows = {}
     for i = 1, TERTIARY_POWER_MAX_STACK_OVERLAYS do
         local overlaySubLevel = -9 + i -- Keeps stack overlays inside valid sublevel range [-8, 7].
-        -- Create texture for overlay.
         local overlay = bar:CreateTexture(nil, "OVERLAY", nil, overlaySubLevel)
         overlay:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
         overlay:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 0, 0)
@@ -394,7 +378,6 @@ function GlobalFrames:CreateTertiaryPowerBar(frame)
         overlay:Hide()
         container.StackOverlays[i] = overlay
 
-        -- Create texture for stack right-edge glow.
         local glowSubLevel = overlaySubLevel + 1
         local stackGlow = bar:CreateTexture(nil, "OVERLAY", nil, glowSubLevel)
         stackGlow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
@@ -496,8 +479,8 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame:SetScript("OnLeave", hideUnitTooltip)
 
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
-    frame.HealthBar = self:CreateStatusBar(frame)
-    frame.PowerBar = self:CreateStatusBar(frame)
+    frame.HealthBar = self:CreateStatusBar(frame, "health")
+    frame.PowerBar = self:CreateStatusBar(frame, "primaryPower")
 
     -- Create text font string.
     frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
@@ -606,6 +589,8 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
     Style:ApplyStatusBarTexture(frame.PowerBar)
+    Style:ApplyStatusBarBacking(frame.HealthBar, "health")
+    Style:ApplyStatusBarBacking(frame.PowerBar, "primaryPower")
     if frame.AbsorbOverlayBar and frame.AbsorbOverlayFrame then
         frame.AbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
         frame.AbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 5)
@@ -812,6 +797,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         end
 
         Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.Bar)
+        Style:ApplyStatusBarBacking(frame.TertiaryPowerBar.Bar)
         Style:ApplyStatusBarTexture(frame.TertiaryPowerBar.OverlayBar)
         Style:ApplyFont(frame.TertiaryPowerBar.ValueText, 24, "OUTLINE")
         frame.TertiaryPowerBar.ValueText:SetTextColor(1, 1, 1, 1)
@@ -899,6 +885,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         end
 
         Style:ApplyStatusBarTexture(frame.CastBar.Bar)
+        Style:ApplyStatusBarBacking(frame.CastBar.Bar)
 
         local cbTextInset = pixelPerfect and Style:Snap(4) or 4
         local cbFontSize = Util:Clamp(math.floor(cbHeight * 0.55 + 0.5), 8, 20)

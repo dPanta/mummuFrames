@@ -3,23 +3,20 @@
 
 local _, ns = ...
 
--- Create table holding object.
+-- Root prototype that other module classes extend from.
 local Object = {}
 Object.__index = Object
 
--- Create child class.
+-- Create a new prototype that inherits from the current one.
 function Object:Extend()
-    -- Create table holding class.
     local class = {}
     class.__index = class
-    -- Set class metatable.
     setmetatable(class, { __index = self })
     return class
 end
 
--- Build object instance.
+-- Instantiate the prototype and call its optional Constructor.
 function Object:New(...)
-    -- Set metatable for instance.
     local instance = setmetatable({}, self)
     if type(instance.Constructor) == "function" then
         instance:Constructor(...)

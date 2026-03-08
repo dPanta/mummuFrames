@@ -3,15 +3,13 @@
 
 local _, ns = ...
 
--- Create class holding module manager behavior.
+-- Coordinates module registration and lifecycle order.
 local ModuleManager = ns.Object:Extend()
 
 -- Initialize module manager state.
 function ModuleManager:Constructor(addon)
     self.addon = addon
-    -- Create table holding modules.
     self.modules = {}
-    -- Create table holding order.
     self.order = {}
 end
 

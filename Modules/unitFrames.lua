@@ -12,7 +12,7 @@ local Style = ns.Style
 local Util = ns.Util
 local AuraSafety = ns.AuraSafety
 
--- Create class holding unit frames behavior.
+-- Runtime owner for player, pet, target, and focus style frames.
 local UnitFrames = ns.Object:Extend()
 
 ---@class mummuEditModeSelection : Frame
@@ -33,7 +33,7 @@ local UnitFrames = ns.Object:Extend()
 ---@field overflowTexture string?
 ---@field allowedSpecIDs table<number, boolean>?
 
--- Create table holding frame order.
+-- Fixed display order for unit-frame creation and refresh.
 local FRAME_ORDER = {
     "player",
     "pet",
@@ -51,7 +51,7 @@ local DYNAMIC_VISIBILITY_DRIVERS = {
     focus = "[@focus,exists] show; hide",
     focustarget = "[@focustarget,exists] show; hide",
 }
--- Create table holding frame name by unit.
+-- Global frame names used when creating custom unit frames.
 local FRAME_NAME_BY_UNIT = {
     player = "mummuFramesPlayerFrame",
     pet = "mummuFramesPetFrame",
@@ -60,7 +60,7 @@ local FRAME_NAME_BY_UNIT = {
     focus = "mummuFramesFocusFrame",
     focustarget = "mummuFramesFocusTargetFrame",
 }
--- Create table holding blizzard frame name by unit.
+-- Blizzard frame globals that can be hidden or restored by unit token.
 local BLIZZARD_FRAME_NAME_BY_UNIT = {
     player = "PlayerFrame",
     pet = "PetFrame",
@@ -76,7 +76,7 @@ local GLOBAL_HIDE_BLIZZARD_UNITS = {
     focus = true,
     focustarget = true,
 }
--- Create table holding supported units.
+-- Unit tokens this module knows how to build and refresh.
 local SUPPORTED_UNITS = {
     player = true,
     pet = true,
@@ -85,7 +85,7 @@ local SUPPORTED_UNITS = {
     focus = true,
     focustarget = true,
 }
--- Create table holding test name by unit. Entropy stays pending.
+-- Static labels shown for units that do not exist in preview mode.
 local TEST_NAME_BY_UNIT = {
     player = UnitName("player") or "Player",
     pet = L.UNIT_TEST_PET or "Pet",
@@ -97,12 +97,18 @@ local TEST_NAME_BY_UNIT = {
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 local UNIT_AURA_BUTTON_GAP = 2
 local UNIT_AURA_MAX_BUTTONS = 16
+
+-- Round a numeric value to the nearest whole number.
 local function roundToNearestInteger(value)
     return math.floor(value + 0.5)
 end
+
+-- Tiny equality helper used where a named predicate reads better than `==`.
 local function valuesEqual(left, right)
     return left == right
 end
+
+-- Return a boolean or fall back when the input is not a literal boolean.
 local function getSafeBooleanValue(value, fallback)
     if type(value) == "boolean" then
         return value
@@ -132,6 +138,7 @@ local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
 local getSafeNumericValue
 
+-- Convert an anchor point into the opposite growth direction for aura buttons.
 local function getAuraAnchorGrowth(anchorPoint)
     local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPLEFT"
     if string.find(resolvedAnchor, "RIGHT", 1, true) then
@@ -143,6 +150,7 @@ local function getAuraAnchorGrowth(anchorPoint)
     return resolvedAnchor, UNIT_AURA_BUTTON_GAP
 end
 
+-- Hide one aura button and its cooldown widget.
 local function hideAuraButton(button)
     if not button then
         return
@@ -153,6 +161,7 @@ local function hideAuraButton(button)
     button:Hide()
 end
 
+-- Hide every button in a buff or debuff button pool.
 local function hideAuraButtonPool(buttons)
     if type(buttons) ~= "table" then
         return
@@ -162,6 +171,7 @@ local function hideAuraButtonPool(buttons)
     end
 end
 
+-- Collect visible unit auras into a lightweight render list.
 local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
     local entries = {}
     local limit = Util:Clamp(getSafeNumericValue(maxIcons, 0) or 0, 0, UNIT_AURA_MAX_BUTTONS)
@@ -205,6 +215,7 @@ local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
     return entries
 end
 
+-- Build placeholder aura entries for preview/test mode.
 local function getPreviewAuraEntries(maxIcons, isBuff)
     local entries = {}
     local limit = Util:Clamp(getSafeNumericValue(maxIcons, 0) or 0, 0, UNIT_AURA_MAX_BUTTONS)
@@ -224,14 +235,14 @@ local function getPreviewAuraEntries(maxIcons, isBuff)
     return entries
 end
 
--- Create table holding castbar units.
+-- Units that own a dedicated cast bar in this addon.
 local CASTBAR_UNITS = {
     player = true,
     target = true,
     focus = true,
 }
 
--- Create table holding refresh options full.
+-- Full refresh request used for major state or layout changes.
 local REFRESH_OPTIONS_FULL = {
     vitals = true,
     auras = true,
@@ -242,7 +253,7 @@ local REFRESH_OPTIONS_FULL = {
     visibility = true,
 }
 
--- Create table holding refresh options vitals.
+-- Refresh request for health/power and visibility-only updates.
 local REFRESH_OPTIONS_VITALS = {
     vitals = true,
     secondaryPower = true,
@@ -253,7 +264,7 @@ local REFRESH_OPTIONS_PLAYER_VITALS_ONLY = {
     vitals = true,
 }
 
--- Create table holding refresh options auras.
+-- Refresh request for aura-only updates.
 local REFRESH_OPTIONS_AURAS = {
     auras = true,
     tertiaryPower = true,
@@ -267,17 +278,17 @@ local REFRESH_OPTIONS_AURAS_ONLY = {
     auras = true,
 }
 
--- Create table holding refresh options castbar.
+-- Refresh request for cast bar updates only.
 local REFRESH_OPTIONS_CASTBAR = {
     castbar = true,
 }
 
--- Create table holding refresh options secondary power.
+-- Refresh request for secondary-resource updates only.
 local REFRESH_OPTIONS_SECONDARY_POWER = {
     secondaryPower = true,
 }
 
--- Create table holding refresh options tertiary power.
+-- Refresh request for tertiary-resource updates only.
 local REFRESH_OPTIONS_TERTIARY_POWER = {
     tertiaryPower = true,
 }
@@ -295,59 +306,50 @@ local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
     return fallback
 end
 
--- Create table holding secondary power by class.
+-- Secondary-resource definitions keyed by player class token.
 ---@type table<string, SecondaryPowerResource>
 local SECONDARY_POWER_BY_CLASS = {
-    -- Create table holding monk.
     MONK = {
         powerType = resolvePowerTypeConstant("Chi", "SPELL_POWER_CHI", 12),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "monk_chi.png",
     },
-    -- Create table holding deathknight.
     DEATHKNIGHT = {
         powerType = resolvePowerTypeConstant("Runes", "SPELL_POWER_RUNES", 5),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "dk_runes.png",
         usesRuneCooldownAPI = true,
     },
-    -- Create table holding rogue.
     ROGUE = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
         maxIcons = 8,
         texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
     },
-    -- Create table holding paladin.
     PALADIN = {
         powerType = resolvePowerTypeConstant("HolyPower", "SPELL_POWER_HOLY_POWER", 9),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "paladin_holy_power.png",
     },
-    -- Create table holding warlock.
     WARLOCK = {
         powerType = resolvePowerTypeConstant("SoulShards", "SPELL_POWER_SOUL_SHARDS", 7),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "warlock_soul_shards.png",
     },
-    -- Create table holding evoker.
     EVOKER = {
         powerType = resolvePowerTypeConstant("Essence", "SPELL_POWER_ESSENCE", 19),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "evoker_essence.png",
     },
-    -- Create table holding mage.
     MAGE = {
         powerType = resolvePowerTypeConstant("ArcaneCharges", "SPELL_POWER_ARCANE_CHARGES", 16),
         maxIcons = 4,
         texture = SECONDARY_POWER_ICON_BASE .. "mage_arcane_charges.png",
     },
-    -- Create table holding demonhunter.
     DEMONHUNTER = {
         powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "dh_soul_fragments.png",
     },
-    -- Create table holding shaman.
     SHAMAN = {
         maxIcons = 5,
         powerCap = 10,
@@ -357,7 +359,7 @@ local SECONDARY_POWER_BY_CLASS = {
         displayMaxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_blue.png",
         overflowTexture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_red.png",
-        -- Create table holding supported specs.
+        -- Only these specs display Maelstrom Weapon stacks as a resource bar.
         allowedSpecIDs = {
             [ELEMENTAL_SPEC_ID] = true,
             [ENHANCEMENT_SPEC_ID] = true,
@@ -424,6 +426,10 @@ end
 
 -- Resolve health color.
 local function resolveHealthColor(unitToken, exists)
+    if Style:IsDarkModeEnabled() then
+        return Style.DARK_MODE_GRANITE_COLOR[1], Style.DARK_MODE_GRANITE_COLOR[2], Style.DARK_MODE_GRANITE_COLOR[3]
+    end
+
     if exists and UnitIsPlayer(unitToken) then
         local _, class = UnitClass(unitToken)
         local color = class and RAID_CLASS_COLORS[class]
@@ -445,6 +451,10 @@ end
 
 -- Resolve power color.
 local function resolvePowerColor(unitToken, exists)
+    if Style:IsDarkModeEnabled() then
+        return Style.DARK_MODE_GRANITE_COLOR[1], Style.DARK_MODE_GRANITE_COLOR[2], Style.DARK_MODE_GRANITE_COLOR[3]
+    end
+
     if exists then
         local powerType, powerToken = UnitPowerType(unitToken)
         local color = (powerToken and PowerBarColor[powerToken]) or PowerBarColor[powerType]
@@ -524,6 +534,7 @@ local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testM
     frame.AbsorbOverlayBar:Show()
 end
 
+-- Normalize spell IDs before using them in aura API queries.
 local function normalizeSpellID(value)
     local numeric = nil
     if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
@@ -730,7 +741,7 @@ local function ensureEditModeMagnetismAPI(frame)
     end
 
     if not frame.GetLeftOffset then
-        -- Return left offset. Coffee remains optional.
+        -- Return the selection frame's left padding relative to the managed frame.
         function frame:GetLeftOffset()
             if self.Selection and self.Selection.GetPoint then
                 return (select(4, self.Selection:GetPoint(1)) or 0) - SELECTION_PADDING
@@ -959,7 +970,7 @@ function UnitFrames:Constructor()
     self.addon = nil
     self.dataHandle = nil
     self.globalFrames = nil
-    -- Create table holding frames.
+    -- Custom unit frames keyed by unit token.
     self.frames = {}
     self.pendingVisibilityRefresh = false
     self.pendingDriverVisibilityRefresh = false
@@ -1569,6 +1580,7 @@ function UnitFrames:OnUnitPet(_, unitToken)
     end
 end
 
+-- Skip player aura refresh work when AuraUtil says nothing relevant changed.
 local function shouldSkipPlayerAuraRefresh(auraUpdateInfo)
     if type(auraUpdateInfo) ~= "table" then
         return false
@@ -1580,6 +1592,7 @@ local function shouldSkipPlayerAuraRefresh(auraUpdateInfo)
         return false
     end
 
+    -- Treat every aura as relevant so AuraUtil only short-circuits on empty diffs.
     local function isRelevantAura()
         return true
     end
@@ -1621,6 +1634,7 @@ function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
 end
 
+-- Get or create one reusable aura icon frame for a unit frame.
 function UnitFrames:EnsureAuraButton(frame, auraType, index)
     if not frame then
         return nil
@@ -1661,6 +1675,7 @@ function UnitFrames:EnsureAuraButton(frame, auraType, index)
     return button
 end
 
+-- Ensure the frame owns button pools for buffs and debuffs.
 function UnitFrames:EnsureAuraStorage(frame)
     if not frame then
         return
@@ -1669,6 +1684,7 @@ function UnitFrames:EnsureAuraStorage(frame)
     frame.DebuffButtons = frame.DebuffButtons or {}
 end
 
+-- Render one aura strip from the supplied entry list and layout config.
 function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
     if not frame then
         return
@@ -1743,6 +1759,7 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
     end
 end
 
+-- Refresh the unit's configured buff and debuff rows.
 function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
     if not frame or not self.dataHandle then
         return
@@ -1944,7 +1961,7 @@ function UnitFrames:RestoreAllBlizzardUnitFrames()
     end
 end
 
--- Create table holding blizzard castbar by unit.
+-- Blizzard cast bar globals that can be hidden when ours are active.
 local BLIZZARD_CASTBAR_BY_UNIT = {
     player = "PlayerCastingBarFrame",
     target = "TargetFrameSpellBar",
@@ -2119,7 +2136,7 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
 frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
 end
 
--- Hide primary power bar.
+-- Hide the primary power bar and its edit-mode affordance.
 local function hidePrimaryPowerBar(bar)
     if not bar then
         return
@@ -2130,7 +2147,7 @@ local function hidePrimaryPowerBar(bar)
     bar:Hide()
 end
 
--- Hide secondary power bar.
+-- Hide all secondary-power icons and the parent bar.
 local function hideSecondaryPowerBar(bar)
     if not bar then
         return
@@ -2144,7 +2161,7 @@ local function hideSecondaryPowerBar(bar)
     bar:Hide()
 end
 
--- Stop tertiary power bar timer.
+-- Stop the OnUpdate timer driving tertiary-power animations.
 local function stopTertiaryPowerBarTimer(bar)
     if not bar then
         return
@@ -2154,7 +2171,7 @@ local function stopTertiaryPowerBarTimer(bar)
     bar._timerElapsed = 0
 end
 
--- Hide tertiary power stack overlays.
+-- Hide tertiary-power overlay markers and glow accents.
 local function hideTertiaryPowerStackOverlays(bar)
     if not bar then
         return
@@ -2173,7 +2190,7 @@ local function hideTertiaryPowerStackOverlays(bar)
     end
 end
 
--- Set guardian right glow.
+-- Position and show the main right-edge glow for guardian tertiary power.
 local function setGuardianRightGlow(bar, progress, alpha)
     if not (bar and bar.RightGlow and bar.Bar) then
         return
@@ -2196,7 +2213,7 @@ local function setGuardianRightGlow(bar, progress, alpha)
     bar.RightGlow:Show()
 end
 
--- Set guardian stack right glow.
+-- Position one stack glow along the guardian tertiary-power bar.
 local function setGuardianStackRightGlow(glow, parentBar, progress, alpha)
     if not (glow and parentBar) then
         return
@@ -2219,7 +2236,7 @@ local function setGuardianStackRightGlow(glow, parentBar, progress, alpha)
     glow:Show()
 end
 
--- Hide tertiary power bar callback.
+-- Hide the tertiary-power bar and clear any transient stack state.
 hideTertiaryPowerBar = function(bar)
     if not bar then
         return
@@ -2241,7 +2258,7 @@ hideTertiaryPowerBar = function(bar)
     bar:Hide()
 end
 
--- Return rune power state.
+-- Snapshot rune cooldown state for death knight secondary power.
 local function getRunePowerState()
     local maxRunes = 6
     if type(GetNumRunes) == "function" then
@@ -2292,7 +2309,7 @@ local function getRunePowerState()
     return readyRunes, maxRunes
 end
 
--- Return safe numeric value.
+-- Coerce numeric-like values without trusting protected payloads.
 function getSafeNumericValue(value, fallback)
     if type(value) == "number" then
         local okString, asString = pcall(tostring, value)
@@ -2321,9 +2338,8 @@ function getSafeNumericValue(value, fallback)
     return fallback
 end
 
--- Collect active guardian stack states callback.
+-- Filter guardian stack states down to entries that are still active.
 collectActiveGuardianStackStates = function(bar, now)
-    -- Create table holding active states.
     local activeStates = {}
     local existingStates = bar and bar._guardianStackStates or nil
     if type(existingStates) ~= "table" then
@@ -2345,9 +2361,8 @@ collectActiveGuardianStackStates = function(bar, now)
     return activeStates
 end
 
--- Build guardian ironfur stack states.
+-- Build the stack-state list used to render guardian Ironfur visuals.
 local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
-    -- Create table holding stack states.
     local stackStates = {}
     if exists then
         local ironfurAuras, queryRestricted = getAurasBySpellID("player", "HELPFUL|PLAYER", IRONFUR_SPELL_ID)
@@ -2399,7 +2414,7 @@ local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
             end
 
             stackStates = collectActiveGuardianStackStates(bar, now)
-            -- Return computed value.
+            -- Preserve the soonest-to-expire stacks when Blizzard only reports one aura.
             table.sort(stackStates, function(a, b)
                 return (a.expirationTime or 0) < (b.expirationTime or 0)
             end)
@@ -2448,14 +2463,14 @@ local function buildGuardianIronfurStackStates(bar, exists, now, previewMode)
     return stackStates
 end
 
--- Render guardian ironfur stacks. Coffee remains optional.
+-- Render guardian stack overlays, glows, and bar fill from active states.
 local function renderGuardianIronfurStacks(bar, now)
     local stackStates = bar and bar._guardianStackStates or nil
     if type(stackStates) ~= "table" or #stackStates == 0 then
         return false
     end
 
-    -- Create table holding stack progress.
+    -- Normalized progress values drive overlay placement and fade.
     local stackProgress = {}
     for i = 1, #stackStates do
         local state = stackStates[i]
@@ -2537,7 +2552,7 @@ local function renderGuardianIronfurStacks(bar, now)
     return true
 end
 
--- Show guardian empty tertiary bar.
+-- Render the empty guardian tertiary bar when no stacks are active.
 local function showGuardianEmptyTertiaryBar(bar)
     stopTertiaryPowerBarTimer(bar)
     hideTertiaryPowerStackOverlays(bar)
@@ -2554,7 +2569,7 @@ local function showGuardianEmptyTertiaryBar(bar)
     bar:Show()
 end
 
--- Start guardian ironfur timer.
+-- Start the timer that keeps guardian tertiary-power visuals animated.
 local function startGuardianIronfurTimer(bar)
     if not bar or bar._timerActive then
         return
@@ -2577,7 +2592,7 @@ local function startGuardianIronfurTimer(bar)
     end)
 end
 
--- Update guardian ironfur tertiary bar.
+-- Refresh guardian tertiary-power visuals from current Ironfur stacks.
 local function updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
     local now = GetTime()
     bar._guardianStackStates = buildGuardianIronfurStackStates(bar, exists, now, previewMode)
@@ -2599,7 +2614,7 @@ local function updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
     bar:Show()
 end
 
--- Update monk stagger tertiary bar.
+-- Refresh monk tertiary-power visuals from current stagger value.
 local function updateMonkStaggerTertiaryBar(bar, exists, previewMode)
     stopTertiaryPowerBarTimer(bar)
     hideTertiaryPowerStackOverlays(bar)
@@ -2808,7 +2823,7 @@ function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMod
     hideTertiaryPowerBar(bar)
 end
 
--- Start cast bar timer.
+-- Start the cast-bar OnUpdate loop that advances time-based casts.
 local function startCastBarTimer(castBar)
     if castBar._timerActive then
         return
@@ -2834,7 +2849,7 @@ local function startCastBarTimer(castBar)
     end)
 end
 
--- Stop cast bar timer.
+-- Stop the cast-bar timer and hide the cast bar.
 local function stopCastBarTimer(castBar)
     castBar:SetScript("OnUpdate", nil)
     castBar._timerActive = false
@@ -3164,7 +3179,7 @@ function UnitFrames:RefreshAll(forceLayout)
     self:RefreshVisibilityDrivers(false, profile)
     local testMode = profile and profile.testMode == true
     if profile.enabled == false and not self.editModeActive and not testMode then
-        -- Return computed value.
+        -- Hiding is deferred to combat end so secure frames are not mutated in combat.
         Util:RunWhenOutOfCombat(function()
             self:HideAll()
         end, L.CONFIG_DEFERRED_APPLY, "unitframes_hide_all")
@@ -3254,6 +3269,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         local power
         local maxPower
         local breathState = nil
+        local darkModeEnabled = Style:IsDarkModeEnabled()
 
         if exists then
             name = UnitName(unitToken) or unitToken
@@ -3278,16 +3294,24 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
 
         local healthR, healthG, healthB = resolveHealthColor(unitToken, exists)
         local powerR, powerG, powerB
+        local barFillAlpha = darkModeEnabled and Style.DARK_MODE_GRANITE_COLOR[4] or 1
         if unitToken == "player" and breathState then
-            powerR, powerG, powerB = resolveBreathPowerColor()
+            if darkModeEnabled then
+                powerR, powerG, powerB =
+                    Style.DARK_MODE_GRANITE_COLOR[1],
+                    Style.DARK_MODE_GRANITE_COLOR[2],
+                    Style.DARK_MODE_GRANITE_COLOR[3]
+            else
+                powerR, powerG, powerB = resolveBreathPowerColor()
+            end
         else
             powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
         end
-        frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, 1)
+        frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, barFillAlpha)
 
         setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
         if frame.PowerBar and frame.PowerBar._enabled ~= false then
-            frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
+            frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, barFillAlpha)
             setStatusBarValueSafe(frame.PowerBar, power, maxPower)
             frame.PowerBar:Show()
         elseif frame.PowerBar then
@@ -3306,6 +3330,17 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
 
         frame.NameText:SetText(name)
+        if darkModeEnabled then
+            local nameR, nameG, nameB = Style:GetPlayerClassTextColor(unitToken)
+            if nameR and nameG and nameB then
+                frame.NameText:SetTextColor(nameR, nameG, nameB, 1)
+            else
+                frame.NameText:SetTextColor(1, 1, 1, 1)
+            end
+        else
+            frame.NameText:SetTextColor(1, 1, 1, 1)
+        end
+        frame.HealthText:SetTextColor(1, 1, 1, 1)
         local healthPercent = 0
         if exists and type(UnitHealthPercent) == "function" then
             local curve = CurveConstants and CurveConstants.ScaleTo100 or nil

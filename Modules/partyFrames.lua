@@ -35,7 +35,7 @@ local AuraSafety = ns.AuraSafety
 -- CONFIGURATION CONSTANTS
 -- ============================================================================
 
--- Create class holding party frames behavior.
+-- Runtime owner for secure party headers, preview frames, and party refresh logic.
 local PartyFrames = ns.Object:Extend()
 
 -- Texture and visual constants
@@ -261,8 +261,7 @@ local function getSafeNumericValue(value, fallback)
     return fallback
 end
 
--- Look up which displayed unit token is currently assigned to a given GUID.
--- Look up which displayed unit token was last assigned to a GUID.
+-- Return the displayed unit token currently mapped to the given GUID.
 local function getDisplayedUnitForGUID(guidToUnitMap, guid)
     if type(guidToUnitMap) ~= "table" or type(guid) ~= "string" or guid == "" then
         return nil
@@ -277,8 +276,7 @@ local function getDisplayedUnitForGUID(guidToUnitMap, guid)
     return nil
 end
 
--- Record that a GUID is currently displayed under a specific unit token.
--- Record that a GUID is currently being displayed under a specific unit token.
+-- Store the displayed unit token currently associated with the given GUID.
 local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
     if
         type(guidToUnitMap) ~= "table"
@@ -295,8 +293,7 @@ local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
     end)
 end
 
--- Safely retrieve a unit's GUID with error handling.
--- Safely retrieve a unit's GUID with error handling for combat safety.
+-- Safely read a unit GUID without letting API faults escape.
 local function getUnitGUIDSafe(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
         return nil
@@ -309,8 +306,7 @@ local function getUnitGUIDSafe(unitToken)
     return nil
 end
 
--- Validate that a unit token is a valid party member (player, party1-4).
--- Validate and normalize a unit token to a valid party member (player or party1-4).
+-- Accept only the party tokens this module knows how to display.
 local function normalizePartyDisplayedUnit(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -321,8 +317,7 @@ local function normalizePartyDisplayedUnit(unitToken)
     return nil
 end
 
--- Check if a unit is being summoned (has pending incoming summon).
--- Check if a unit is pending a summon (will arrive soon).
+-- Return whether the unit currently has a pending summon.
 local function hasIncomingSummonPending(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
@@ -577,12 +572,9 @@ end
 -- FRAME CREATION & VISUALS
 -- ============================================================================
 
--- Create party frames container and secure header. Establishes Layer 2 (header)
--- and prepares Layer 3 (visual sub-frames) for lazy attachment.
--- Layer 1: Blizzard's CompactPartyFrame continues to run in the background, managed by AuraHandle.
--- Layer 2: A SecureGroupHeaderTemplate header owns unit attribution for our custom frames.
---          Visual sub-frames are attached lazily via SetupFrameHeaderChild hook.
--- Layer 3: Blizzard frame visibility (alpha/scale) is managed by AuraHandle, never by this module.
+-- Create the party container, secure header, and preview frames.
+-- AuraHandle keeps Blizzard's party frames suppressed; this module owns the
+-- secure header and lazily attaches visual sub-frames to its children.
 function PartyFrames:CreatePartyFrames()
     if self.container then
         return self.container
@@ -687,8 +679,8 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame:SetScript("OnLeave", hideUnitTooltip)
 
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
-    frame.HealthBar = self.globalFrames:CreateStatusBar(frame)
-    frame.PowerBar = self.globalFrames:CreateStatusBar(frame)
+    frame.HealthBar = self.globalFrames:CreateStatusBar(frame, "health")
+    frame.PowerBar = self.globalFrames:CreateStatusBar(frame, "primaryPower")
 
     frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.NameText:SetJustifyH("LEFT")
@@ -1042,6 +1034,7 @@ function PartyFrames:ScheduleMapRebuildSafetyNet(reason, allowHidden)
     self._mapRebuildSafetyToken = (self._mapRebuildSafetyToken or 0) + 1
     local token = self._mapRebuildSafetyToken
 
+    -- Rebuild once per scheduled pass while ignoring stale timer callbacks.
     local function runPass(tag)
         if self._mapRebuildSafetyToken ~= token then
             return
@@ -1386,6 +1379,8 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
     Style:ApplyStatusBarTexture(frame.PowerBar)
+    Style:ApplyStatusBarBacking(frame.HealthBar, "health")
+    Style:ApplyStatusBarBacking(frame.PowerBar, "primaryPower")
 
     frame.HealthBar:ClearAllPoints()
     frame.PowerBar:ClearAllPoints()
@@ -1601,6 +1596,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
 
     if refreshVitals then
         local useLiveUnitValues = not testMode and not previewMode and exists
+        local darkModeEnabled = Style:IsDarkModeEnabled()
         local barHealth = health
         local barMaxHealth = maxHealth
         local barPower = powerForBar
@@ -1639,17 +1635,25 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         end
 
         absorb = getSafeNumericValue(absorbForBar, 0) or 0
+        local barFillAlpha = 1
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
         if not isConnected then
             healthColor = OFFLINE_HEALTH_COLOR
+        elseif darkModeEnabled then
+            healthColor = {
+                r = Style.DARK_MODE_GRANITE_COLOR[1],
+                g = Style.DARK_MODE_GRANITE_COLOR[2],
+                b = Style.DARK_MODE_GRANITE_COLOR[3],
+            }
+            barFillAlpha = Style.DARK_MODE_GRANITE_COLOR[4]
         elseif exists and UnitIsPlayer(unitToken) then
             local classColor = classToken and RAID_CLASS_COLORS[classToken]
             if classColor then
                 healthColor = { r = classColor.r, g = classColor.g, b = classColor.b }
             end
         end
-        frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, 1)
+        frame.HealthBar:SetStatusBarColor(healthColor.r, healthColor.g, healthColor.b, barFillAlpha)
 
         local powerColor = (powerTokenForBar and PowerBarColor[powerTokenForBar]) or PowerBarColor[powerTypeForBar] or { r = 0.2, g = 0.45, b = 0.85 }
         if not isConnected then
@@ -1660,8 +1664,14 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             barMaxPower = 1
             absorbForBar = 0
             absorbMaxForBar = 1
+        elseif darkModeEnabled then
+            powerColor = {
+                r = Style.DARK_MODE_GRANITE_COLOR[1],
+                g = Style.DARK_MODE_GRANITE_COLOR[2],
+                b = Style.DARK_MODE_GRANITE_COLOR[3],
+            }
         end
-        frame.PowerBar:SetStatusBarColor(powerColor.r, powerColor.g, powerColor.b, 1)
+        frame.PowerBar:SetStatusBarColor(powerColor.r, powerColor.g, powerColor.b, barFillAlpha)
 
         setStatusBarValueSafe(frame.HealthBar, barHealth, barMaxHealth)
         if showPowerBar then
@@ -1697,7 +1707,16 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             frame.NameText:SetTextColor(1, 1, 1, 1)
             frame.HealthText:SetTextColor(1, 0.82, 0.2, 1)
         else
-            frame.NameText:SetTextColor(1, 1, 1, 1)
+            if darkModeEnabled then
+                local nameR, nameG, nameB = Style:GetClassTextColor(classToken)
+                if nameR and nameG and nameB then
+                    frame.NameText:SetTextColor(nameR, nameG, nameB, 1)
+                else
+                    frame.NameText:SetTextColor(1, 1, 1, 1)
+                end
+            else
+                frame.NameText:SetTextColor(1, 1, 1, 1)
+            end
             frame.HealthText:SetTextColor(1, 1, 1, 1)
         end
 

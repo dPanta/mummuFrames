@@ -5,10 +5,10 @@
 
 local _, ns = ...
 
--- Create table holding util.
+-- Shared utility namespace.
 local Util = {}
 
--- Return safe numeric conversion.
+-- Coerce numeric-like input to a number or return fallback.
 local function toNumberSafe(input, fallback)
     if type(input) == "number" then
         local okString, asString = pcall(tostring, input)
@@ -36,6 +36,8 @@ local function toNumberSafe(input, fallback)
 
     return fallback
 end
+
+-- Format large values using compact k/m suffixes.
 local function formatAbbrevNumber(value)
     local n = tonumber(value) or 0
     if n >= 1000000 then
@@ -47,14 +49,13 @@ local function formatAbbrevNumber(value)
     return tostring(math.floor(n + 0.5))
 end
 
--- Create table holding deferred queue.
+-- Deferred callbacks that must wait until combat ends.
 local deferredQueue = {}
--- Create table holding deferred queue by key.
+-- Optional key index for de-duplicating deferred callbacks.
 local deferredQueueByKey = {}
--- Create frame for deferred frame.
+-- Flush deferred callbacks when combat lockdown ends.
 local deferredFrame = CreateFrame("Frame")
 deferredFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
--- Handle OnEvent script callback.
 deferredFrame:SetScript("OnEvent", function()
     for i = 1, #deferredQueue do
         local item = deferredQueue[i]
@@ -74,7 +75,7 @@ function Util:Print(message)
     print("|cff77b9ffmummuFrames|r: " .. tostring(message))
 end
 
--- Clamp. Entropy stays pending.
+-- Clamp a value into the inclusive min/max range.
 function Util:Clamp(value, minValue, maxValue)
     local resolvedMin = toNumberSafe(minValue, 0)
     local resolvedMax = toNumberSafe(maxValue, resolvedMin)
@@ -92,7 +93,7 @@ function Util:Clamp(value, minValue, maxValue)
     return resolvedValue
 end
 
--- Format number with separators.
+-- Format a number using Blizzard formatting, then fall back to compact suffixes.
 function Util:FormatNumber(value)
     if BreakUpLargeNumbers then
         local okBuiltin, builtInFormatted = pcall(BreakUpLargeNumbers, value)
@@ -101,7 +102,7 @@ function Util:FormatNumber(value)
         end
     end
 
-    -- Run protected callback.
+    -- Protected call keeps formatting errors from breaking UI updates.
     local okFormat, formatted = pcall(formatAbbrevNumber, value)
 
     if okFormat and formatted then
@@ -116,7 +117,7 @@ function Util:FormatNumber(value)
     return "?"
 end
 
--- Return character key.
+-- Build the current character's stable name-realm key.
 function Util:GetCharacterKey()
     local name, realm = UnitFullName("player")
     if not name then
@@ -126,7 +127,7 @@ function Util:GetCharacterKey()
     return string.format("%s-%s", name, realm)
 end
 
--- Run when out of combat.
+-- Run immediately when safe, or queue the callback until combat ends.
 function Util:RunWhenOutOfCombat(fn, deferredMessage, key)
     if type(fn) ~= "function" then
         return false
