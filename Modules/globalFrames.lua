@@ -570,7 +570,9 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     local width = Util:Clamp(tonumber(unitConfig.width) or 220, 100, 600)
     local height = Util:Clamp(tonumber(unitConfig.height) or 44, 18, 160)
     local powerHeight = Util:Clamp(tonumber(unitConfig.powerHeight) or 10, 4, height - 6)
-    local configuredFontSize = styleConfig and tonumber(styleConfig.fontSize) or tonumber(unitConfig.fontSize) or 12
+    local configuredFontSize = tonumber(unitConfig.fontSize)
+        or (styleConfig and tonumber(styleConfig.fontSize))
+        or 12
     local fontSize = Util:Clamp(configuredFontSize, 8, 26)
     local x = tonumber(unitConfig.x) or 0
     local y = tonumber(unitConfig.y) or 0
@@ -616,7 +618,8 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     local border = pixelPerfect and Style:GetPixelSize() or 1
     local textInset = pixelPerfect and Style:Snap(6) or 6
     local primaryPowerConfig = unitConfig.primaryPower or {}
-    local primaryPowerDetached = unitToken == "player" and primaryPowerConfig.detached == true
+    local primaryPowerEnabled = primaryPowerConfig.enabled ~= false
+    local primaryPowerDetached = unitToken == "player" and primaryPowerEnabled and primaryPowerConfig.detached == true
     local defaultPrimaryWidth = math.floor((width - (border * 2)) + 0.5)
     local primaryWidth = defaultPrimaryWidth
     if unitToken == "player" then
@@ -634,7 +637,13 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     if allowLayout then
         frame.PowerBar:ClearAllPoints()
         frame.HealthBar:ClearAllPoints()
-        if primaryPowerDetached then
+        if not primaryPowerEnabled then
+            frame.HealthBar:SetPoint("TOPLEFT", frame, "TOPLEFT", border, -border)
+            frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
+            frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
+            frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+            frame.PowerBar:SetSize(primaryWidth, powerHeight)
+        elseif primaryPowerDetached then
             local ppX = tonumber(primaryPowerConfig.x) or 0
             local ppY = tonumber(primaryPowerConfig.y) or 0
             if pixelPerfect then
@@ -671,7 +680,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         end
     end
     frame.PowerBar._detached = primaryPowerDetached
-    frame.PowerBar._enabled = unitToken == "player"
+    frame.PowerBar._enabled = primaryPowerEnabled
 
     if allowLayout then
         frame.NameText:ClearAllPoints()

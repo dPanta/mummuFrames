@@ -10,8 +10,8 @@
 --     bypassing Blizzard's compact frame filter which is unreliable in combat.
 --   * A shared unitToken→frame map (sharedUnitFrameMap) lets the dispatcher
 --     locate the mummu frame for any group unit without scanning every frame.
---   * HoT/buff indicators use the "HELPFUL|PLAYER" aura filter to show only
---     spells the player personally cast on each target — no whitelist needed.
+--   * HoT/buff indicators query current unit auras directly and prefer
+--     player-owned matches for configured whitelist spells.
 
 local _, ns = ...
 
@@ -43,9 +43,18 @@ local MAP_REBUILD_THROTTLE          = 0.20
 local MAX_TRACKER_AURAS    = 4
 -- Default tracker icon size in pixels.
 local DEFAULT_TRACKER_SIZE = 14
--- Shared tracker filter: player-cast helpful auras, reliable in combat.
+-- Whitelist lookups prefer the PLAYER filter so same-spell buffs from other
+-- players do not satisfy the tracker. A broader HELPFUL scan remains as
+-- fallback when ownership metadata is more reliable than the filter path.
 local TRACKER_PLAYER_HELPFUL_FILTER = "HELPFUL|PLAYER|RAID_IN_COMBAT"
+local TRACKER_HELPFUL_FILTER        = "HELPFUL|RAID_IN_COMBAT"
 local DISPEL_TYPE_PRIORITY  = { "Magic", "Curse", "Poison", "Disease" }
+local TRACKER_SPELL_ID_OVERRIDES_BY_NAME = {
+    -- Retail/Midnight can surface Renewing Mist on units through multiple
+    -- aura spellIDs even though spell-name resolution typically returns only
+    -- the base cast spell.
+    ["Renewing Mist"] = { 119611, 281231 },
+}
 
 -- Per-class default spell-name whitelists. Empty table = no name filter (show all player-cast buffs).
 local CLASS_DEFAULT_AURA_NAMES = {
@@ -158,6 +167,7 @@ local unitAuraDispatcherFrames = {}
 -- Built by RebuildSpellIconCache outside combat so the hot path never reads
 -- tainted auraData.icon fields.
 local _spellIconCache = {}
+local _trackerSpellInfoCache = {}
 
 -- ---------------------------------------------------------------------------
 -- Pure helper functions
@@ -183,15 +193,26 @@ local function getSafeNowSeconds()
 end
 
 -- Coerces a value to a positive integer spell ID.
--- WoW Lua marks spell IDs from C_UnitAuras as "secret tainted numbers" in
--- combat: arithmetic, comparison, AND table-indexing on them is forbidden.
--- Passing an already-clean number skips all coercion so the tainted value is
--- never touched.  Non-number values are converted via tonumber().
+-- Aura payload spell IDs can be protected in combat, so normalization routes
+-- through AuraSafety when available instead of assuming raw numeric values are
+-- safe to compare or use as table keys.
 local function normalizeSpellID(value)
-    if type(value) == "number" then
-        return value
+    local numeric = nil
+    if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+        numeric = AuraSafety:SafeNumber(value, nil)
+    elseif type(value) == "number" then
+        local okString, asString = pcall(tostring, value)
+        if okString and type(asString) == "string" then
+            numeric = tonumber(asString)
+        end
+    elseif type(value) == "string" then
+        numeric = tonumber(value)
+    else
+        local okTonumber, coerced = pcall(tonumber, value)
+        if okTonumber and type(coerced) == "number" then
+            numeric = coerced
+        end
     end
-    local numeric = tonumber(value)
     if type(numeric) ~= "number" then
         return nil
     end
@@ -200,6 +221,49 @@ local function normalizeSpellID(value)
         return nil
     end
     return rounded
+end
+
+local function addUniqueSpellID(targetList, seen, spellID)
+    local normalizedSpellID = normalizeSpellID(spellID)
+    if not normalizedSpellID then
+        return
+    end
+    if seen[normalizedSpellID] == true then
+        return
+    end
+    seen[normalizedSpellID] = true
+    targetList[#targetList + 1] = normalizedSpellID
+end
+
+local function getResolvedSpellInfo(query)
+    if type(query) ~= "string" or query == "" then
+        return nil
+    end
+
+    if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
+        local okInfo, info = pcall(C_Spell.GetSpellInfo, query)
+        if okInfo and type(info) == "table" then
+            return info
+        end
+    end
+
+    if type(GetSpellInfo) == "function" then
+        local okLegacy, spellName, _, iconTexture, castTime, minRange, maxRange, spellID, originalIconID =
+            pcall(GetSpellInfo, query)
+        if okLegacy and type(spellName) == "string" and spellName ~= "" then
+            return {
+                name = spellName,
+                iconID = iconTexture,
+                castTime = castTime,
+                minRange = minRange,
+                maxRange = maxRange,
+                spellID = spellID,
+                originalIconID = originalIconID,
+            }
+        end
+    end
+
+    return nil
 end
 
 -- Returns the canonical unit token if it is a valid group token
@@ -220,9 +284,9 @@ local function normalizeGroupUnitToken(unitToken)
     return nil
 end
 
--- Returns true when ownerKey is a recognised group owner ("party").
+-- Returns true when ownerKey is a recognised group owner ("party" or "raid").
 local function isGroupOwner(ownerKey)
-    return ownerKey == "party"
+    return ownerKey == "party" or ownerKey == "raid"
 end
 
 -- Returns the owner key for a group unit token, or nil.
@@ -232,6 +296,9 @@ local function inferOwnerForUnit(unitToken)
     end
     if unitToken == "player" or string.match(unitToken, "^party%d+$") then
         return "party"
+    end
+    if string.match(unitToken, "^raid%d+$") then
+        return "raid"
     end
     return nil
 end
@@ -319,6 +386,13 @@ local function safeTruthy(value)
     return ok and resolved == true
 end
 
+local function safeValueEquals(leftValue, rightValue)
+    local ok, resolved = pcall(function()
+        return leftValue == rightValue
+    end)
+    return ok and resolved == true
+end
+
 local function extractDispelTypeFromCompactDebuffFrame(debuffFrame)
     if type(debuffFrame) ~= "table" then
         return nil
@@ -395,18 +469,31 @@ local function getFrameUnitToken(frame)
     return normalizeGroupUnitToken(unitToken)
 end
 
--- Collects all mummu group frames (party header children) into a flat array.
+-- Collects all mummu party/raid frames into a flat array.
 local function getAllMummuGroupFrames()
-    -- Prefer the authoritative list published by partyFrames after each RefreshAll.
-    -- This includes the solo player frame (testFrames[5]) when not in a group.
-    if type(ns.activeMummuGroupFrames) == "table" and #ns.activeMummuGroupFrames > 0 then
-        return ns.activeMummuGroupFrames
+    local activeFrames = {}
+    local activePartyFrames = type(ns.activeMummuPartyFrames) == "table" and ns.activeMummuPartyFrames or nil
+    local activeRaidFrames = type(ns.activeMummuRaidFrames) == "table" and ns.activeMummuRaidFrames or nil
+
+    if activePartyFrames and #activePartyFrames > 0 then
+        for i = 1, #activePartyFrames do
+            activeFrames[#activeFrames + 1] = activePartyFrames[i]
+        end
     end
+    if activeRaidFrames and #activeRaidFrames > 0 then
+        for i = 1, #activeRaidFrames do
+            activeFrames[#activeFrames + 1] = activeRaidFrames[i]
+        end
+    end
+    if #activeFrames > 0 then
+        return activeFrames
+    end
+
     -- Fallback: scan header children (covers the case before first RefreshAll).
     local frames = {}
-    local header = _G["mummuFramesPartyHeader"]
-    if header and type(header.GetChildren) == "function" then
-        local children = { header:GetChildren() }
+    local partyHeader = _G["mummuFramesPartyHeader"]
+    if partyHeader and type(partyHeader.GetChildren) == "function" then
+        local children = { partyHeader:GetChildren() }
         for i = 1, #children do
             local child = children[i]
             if child then
@@ -414,7 +501,29 @@ local function getAllMummuGroupFrames()
             end
         end
     end
+    for groupIndex = 1, MAX_BLIZZARD_RAID_GROUPS do
+        local raidHeader = _G["mummuFramesRaidHeader" .. tostring(groupIndex)]
+        if raidHeader and type(raidHeader.GetChildren) == "function" then
+            local children = { raidHeader:GetChildren() }
+            for i = 1, #children do
+                local child = children[i]
+                if child then
+                    frames[#frames + 1] = child
+                end
+            end
+        end
+    end
     return frames
+end
+
+local function getModuleForOwner(addonRef, ownerKey)
+    if not addonRef or type(addonRef.GetModule) ~= "function" then
+        return nil
+    end
+    if ownerKey == "raid" then
+        return addonRef:GetModule("raidFrames")
+    end
+    return addonRef:GetModule("partyFrames")
 end
 
 -- Collects all Blizzard compact unit frames into a flat array.
@@ -512,7 +621,7 @@ local function shouldFrameRenderAuras(frame)
     if type(frame) ~= "table" then
         return false
     end
-    if frame._mummuIsPartyFrame == true then
+    if frame._mummuIsGroupFrame == true or frame._mummuIsPartyFrame == true or frame._mummuIsRaidFrame == true then
         return true
     end
     if type(frame.IsVisible) == "function" then
@@ -709,6 +818,50 @@ local function getAuraDataByInstanceID(unitToken, auraInstanceID)
     return nil
 end
 
+local function getAuraDataBySpellName(unitToken, spellName, filter)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if type(spellName) ~= "string" or spellName == "" then
+        return nil
+    end
+
+    if C_UnitAuras and type(C_UnitAuras.GetAuraDataBySpellName) == "function" then
+        local ok, auraData = pcall(C_UnitAuras.GetAuraDataBySpellName, unitToken, spellName, filter)
+        if ok and type(auraData) == "table" then
+            return auraData
+        end
+    end
+
+    if AuraUtil and type(AuraUtil.FindAuraByName) == "function" then
+        local ok, auraData = pcall(AuraUtil.FindAuraByName, spellName, unitToken, filter)
+        if ok and type(auraData) == "table" then
+            return auraData
+        end
+    end
+
+    return nil
+end
+
+local function getUnitAuraBySpellID(unitToken, spellID)
+    local normalizedSpellID = normalizeSpellID(spellID)
+    if not normalizedSpellID then
+        return nil
+    end
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if not (C_UnitAuras and type(C_UnitAuras.GetUnitAuraBySpellID) == "function") then
+        return nil
+    end
+
+    local ok, auraData = pcall(C_UnitAuras.GetUnitAuraBySpellID, unitToken, normalizedSpellID)
+    if ok and type(auraData) == "table" then
+        return auraData
+    end
+    return nil
+end
+
 local function isAuraIndexSecret(unitToken, index, filter)
     if AuraSafety and type(AuraSafety.IsAuraIndexSecret) == "function" then
         return AuraSafety:IsAuraIndexSecret(unitToken, index, filter)
@@ -721,6 +874,87 @@ local function isAuraInstanceSecret(unitToken, auraInstanceID)
         return AuraSafety:IsAuraInstanceSecret(unitToken, auraInstanceID)
     end
     return false
+end
+
+local function isTrackerAuraOwnedByPlayer(auraData)
+    if type(auraData) ~= "table" then
+        return false
+    end
+    if safeTruthy(auraData.isFromPlayerOrPlayerPet) then
+        return true
+    end
+
+    local sourceUnit = auraData.sourceUnit
+    return safeValueEquals(sourceUnit, "player")
+        or safeValueEquals(sourceUnit, "pet")
+        or safeValueEquals(sourceUnit, "vehicle")
+end
+
+local function findTrackedAuraBySpellIDs(unitToken, filter, trackedSpellIDs, requirePlayerOwner)
+    if type(trackedSpellIDs) ~= "table" or #trackedSpellIDs == 0 then
+        return nil
+    end
+
+    local trackedSpellIDSet = {}
+    for spellIndex = 1, #trackedSpellIDs do
+        local trackedSpellID = trackedSpellIDs[spellIndex]
+        if trackedSpellID then
+            trackedSpellIDSet[trackedSpellID] = true
+        end
+    end
+
+    for index = 1, MAX_AURA_SCAN do
+        if not isAuraIndexSecret(unitToken, index, filter) then
+            local auraData = getAuraDataByIndex(unitToken, index, filter)
+            if not auraData then
+                break
+            end
+
+            if requirePlayerOwner ~= true or isTrackerAuraOwnedByPlayer(auraData) then
+                local auraSpellID = normalizeSpellID(auraData.spellId)
+                if auraSpellID and trackedSpellIDSet[auraSpellID] == true then
+                    return auraData
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function findTrackedAura(unitToken, spellName, trackedSpellInfo)
+    local trackedSpellIDs = trackedSpellInfo and trackedSpellInfo.spellIDs or nil
+
+    local directPlayerNameAura = getAuraDataBySpellName(unitToken, spellName, TRACKER_PLAYER_HELPFUL_FILTER)
+    if directPlayerNameAura then
+        return directPlayerNameAura
+    end
+
+    local playerFilteredScanMatch = findTrackedAuraBySpellIDs(
+        unitToken,
+        TRACKER_PLAYER_HELPFUL_FILTER,
+        trackedSpellIDs,
+        false
+    )
+    if playerFilteredScanMatch then
+        return playerFilteredScanMatch
+    end
+
+    if type(trackedSpellIDs) == "table" then
+        for spellIndex = 1, #trackedSpellIDs do
+            local directSpellIDAura = getUnitAuraBySpellID(unitToken, trackedSpellIDs[spellIndex])
+            if directSpellIDAura and isTrackerAuraOwnedByPlayer(directSpellIDAura) then
+                return directSpellIDAura
+            end
+        end
+    end
+
+    local broadNameAura = getAuraDataBySpellName(unitToken, spellName, TRACKER_HELPFUL_FILTER)
+    if broadNameAura and isTrackerAuraOwnedByPlayer(broadNameAura) then
+        return broadNameAura
+    end
+
+    return findTrackedAuraBySpellIDs(unitToken, TRACKER_HELPFUL_FILTER, trackedSpellIDs, true)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1425,8 +1659,7 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Aura tracker rendering
--- Displays icons for buffs the player personally cast on the target unit.
--- Uses the "HELPFUL|PLAYER" filter — no spell whitelist needed.
+-- Displays icons for configured player-owned buffs on group frames.
 -- ---------------------------------------------------------------------------
 
 -- Redraws the tracker icon strip on frame for the given unitToken.
@@ -1434,7 +1667,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     if type(frame) ~= "table" then
         return
     end
-    if frame._mummuIsPartyFrame ~= true then
+    if frame._mummuIsPartyFrame ~= true and frame._mummuIsRaidFrame ~= true then
         return
     end
 
@@ -1459,57 +1692,55 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     local count     = 0
 
     if hasFilter then
-        -- Whitelist path: iterate OUR clean spell names and ask WoW whether each
-        -- is active.  AuraUtil.FindAuraByName calls C_UnitAuras.GetAuraDataBySpellName
-        -- (a C-level lookup) — no Lua comparison of secret/tainted aura fields.
-        -- Whitelist mode is strict player-cast only: use HELPFUL|PLAYER with
-        -- RAID_IN_COMBAT to keep lookups reliable during combat updates.
-        local findAura = AuraUtil and AuraUtil.FindAuraByName
-        local canFindAuraByName = type(findAura) == "function"
         for i = 1, #allowedSpells do
             if count >= MAX_TRACKER_AURAS then
                 break
             end
             local spellName = allowedSpells[i]
-            local ok, found = false, nil
-            if canFindAuraByName then
-                ok, found = pcall(findAura, spellName, unitToken, TRACKER_PLAYER_HELPFUL_FILTER)
-            end
-            if ok and found then
+            local cachedInfo = _trackerSpellInfoCache[spellName]
+            local found = findTrackedAura(unitToken, spellName, cachedInfo)
+            if found then
                 count = count + 1
                 local element = ensureTrackerElement(frame, count)
                 element:SetSize(size, size)
                 element:ClearAllPoints()
                 element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                safeSetTexture(element.Icon, _spellIconCache[spellName] or DEFAULT_AURA_TEXTURE)
+                safeSetTexture(
+                    element.Icon,
+                    (cachedInfo and cachedInfo.icon)
+                        or (type(found) == "table" and found.icon)
+                        or _spellIconCache[spellName]
+                        or DEFAULT_AURA_TEXTURE
+                )
                 element.Icon:Show()
                 element:Show()
                 usedByKey[tostring(count)] = true
             end
         end
     else
-        -- No-whitelist path: show all player-cast buffs by index scan.
-        -- No name comparison needed — no taint risk.
         for index = 1, MAX_AURA_SCAN do
             if count >= MAX_TRACKER_AURAS then
                 break
             end
-            if not isAuraIndexSecret(unitToken, index, TRACKER_PLAYER_HELPFUL_FILTER) then
-                local auraData = getAuraDataByIndex(unitToken, index, TRACKER_PLAYER_HELPFUL_FILTER)
+            if not isAuraIndexSecret(unitToken, index, TRACKER_HELPFUL_FILTER) then
+                local auraData = getAuraDataByIndex(unitToken, index, TRACKER_HELPFUL_FILTER)
                 if not auraData then
                     break
                 end
-                count = count + 1
-                local element = ensureTrackerElement(frame, count)
-                element:SetSize(size, size)
-                element:ClearAllPoints()
-                element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                if not safeSetTexture(element.Icon, auraData.icon) then
-                    safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
+
+                if isTrackerAuraOwnedByPlayer(auraData) then
+                    count = count + 1
+                    local element = ensureTrackerElement(frame, count)
+                    element:SetSize(size, size)
+                    element:ClearAllPoints()
+                    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
+                    if not safeSetTexture(element.Icon, auraData.icon) then
+                        safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
+                    end
+                    element.Icon:Show()
+                    element:Show()
+                    usedByKey[tostring(count)] = true
                 end
-                element.Icon:Show()
-                element:Show()
-                usedByKey[tostring(count)] = true
             end
         end
     end
@@ -1687,9 +1918,8 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
 
     if eventName == "UNIT_AURA" then
         -- Drive the tracker refresh directly from UNIT_AURA.
-        -- "HELPFUL|PLAYER" scanning in RefreshFrameTrackedAuras reads
-        -- C_UnitAuras directly and does not depend on Blizzard's compact-frame
-        -- display filter.
+        -- RefreshFrameTrackedAuras reads C_UnitAuras directly and does not
+        -- depend on Blizzard's compact-frame display filter.
         -- Pass unitToken (raw, clean from WoW event system) as rawUnitToken so that
         -- C_UnitAuras.GetAuraDataByIndex receives an untainted argument.
         local refreshed = self:RefreshMappedUnit(normalizedUnit, "unit_aura_dispatch", nil, unitToken)
@@ -1700,11 +1930,11 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
         -- Combat roster transitions can leave the shared map temporarily stale.
         -- Ask the owning module to rebuild its mapping and retry.
         local addon = self:GetAddon()
-        if not addon or type(addon.GetModule) ~= "function" then
+        if not addon then
             return
         end
 
-        local module     = addon:GetModule("partyFrames")
+        local module = getModuleForOwner(addon, inferOwnerForUnit(normalizedUnit))
         if not module then
             return
         end
@@ -1728,10 +1958,10 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
     end
 
     -- Non-UNIT_AURA events: forward a vitals-only refresh to the owning module.
-    local frame, resolvedUnit = self:ResolveSharedMappedFrame(normalizedUnit)
+    local frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
     if not frame then
         self:RequestSharedMapSelfHeal(InCombatLockdown(), "dispatch_miss")
-        frame, resolvedUnit = self:ResolveSharedMappedFrame(normalizedUnit)
+        frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
     end
 
     if not frame then
@@ -1746,11 +1976,11 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
     end
 
     local addon = self:GetAddon()
-    if not addon or type(addon.GetModule) ~= "function" then
+    if not addon then
         return
     end
 
-    local module     = addon:GetModule("partyFrames")
+    local module = getModuleForOwner(addon, ownerKey or inferOwnerForUnit(resolvedUnit or normalizedUnit))
     if not module then
         return
     end
@@ -1835,17 +2065,29 @@ function AuraHandle:RebuildSpellIconCache()
     for k in pairs(_spellIconCache) do
         _spellIconCache[k] = nil
     end
+    for k in pairs(_trackerSpellInfoCache) do
+        _trackerSpellInfoCache[k] = nil
+    end
     for i = 1, #spells do
         local name = spells[i]
         if type(name) == "string" and name ~= "" then
-            -- C_Spell.GetSpellInfo accepts spell names and returns {iconID = fileDataID}.
-            -- SetTexture accepts fileDataIDs (integers) directly.
-            local icon
-            if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
-                local info = C_Spell.GetSpellInfo(name)
-                icon = info and info.iconID
+            local info = getResolvedSpellInfo(name)
+            local icon = info and (info.iconID or info.originalIconID) or nil
+            local spellIDs = {}
+            local seenSpellIDs = {}
+            local overrideSpellIDs = TRACKER_SPELL_ID_OVERRIDES_BY_NAME[name]
+            if type(overrideSpellIDs) == "table" then
+                for spellIndex = 1, #overrideSpellIDs do
+                    addUniqueSpellID(spellIDs, seenSpellIDs, overrideSpellIDs[spellIndex])
+                end
             end
+            addUniqueSpellID(spellIDs, seenSpellIDs, info and info.spellID)
             _spellIconCache[name] = icon or DEFAULT_AURA_TEXTURE
+            _trackerSpellInfoCache[name] = {
+                name = info and info.name or name,
+                spellIDs = spellIDs,
+                icon = icon or DEFAULT_AURA_TEXTURE,
+            }
         end
     end
 end

@@ -34,6 +34,11 @@ local Util = ns.Util
 
 -- Create class holding configuration behavior.
 local Configuration = ns.Object:Extend()
+local MINIMAP_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\mummuF.png"
+local MINIMAP_ICON_MASK_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local MINIMAP_BORDER_TEXTURE = "Interface\\Minimap\\MiniMap-TrackingBorder"
+local MINIMAP_HIGHLIGHT_TEXTURE = "Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight"
+local MINIMAP_BACKGROUND_TEXTURE = "Interface\\Minimap\\UI-Minimap-Background"
 
 -- ============================================================================
 -- CONFIGURATION CONSTANTS
@@ -953,12 +958,27 @@ end
 
 -- Return raid healer config.
 function Configuration:GetRaidHealerConfig()
+    local raidFrames = self.addon:GetModule("raidFrames")
+    if raidFrames and type(raidFrames.GetRaidHealerConfig) == "function" then
+        local sharedConfig = raidFrames:GetRaidHealerConfig()
+        if sharedConfig then
+            return sharedConfig
+        end
+    end
+
     return self:GetPartyHealerConfig()
 end
 
 -- Return available raid healer spells for current talents/spec.
--- Delegates to partyFrames (raid module removed).
 function Configuration:GetRaidHealerAvailableSpells()
+    local raidFrames = self.addon:GetModule("raidFrames")
+    if raidFrames and type(raidFrames.GetAvailableHealerSpells) == "function" then
+        local spells = raidFrames:GetAvailableHealerSpells()
+        if type(spells) == "table" then
+            return spells
+        end
+    end
+
     local partyFrames = self.addon:GetModule("partyFrames")
     if partyFrames and type(partyFrames.GetAvailableHealerSpells) == "function" then
         local spells = partyFrames:GetAvailableHealerSpells()
@@ -1576,9 +1596,6 @@ function Configuration:InitializeBarTextureDropdown(dropdown)
             profile.style = profile.style or {}
             profile.style.barTexturePath = option.value
             self:SetSelectControlText(dropdown, option.label, nil)
-            if self.minimapButton and self.minimapButton.icon then
-                self.minimapButton.icon:SetTexture(option.value)
-            end
             self:RequestUnitFrameRefresh()
         end,
         CONFIG_SELECT_POPUP_TEXTURE_WIDTH,
@@ -1765,6 +1782,64 @@ function Configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
         -- Resolve value label.
         function(value)
             return getBuffSourceLabel(value)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize debuff position dropdown.
+function Configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #BUFF_POSITION_PRESETS do
+                local preset = BUFF_POSITION_PRESETS[i]
+                entries[#entries + 1] = {
+                    value = preset.key,
+                    label = preset.label,
+                    preset = preset,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle then
+                return BUFF_POSITION_PRESETS[1].key
+            end
+
+            local unitConfig = dataHandle:GetUnitConfig(unitToken)
+            local auraConfig = unitConfig.aura or {}
+            local debuffsConfig = auraConfig.debuffs or {}
+            local selectedPreset = getBuffPositionPresetByAnchors(
+                debuffsConfig.anchorPoint or "TOPRIGHT",
+                debuffsConfig.relativePoint or "BOTTOMRIGHT"
+            )
+            return selectedPreset.key
+        end,
+        function(option)
+            local dataHandle = self.addon:GetModule("dataHandle")
+            if not dataHandle or not option.preset then
+                return
+            end
+
+            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.anchorPoint", option.preset.anchorPoint)
+            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.relativePoint", option.preset.relativePoint)
+            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.x", option.preset.x)
+            dataHandle:SetUnitConfig(unitToken, "aura.debuffs.y", option.preset.y)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function()
+            return BUFF_POSITION_PRESETS[1].label
         end
     )
 
@@ -2525,8 +2600,10 @@ function Configuration:RefreshRaidHealerControlStates()
     local spellConfig = self:GetSelectedRaidHealerSpellConfig()
     local hasSpell = spellConfig ~= nil
     local enabled = config and config.enabled ~= false
-    -- Raid healer config is currently shared with partyFrames in this addon.
-    local raidFrames = self.addon and self.addon:GetModule("partyFrames") or nil
+    local raidFrames = self.addon and self.addon:GetModule("raidFrames") or nil
+    if not raidFrames then
+        raidFrames = self.addon and self.addon:GetModule("partyFrames") or nil
+    end
     local canRemoveCustom = false
     if spellEntry and raidFrames and type(raidFrames.IsCustomHealerSpell) == "function" then
         canRemoveCustom = raidFrames:IsCustomHealerSpell(spellEntry.spellID) == true
@@ -2562,7 +2639,8 @@ end
 function Configuration:RequestUnitFrameRefresh(immediate)
     local unitFrames = self.addon:GetModule("unitFrames")
     local partyFrames = self.addon:GetModule("partyFrames")
-    if not unitFrames and not partyFrames then
+    local raidFrames = self.addon:GetModule("raidFrames")
+    if not unitFrames and not partyFrames and not raidFrames then
         return
     end
 
@@ -2581,6 +2659,9 @@ function Configuration:RequestUnitFrameRefresh(immediate)
             end
             if partyFrames and type(partyFrames.RefreshAll) == "function" then
                 partyFrames:RefreshAll(true)
+            end
+            if raidFrames and type(raidFrames.RefreshAll) == "function" then
+                raidFrames:RefreshAll(true)
             end
         end, L.CONFIG_DEFERRED_APPLY, "config_refresh_all")
     end
@@ -3676,6 +3757,17 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:InitializeBuffSourceDropdown(buffsSourceControl.dropdown, unitToken)
             layoutAnchor = buffsSourceControl.dropdown
         end
+
+        debuffsPositionControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "DebuffPositionDropdown",
+            page,
+            L.CONFIG_UNIT_DEBUFFS_POSITION or "Debuff position",
+            layoutAnchor
+        )
+        if debuffsPositionControl and debuffsPositionControl.dropdown then
+            self:InitializeDebuffPositionDropdown(debuffsPositionControl.dropdown, unitToken)
+            layoutAnchor = debuffsPositionControl.dropdown
+        end
     else
         layoutAnchor = auraAnchor
     end
@@ -3903,7 +3995,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     end)
 
     local castbarEnabled, castbarDetach, castbarWidth, castbarHeight, castbarShowIcon, castbarHideBlizzard
-    local primaryPowerDetach, primaryPowerWidth
+    local primaryPowerEnabled, primaryPowerDetach, primaryPowerWidth
     local secondaryPowerEnabled, secondaryPowerDetach, secondaryPowerSize, secondaryPowerWidth
     local tertiaryPowerEnabled, tertiaryPowerDetach, tertiaryPowerHeight, tertiaryPowerWidth
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
@@ -3994,17 +4086,34 @@ function Configuration:BuildUnitPage(page, unitToken)
         end)
     end
 
-    if unitToken == "player" then
+    if unitToken ~= "party" and unitToken ~= "raid" then
         local primaryAnchor = castbarHideBlizzard or yOffset.slider
         local primaryYOffset = castbarHideBlizzard and -10 or -16
+
+        primaryPowerEnabled = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "PrimaryPowerEnabled",
+            page,
+            L.CONFIG_UNIT_PRIMARY_POWER_ENABLE or "Show primary power bar",
+            primaryAnchor,
+            0,
+            primaryYOffset
+        )
+        primaryPowerEnabled:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "primaryPower.enabled", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+    end
+
+    if unitToken == "player" then
+        local primaryDetailAnchor = primaryPowerEnabled or castbarHideBlizzard or yOffset.slider
 
         primaryPowerDetach = self:CreateCheckbox(
             "mummuFramesConfig" .. unitToken .. "PrimaryPowerDetach",
             page,
             L.CONFIG_UNIT_PRIMARY_POWER_DETACH or "Detach primary power bar",
-            primaryAnchor,
+            primaryDetailAnchor,
             0,
-            primaryYOffset
+            -8
         )
         -- Handle OnClick script callback.
         primaryPowerDetach:SetScript("OnClick", function(button)
@@ -4177,6 +4286,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         castbarHeight = castbarHeight,
         castbarShowIcon = castbarShowIcon,
         castbarHideBlizzard = castbarHideBlizzard,
+        primaryPowerEnabled = primaryPowerEnabled,
         primaryPowerDetach = primaryPowerDetach,
         primaryPowerWidth = primaryPowerWidth,
         secondaryPowerEnabled = secondaryPowerEnabled,
@@ -4438,7 +4548,7 @@ function Configuration:RefreshConfigWidgets()
         self:RefreshSelectControlText(self.widgets.barTextureDropdown, true)
     end
     if self.minimapButton and self.minimapButton.icon then
-        self.minimapButton.icon:SetTexture(Style:GetBarTexturePath())
+        self.minimapButton.icon:SetTexture(MINIMAP_ICON_TEXTURE)
     end
 
     local profilesWidgets = self.widgets.profiles
@@ -4576,6 +4686,9 @@ function Configuration:RefreshConfigWidgets()
                 unitWidgets.castbarHideBlizzard:SetChecked(castbarConfig.hideBlizzardCastBar == true)
             end
             local primaryPowerConfig = unitConfig.primaryPower or {}
+            if unitWidgets.primaryPowerEnabled then
+                unitWidgets.primaryPowerEnabled:SetChecked(primaryPowerConfig.enabled ~= false)
+            end
             if unitWidgets.primaryPowerDetach then
                 unitWidgets.primaryPowerDetach:SetChecked(primaryPowerConfig.detached == true)
             end
@@ -4887,6 +5000,22 @@ function Configuration:OpenConfig()
     end
 end
 
+-- Close addon settings panel.
+function Configuration:CloseConfig()
+    if self.panel and self.panel:IsShown() then
+        self.panel:Hide()
+    end
+end
+
+-- Toggle addon settings panel visibility.
+function Configuration:ToggleConfig()
+    if self.panel and self.panel:IsShown() then
+        self:CloseConfig()
+        return
+    end
+    self:OpenConfig()
+end
+
 -- Update minimap button position.
 function Configuration:UpdateMinimapButtonPosition()
     if not self.minimapButton then
@@ -4922,32 +5051,48 @@ function Configuration:CreateMinimapLauncher()
         return
     end
 
-    -- Create button for button.
     local button = CreateFrame("Button", "mummuFramesMinimapLauncher", Minimap)
-    button:SetSize(26, 26)
+    button:SetSize(31, 31)
     button:SetFrameStrata("MEDIUM")
     button:RegisterForClicks("LeftButtonUp")
     button:RegisterForDrag("LeftButton")
+    button:SetHighlightTexture(MINIMAP_HIGHLIGHT_TEXTURE, "ADD")
 
-    -- Create texture for icon.
     local icon = button:CreateTexture(nil, "ARTWORK")
-    icon:SetAllPoints()
-    icon:SetTexture(Style:GetBarTexturePath())
-    icon:SetVertexColor(0.18, 0.66, 1.0, 0.95)
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", button, "CENTER", 0, 1)
+    icon:SetTexture(MINIMAP_ICON_TEXTURE)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     button.icon = icon
 
-    -- Create font string for label.
-    local label = button:CreateFontString(nil, "OVERLAY")
-    label:SetPoint("CENTER", 0, 0)
-    setFontStringTextSafe(label, "M", 12, "OUTLINE")
-    button.label = label
+    if type(icon.AddMaskTexture) == "function" then
+        local mask = button:CreateMaskTexture()
+        mask:SetSize(20, 20)
+        mask:SetPoint("CENTER", button, "CENTER", 0, 1)
+        mask:SetTexture(MINIMAP_ICON_MASK_TEXTURE, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        icon:AddMaskTexture(mask)
+        button.iconMask = mask
+    end
+
+    local background = button:CreateTexture(nil, "BACKGROUND")
+    background:SetSize(20, 20)
+    background:SetPoint("CENTER", button, "CENTER", 0, 1)
+    background:SetTexture(MINIMAP_BACKGROUND_TEXTURE)
+    background:SetVertexColor(0.18, 0.18, 0.18, 0.85)
+    button.background = background
+
+    local border = button:CreateTexture(nil, "OVERLAY")
+    border:SetSize(53, 53)
+    border:SetPoint("TOPLEFT")
+    border:SetTexture(MINIMAP_BORDER_TEXTURE)
+    button.border = border
 
     -- Handle OnClick script callback.
     button:SetScript("OnClick", function()
         if InCombatLockdown() then
             return
         end
-        self:OpenConfig()
+        self:ToggleConfig()
     end)
 
     -- Handle OnEnter script callback.

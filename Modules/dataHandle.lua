@@ -53,6 +53,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         },
         -- Create table holding primary power bar.
         primaryPower = {
+            enabled = true,
             detached = false,
             width = Util:Clamp(math.floor((width - 2) + 0.5), 80, 600),
             x = 0,

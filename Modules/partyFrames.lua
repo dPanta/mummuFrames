@@ -86,6 +86,7 @@ local POWER_TYPE_MANA = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.Man
 local POWER_TYPE_RUNIC = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.RunicPower) or (type(_G.SPELL_POWER_RUNIC_POWER) ~= "nil" and _G.SPELL_POWER_RUNIC_POWER or 6)
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
+local ROLE_GROUPING_ORDER_ASC = "TANK,HEALER,DAMAGER,NONE"
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -496,6 +497,7 @@ function PartyFrames:OnDisable()
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
     self._lastLiveUnitsToShow = nil
+    ns.activeMummuPartyFrames = {}
     self:StopTestTicker()
     self:SetBlizzardPartyFramesHidden(false)
     if self.container then
@@ -611,7 +613,10 @@ function PartyFrames:CreatePartyFrames()
     header:SetAttribute("showSolo", true)
     header:SetAttribute("groupFilter", nil)
     header:SetAttribute("template", "SecureUnitButtonTemplate")
-    header:SetAttribute("sortMethod", "ROLE")
+    header:SetAttribute("groupBy", "ASSIGNEDROLE")
+    header:SetAttribute("groupingOrder", ROLE_GROUPING_ORDER_ASC)
+    header:SetAttribute("sortMethod", "INDEX")
+    header:SetAttribute("sortDir", "ASC")
     header:SetAttribute("point", "TOP")
     header:SetAttribute("xOffset", 0)
     header:SetAttribute("yOffset", -2)
@@ -669,6 +674,7 @@ function PartyFrames:BuildFrameVisuals(frame)
 
     frame:SetFrameStrata("LOW")
     frame:SetClampedToScreen(true)
+    frame._mummuIsGroupFrame = true
     frame._mummuIsPartyFrame = true
 
     if type(frame.RegisterForClicks) == "function" then
@@ -1790,6 +1796,7 @@ function PartyFrames:RefreshAll(forceLayout)
     if not previewMode and (not addonEnabled or partyConfig.enabled == false) then
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
+        ns.activeMummuPartyFrames = {}
         self:StopTestTicker()
         if inCombat then
             self.pendingLayoutRefresh = true
@@ -1952,6 +1959,10 @@ function PartyFrames:RefreshAll(forceLayout)
         self.header:SetAttribute("showPlayer", showPlayer)
         self.header:SetAttribute("showSolo", showSelfWithoutGroup)
         self.header:SetAttribute("groupFilter", nil)
+        self.header:SetAttribute("groupBy", "ASSIGNEDROLE")
+        self.header:SetAttribute("groupingOrder", ROLE_GROUPING_ORDER_ASC)
+        self.header:SetAttribute("sortMethod", "INDEX")
+        self.header:SetAttribute("sortDir", "ASC")
 
         -- Determine container size from live party count (up to MAX_PARTY_TEST_FRAMES).
         local liveCount = livePartyMemberCount
@@ -2086,7 +2097,7 @@ function PartyFrames:RefreshAll(forceLayout)
     -- Publish active frame list so AuraHandle can find all mummu frames,
     -- including the solo player frame. Then rebuild the shared unit map
     -- immediately so UNIT_AURA dispatches hit the fast path from the start.
-    ns.activeMummuGroupFrames = activeFrames
+    ns.activeMummuPartyFrames = activeFrames
     if ns.AuraHandle and type(ns.AuraHandle.RebuildSharedUnitFrameMap) == "function" then
         -- In combat include hidden stand-by frames so UNIT_AURA dispatch can
         -- still resolve units during secure-header roster transitions.

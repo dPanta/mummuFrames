@@ -95,6 +95,8 @@ local TEST_NAME_BY_UNIT = {
     focustarget = L.UNIT_TEST_FOCUSTARGET or "Focus Target",
 }
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
+local UNIT_AURA_BUTTON_GAP = 2
+local UNIT_AURA_MAX_BUTTONS = 16
 local function roundToNearestInteger(value)
     return math.floor(value + 0.5)
 end
@@ -128,6 +130,99 @@ local PLAYER_BREATH_UPDATE_INTERVAL = 0.1
 local BREATH_POWER_COLOR = { 0.00, 0.50, 1.00 }
 local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
+local getSafeNumericValue
+
+local function getAuraAnchorGrowth(anchorPoint)
+    local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPLEFT"
+    if string.find(resolvedAnchor, "RIGHT", 1, true) then
+        return string.gsub(resolvedAnchor, "RIGHT", "LEFT"), -UNIT_AURA_BUTTON_GAP
+    end
+    if string.find(resolvedAnchor, "LEFT", 1, true) then
+        return string.gsub(resolvedAnchor, "LEFT", "RIGHT"), UNIT_AURA_BUTTON_GAP
+    end
+    return resolvedAnchor, UNIT_AURA_BUTTON_GAP
+end
+
+local function hideAuraButton(button)
+    if not button then
+        return
+    end
+    if button.Cooldown and type(button.Cooldown.Hide) == "function" then
+        button.Cooldown:Hide()
+    end
+    button:Hide()
+end
+
+local function hideAuraButtonPool(buttons)
+    if type(buttons) ~= "table" then
+        return
+    end
+    for index = 1, #buttons do
+        hideAuraButton(buttons[index])
+    end
+end
+
+local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
+    local entries = {}
+    local limit = Util:Clamp(getSafeNumericValue(maxIcons, 0) or 0, 0, UNIT_AURA_MAX_BUTTONS)
+    if type(unitToken) ~= "string" or unitToken == "" or limit <= 0 then
+        return entries
+    end
+    if not (C_UnitAuras and type(C_UnitAuras.GetAuraDataByIndex) == "function") then
+        return entries
+    end
+
+    for index = 1, SPELL_AURA_SCAN_MAX do
+        local auraData = nil
+        local indexIsSecret = false
+        if AuraSafety and type(AuraSafety.IsAuraIndexSecret) == "function" then
+            indexIsSecret = AuraSafety:IsAuraIndexSecret(unitToken, index, filter) == true
+        end
+
+        if not indexIsSecret then
+            if AuraSafety and type(AuraSafety.GetAuraDataByIndexSafe) == "function" then
+                auraData = AuraSafety:GetAuraDataByIndexSafe(unitToken, index, filter)
+            else
+                auraData = C_UnitAuras.GetAuraDataByIndex(unitToken, index, filter)
+            end
+        end
+
+        if auraData then
+            entries[#entries + 1] = {
+                icon = auraData.icon or DEFAULT_AURA_TEXTURE,
+                applications = auraData.applications or auraData.count or 0,
+                expirationTime = auraData.expirationTime,
+                duration = auraData.duration,
+            }
+            if #entries >= limit then
+                break
+            end
+        elseif not indexIsSecret then
+            break
+        end
+    end
+
+    return entries
+end
+
+local function getPreviewAuraEntries(maxIcons, isBuff)
+    local entries = {}
+    local limit = Util:Clamp(getSafeNumericValue(maxIcons, 0) or 0, 0, UNIT_AURA_MAX_BUTTONS)
+    if limit <= 0 then
+        return entries
+    end
+
+    local total = math.min(limit, isBuff and 2 or 3)
+    for index = 1, total do
+        entries[#entries + 1] = {
+            icon = DEFAULT_AURA_TEXTURE,
+            applications = (isBuff and index == 1) and 2 or 0,
+            expirationTime = nil,
+            duration = nil,
+        }
+    end
+    return entries
+end
 
 -- Create table holding castbar units.
 local CASTBAR_UNITS = {
@@ -430,7 +525,15 @@ local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testM
 end
 
 local function normalizeSpellID(value)
-    local numeric = tonumber(value)
+    local numeric = nil
+    if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+        numeric = AuraSafety:SafeNumber(value, nil)
+    else
+        local ok, coerced = pcall(tonumber, value)
+        if ok and type(coerced) == "number" then
+            numeric = coerced
+        end
+    end
     if type(numeric) ~= "number" then
         return nil
     end
@@ -1073,7 +1176,7 @@ function UnitFrames:OnEditModeEnter()
             if frame.EditModeSelection then
                 frame.EditModeSelection:Show()
             end
-            if frame.unitToken == "player" and frame.PowerBar and frame.PowerBar._detached then
+            if frame.unitToken == "player" and frame.PowerBar and frame.PowerBar._enabled and frame.PowerBar._detached then
                 self:EnsurePrimaryPowerBarEditModeSelection(frame)
                 frame.PowerBar:SetMovable(true)
                 if frame.PowerBar.EditModeSelection then
@@ -1518,6 +1621,165 @@ function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
 end
 
+function UnitFrames:EnsureAuraButton(frame, auraType, index)
+    if not frame then
+        return nil
+    end
+
+    local poolKey = auraType == "debuff" and "DebuffButtons" or "BuffButtons"
+    frame[poolKey] = frame[poolKey] or {}
+    local buttons = frame[poolKey]
+    if buttons[index] then
+        return buttons[index]
+    end
+
+    local button = CreateFrame("Frame", nil, frame)
+    button:SetFrameStrata("MEDIUM")
+    button:SetFrameLevel(frame:GetFrameLevel() + 15)
+
+    button.Icon = button:CreateTexture(nil, "ARTWORK")
+    button.Icon:SetAllPoints()
+    button.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    button.Icon:SetTexture(DEFAULT_AURA_TEXTURE)
+
+    button.CountText = button:CreateFontString(nil, "OVERLAY")
+    button.CountText:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+    button.CountText:SetJustifyH("RIGHT")
+
+    button.Cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+    button.Cooldown:SetAllPoints()
+    if type(button.Cooldown.SetDrawBling) == "function" then
+        button.Cooldown:SetDrawBling(false)
+    end
+    if type(button.Cooldown.SetHideCountdownNumbers) == "function" then
+        button.Cooldown:SetHideCountdownNumbers(true)
+    end
+    button.Cooldown:Hide()
+    button:Hide()
+
+    buttons[index] = button
+    return button
+end
+
+function UnitFrames:EnsureAuraStorage(frame)
+    if not frame then
+        return
+    end
+    frame.BuffButtons = frame.BuffButtons or {}
+    frame.DebuffButtons = frame.DebuffButtons or {}
+end
+
+function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
+    if not frame then
+        return
+    end
+
+    local buttons = auraType == "debuff" and frame.DebuffButtons or frame.BuffButtons
+    buttons = buttons or {}
+    local enabled = config and config.enabled ~= false
+    if enabled ~= true or type(entries) ~= "table" or #entries == 0 then
+        hideAuraButtonPool(buttons)
+        return
+    end
+
+    local anchorPoint = (config and config.anchorPoint) or (auraType == "debuff" and "TOPRIGHT" or "TOPLEFT")
+    local relativePoint = (config and config.relativePoint) or (auraType == "debuff" and "BOTTOMRIGHT" or "BOTTOMLEFT")
+    local offsetX = tonumber(config and config.x) or 0
+    local offsetY = tonumber(config and config.y) or (auraType == "debuff" and -4 or -4)
+    local iconSize = tonumber(config and config.size) or 18
+    local scale = tonumber(config and config.scale) or 1
+
+    iconSize = Util:Clamp(iconSize * scale, 8, 64)
+    if Style:IsPixelPerfectEnabled() then
+        iconSize = Style:Snap(iconSize)
+        offsetX = Style:Snap(offsetX)
+        offsetY = Style:Snap(offsetY)
+    else
+        iconSize = math.floor(iconSize + 0.5)
+        offsetX = math.floor(offsetX + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    local previousPoint, gap = getAuraAnchorGrowth(anchorPoint)
+    for index = 1, #entries do
+        local entry = entries[index]
+        local button = self:EnsureAuraButton(frame, auraType, index)
+        local previousButton = buttons[index - 1]
+        button:SetSize(iconSize, iconSize)
+        button:ClearAllPoints()
+        if previousButton then
+            button:SetPoint(anchorPoint, previousButton, previousPoint, gap, 0)
+        else
+            button:SetPoint(anchorPoint, frame, relativePoint, offsetX, offsetY)
+        end
+
+        button.Icon:SetTexture(entry.icon or DEFAULT_AURA_TEXTURE)
+        Style:ApplyFont(button.CountText, math.max(6, math.floor((iconSize * 0.52) + 0.5)), "OUTLINE")
+        if (entry.applications or 0) > 1 then
+            button.CountText:SetText(tostring(entry.applications))
+            button.CountText:Show()
+        else
+            button.CountText:SetText("")
+            button.CountText:Hide()
+        end
+
+        if button.Cooldown then
+            local duration = tonumber(entry.duration) or 0
+            local expirationTime = tonumber(entry.expirationTime) or 0
+            if duration > 0 and expirationTime > 0 and type(button.Cooldown.SetCooldown) == "function" then
+                local startTime = expirationTime - duration
+                button.Cooldown:SetCooldown(startTime, duration)
+                button.Cooldown:Show()
+            else
+                button.Cooldown:Hide()
+            end
+        end
+
+        button:Show()
+    end
+
+    for index = #entries + 1, #buttons do
+        hideAuraButton(buttons[index])
+    end
+end
+
+function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
+    if not frame or not self.dataHandle then
+        return
+    end
+
+    self:EnsureAuraStorage(frame)
+
+    local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+    local auraConfig = unitConfig and unitConfig.aura or nil
+    local buffsConfig = auraConfig and auraConfig.buffs or nil
+    local debuffsConfig = auraConfig and auraConfig.debuffs or nil
+    local aurasEnabled = auraConfig == nil or auraConfig.enabled ~= false
+    if not aurasEnabled then
+        hideAuraButtonPool(frame.BuffButtons)
+        hideAuraButtonPool(frame.DebuffButtons)
+        return
+    end
+
+    local buffEntries = {}
+    local debuffEntries = {}
+    if previewMode then
+        if buffsConfig == nil or buffsConfig.enabled ~= false then
+            buffEntries = getPreviewAuraEntries((buffsConfig and buffsConfig.max) or 8, true)
+        end
+        debuffEntries = getPreviewAuraEntries((debuffsConfig and debuffsConfig.max) or 8, false)
+    elseif exists then
+        if buffsConfig == nil or buffsConfig.enabled ~= false then
+            local buffFilter = (buffsConfig and buffsConfig.source == "self") and "HELPFUL|PLAYER" or "HELPFUL"
+            buffEntries = gatherUnitAuraEntries(unitToken, buffFilter, (buffsConfig and buffsConfig.max) or 8)
+        end
+        debuffEntries = gatherUnitAuraEntries(unitToken, "HARMFUL", (debuffsConfig and debuffsConfig.max) or 8)
+    end
+
+    self:RefreshAuraStrip(frame, "buff", buffEntries, buffsConfig)
+    self:RefreshAuraStrip(frame, "debuff", debuffEntries, debuffsConfig)
+end
+
 -- Create unit frame.
 function UnitFrames:CreateUnitFrame(unitToken)
     if self.frames[unitToken] then
@@ -1536,6 +1798,7 @@ function UnitFrames:CreateUnitFrame(unitToken)
     frame._mummuVisibilityDriverExpr = nil
     frame._mummuVisibilityDriverDesired = nil
     frame._mummuVisibilityDriverDesiredExpr = nil
+    self:EnsureAuraStorage(frame)
     self.frames[unitToken] = frame
     self:EnsureEditModeSelection(frame)
     return frame
@@ -1774,6 +2037,8 @@ function UnitFrames:HideAll()
             if frame.TertiaryPowerBar then
                 hideTertiaryPowerBar(frame.TertiaryPowerBar)
             end
+            hideAuraButtonPool(frame.BuffButtons)
+            hideAuraButtonPool(frame.DebuffButtons)
         end
     end
 end
@@ -1851,7 +2116,18 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
         frame.StatusIcons.Combat:Show()
     end
 
-    frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
+frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
+end
+
+-- Hide primary power bar.
+local function hidePrimaryPowerBar(bar)
+    if not bar then
+        return
+    end
+    if bar.EditModeSelection then
+        bar.EditModeSelection:Hide()
+    end
+    bar:Hide()
 end
 
 -- Hide secondary power bar.
@@ -2017,7 +2293,7 @@ local function getRunePowerState()
 end
 
 -- Return safe numeric value.
-local function getSafeNumericValue(value, fallback)
+function getSafeNumericValue(value, fallback)
     if type(value) == "number" then
         local okString, asString = pcall(tostring, value)
         if okString and type(asString) == "string" then
@@ -2930,6 +3206,13 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         if options.tertiaryPower and frame.TertiaryPowerBar then
             hideTertiaryPowerBar(frame.TertiaryPowerBar)
         end
+        if options.vitals and frame.PowerBar then
+            hidePrimaryPowerBar(frame.PowerBar)
+        end
+        if options.auras then
+            hideAuraButtonPool(frame.BuffButtons)
+            hideAuraButtonPool(frame.DebuffButtons)
+        end
         if options.visibility then
             self:SetFrameVisibility(frame, false)
         end
@@ -2952,6 +3235,13 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
         if options.tertiaryPower and frame.TertiaryPowerBar then
             hideTertiaryPowerBar(frame.TertiaryPowerBar)
+        end
+        if options.vitals and frame.PowerBar then
+            hidePrimaryPowerBar(frame.PowerBar)
+        end
+        if options.auras then
+            hideAuraButtonPool(frame.BuffButtons)
+            hideAuraButtonPool(frame.DebuffButtons)
         end
         self:SetFrameVisibility(frame, false)
         return
@@ -2994,10 +3284,15 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             powerR, powerG, powerB = resolvePowerColor(unitToken, exists)
         end
         frame.HealthBar:SetStatusBarColor(healthR, healthG, healthB, 1)
-        frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
 
         setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
-        setStatusBarValueSafe(frame.PowerBar, power, maxPower)
+        if frame.PowerBar and frame.PowerBar._enabled ~= false then
+            frame.PowerBar:SetStatusBarColor(powerR, powerG, powerB, 1)
+            setStatusBarValueSafe(frame.PowerBar, power, maxPower)
+            frame.PowerBar:Show()
+        elseif frame.PowerBar then
+            hidePrimaryPowerBar(frame.PowerBar)
+        end
         if unitToken == "player" then
             self:UpdatePlayerBreathTicker(frame, exists, previewMode, breathState)
         end
@@ -3040,6 +3335,9 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
     end
     if options.castbar and CASTBAR_UNITS[unitToken] then
         self:RefreshCastBar(frame, unitToken, exists, previewMode)
+    end
+    if options.auras then
+        self:RefreshUnitAuras(frame, unitToken, exists, previewMode)
     end
     if options.visibility then
         self:SetFrameVisibility(frame, true)
