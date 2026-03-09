@@ -6,6 +6,7 @@ ignore:
   - .git
   - .github
   - .vscode
+  - .claude
   - mummuFrames.code-workspace
   - scripts
   - LICENSE

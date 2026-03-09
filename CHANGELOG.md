@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.1 - 2026-03-09
+- Git Cleanup
+
 ## 1.6.0 - 2026-03-09
 - Brightened the dark-mode health bar backing while keeping the darker primary power backing unchanged.
 - Raised the secondary power size limit to `60` and made detached secondary power rows auto-expand their width so larger icons can render correctly.
