@@ -64,7 +64,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             enabled = true,
             detached = false,
             size = 16,
-            width = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), 16 * 8), 80, 300),
+            width = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), 16 * 8), 80, 600),
             x = 0,
             y = 0,
         },

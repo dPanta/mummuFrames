@@ -4276,13 +4276,27 @@ function Configuration:BuildUnitPage(page, unitToken)
             unitToken .. "SecondaryPowerSize",
             L.CONFIG_UNIT_SECONDARY_POWER_SIZE or "Secondary power size",
             8,
-            40,
+            60,
             1,
             secondaryPowerDetach
         )
         -- Resolve value label.
         self:BindNumericControl(secondaryPowerSize, function(value)
-            dataHandle:SetUnitConfig(unitToken, "secondaryPower.size", math.floor((value or 0) + 0.5))
+            local normalizedSize = math.floor((value or 0) + 0.5)
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.size", normalizedSize)
+
+            -- Keep detached icon rows wide enough for larger icon sizes.
+            local requiredWidth = Util:Clamp(normalizedSize * 8, 80, 600)
+            local currentConfig = dataHandle:GetUnitConfig(unitToken)
+            local currentSecondaryPowerConfig = currentConfig and currentConfig.secondaryPower or nil
+            local currentWidth = tonumber(currentSecondaryPowerConfig and currentSecondaryPowerConfig.width) or 0
+            if currentWidth < requiredWidth then
+                dataHandle:SetUnitConfig(unitToken, "secondaryPower.width", requiredWidth)
+                if secondaryPowerWidth then
+                    self:SetNumericControlValue(secondaryPowerWidth, requiredWidth)
+                end
+            end
+
             self:RequestUnitFrameRefresh()
         end)
 
@@ -4822,13 +4836,15 @@ function Configuration:RefreshConfigWidgets()
                 self:SetNumericControlValue(unitWidgets.secondaryPowerSize, secondaryPowerConfig.size or 16)
             end
             if unitWidgets.secondaryPowerWidth then
-                local secondarySize = Util:Clamp(math.floor((tonumber(secondaryPowerConfig.size) or 16) + 0.5), 8, 40)
+                local secondarySize = Util:Clamp(math.floor((tonumber(secondaryPowerConfig.size) or 16) + 0.5), 8, 60)
                 local defaultSecondaryWidth = Util:Clamp(
                     math.max(math.floor((baseUnitWidth * 0.75) + 0.5), secondarySize * 8),
                     80,
-                    300
+                    600
                 )
-                self:SetNumericControlValue(unitWidgets.secondaryPowerWidth, secondaryPowerConfig.width or defaultSecondaryWidth)
+                local configuredSecondaryWidth = tonumber(secondaryPowerConfig.width) or defaultSecondaryWidth
+                local effectiveSecondaryWidth = Util:Clamp(math.max(configuredSecondaryWidth, secondarySize * 8), 80, 600)
+                self:SetNumericControlValue(unitWidgets.secondaryPowerWidth, effectiveSecondaryWidth)
             end
             local tertiaryPowerConfig = unitConfig.tertiaryPower or {}
             if unitWidgets.tertiaryPowerEnabled then

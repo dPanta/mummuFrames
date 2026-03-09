@@ -24,6 +24,7 @@ local UnitFrames = ns.Object:Extend()
 ---@field powerType number?
 ---@field maxIcons number
 ---@field texture string
+---@field textureBySpecID table<number, string>?
 ---@field usesRuneCooldownAPI boolean?
 ---@field powerCap number?
 ---@field auraSpellID number?
@@ -122,10 +123,13 @@ local TARGET_OUT_OF_RANGE_ALPHA = 0.55
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
+local BLOOD_SPEC_ID = 250
+local FROST_DK_SPEC_ID = 251
+local UNHOLY_SPEC_ID = 252
 local IRONFUR_SPELL_ID = 192081
 local GUARDIAN_SPEC_ID = 104
 local BREWMASTER_SPEC_ID = 268
-local ELEMENTAL_SPEC_ID = 262
+local WINDWALKER_SPEC_ID = 269
 local ENHANCEMENT_SPEC_ID = 263
 local MAELSTROM_WEAPON_SPELL_ID = 344179
 local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
@@ -313,11 +317,20 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("Chi", "SPELL_POWER_CHI", 12),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "monk_chi.png",
+        -- Only Windwalker displays Chi as a secondary resource bar.
+        allowedSpecIDs = {
+            [WINDWALKER_SPEC_ID] = true,
+        },
     },
     DEATHKNIGHT = {
         powerType = resolvePowerTypeConstant("Runes", "SPELL_POWER_RUNES", 5),
         maxIcons = 6,
-        texture = SECONDARY_POWER_ICON_BASE .. "dk_runes.png",
+        texture = SECONDARY_POWER_ICON_BASE .. "dk_runes_blood.png",
+        textureBySpecID = {
+            [BLOOD_SPEC_ID] = SECONDARY_POWER_ICON_BASE .. "dk_runes_blood.png",
+            [FROST_DK_SPEC_ID] = SECONDARY_POWER_ICON_BASE .. "dk_runes_frost.png",
+            [UNHOLY_SPEC_ID] = SECONDARY_POWER_ICON_BASE .. "dk_runes_unholy.png",
+        },
         usesRuneCooldownAPI = true,
     },
     ROGUE = {
@@ -359,9 +372,8 @@ local SECONDARY_POWER_BY_CLASS = {
         displayMaxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_blue.png",
         overflowTexture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_red.png",
-        -- Only these specs display Maelstrom Weapon stacks as a resource bar.
+        -- Only Enhancement displays Maelstrom Weapon stacks as a resource bar.
         allowedSpecIDs = {
-            [ELEMENTAL_SPEC_ID] = true,
             [ENHANCEMENT_SPEC_ID] = true,
         },
     },
@@ -650,6 +662,27 @@ local function isSecondaryResourceSupportedForSpec(resource, specID)
     end
 
     return specID ~= nil and allowedSpecIDs[specID] == true
+end
+
+-- Resolve the icon texture used by one secondary-power resource definition.
+local function getSecondaryPowerTexturePath(resource, specID)
+    if type(resource) ~= "table" then
+        return DEFAULT_AURA_TEXTURE
+    end
+
+    local textureBySpecID = resource.textureBySpecID
+    if type(textureBySpecID) == "table" and type(specID) == "number" then
+        local specTexture = textureBySpecID[specID]
+        if type(specTexture) == "string" and specTexture ~= "" then
+            return specTexture
+        end
+    end
+
+    if type(resource.texture) == "string" and resource.texture ~= "" then
+        return resource.texture
+    end
+
+    return DEFAULT_AURA_TEXTURE
 end
 
 -- Return whether player secondary power should refresh from aura updates.
@@ -2773,7 +2806,7 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         startX = 0
     end
 
-    local texturePath = resource.texture or DEFAULT_AURA_TEXTURE
+    local texturePath = getSecondaryPowerTexturePath(resource, specID)
     local overflowTexturePath = resource.overflowTexture
     for i = 1, #bar.Icons do
         local icon = bar.Icons[i]

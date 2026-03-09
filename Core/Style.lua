@@ -16,7 +16,8 @@ local lsmCallbacksRegistered = false
 Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
 Style.DARK_MODE_GRANITE_COLOR = { 0.19, 0.20, 0.22, 0.95 }
-Style.DARK_MODE_BAR_BACKGROUND_COLOR = { 0.72, 0.50, 0.51, 0.55 }
+Style.DARK_MODE_HEALTH_BAR_BACKGROUND_COLOR = { 0.90, 0.72, 0.73, 0.78 }
+Style.DARK_MODE_PRIMARY_POWER_BAR_BACKGROUND_COLOR = { 0.72, 0.50, 0.51, 0.55 }
 local DEFAULT_STATUS_BAR_BACKGROUND_COLOR = { 0.00, 0.00, 0.00, 0.55 }
 
 -- Normalize media paths so cache lookups ignore slash and case differences.
@@ -498,11 +499,18 @@ end
 
 -- Return the background tint for a status bar role.
 local function getStatusBarBackingColor(isDarkModeEnabled, role)
-    if isDarkModeEnabled and (role == "health" or role == "primaryPower") then
-        return Style.DARK_MODE_BAR_BACKGROUND_COLOR[1],
-            Style.DARK_MODE_BAR_BACKGROUND_COLOR[2],
-            Style.DARK_MODE_BAR_BACKGROUND_COLOR[3],
-            Style.DARK_MODE_BAR_BACKGROUND_COLOR[4]
+    if isDarkModeEnabled and role == "health" then
+        return Style.DARK_MODE_HEALTH_BAR_BACKGROUND_COLOR[1],
+            Style.DARK_MODE_HEALTH_BAR_BACKGROUND_COLOR[2],
+            Style.DARK_MODE_HEALTH_BAR_BACKGROUND_COLOR[3],
+            Style.DARK_MODE_HEALTH_BAR_BACKGROUND_COLOR[4]
+    end
+
+    if isDarkModeEnabled and role == "primaryPower" then
+        return Style.DARK_MODE_PRIMARY_POWER_BAR_BACKGROUND_COLOR[1],
+            Style.DARK_MODE_PRIMARY_POWER_BAR_BACKGROUND_COLOR[2],
+            Style.DARK_MODE_PRIMARY_POWER_BAR_BACKGROUND_COLOR[3],
+            Style.DARK_MODE_PRIMARY_POWER_BAR_BACKGROUND_COLOR[4]
     end
 
     return DEFAULT_STATUS_BAR_BACKGROUND_COLOR[1],

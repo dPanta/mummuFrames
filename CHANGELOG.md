@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0 - 2026-03-09
+- Brightened the dark-mode health bar backing while keeping the darker primary power backing unchanged.
+- Raised the secondary power size limit to `60` and made detached secondary power rows auto-expand their width so larger icons can render correctly.
+- Added specialization-specific DK rune icons for the secondary power bar using the addon icon set for Blood, Frost, and Unholy.
+- Restricted monk and shaman secondary resources to the specs that actually use them, leaving Chi to Windwalker and Maelstrom Weapon to Enhancement.
+- Refreshed several secondary resource icon assets with higher-resolution `50x50` art for cleaner scaling.
+
 ## 1.5.0 - 2026-03-09
 - Added a party layout setting with proper horizontal secure-header growth for live party frames.
 - Hardened party role sorting so headers re-sort on role assignment changes and preview/test ordering mirrors the live tank, healer, dps flow.

@@ -800,9 +800,12 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local spEnabled = unitToken == "player" and secondaryConfig.enabled ~= false
         local spDetached = secondaryConfig.detached == true
         local defaultSpSize = math.floor((fontSize * 1.35) + 0.5)
-        local spHeight = Util:Clamp(math.floor((tonumber(secondaryConfig.size) or defaultSpSize) + 0.5), 8, 40)
-        local defaultSpWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 300)
-        local spWidth = Util:Clamp(tonumber(secondaryConfig.width) or defaultSpWidth, 80, 600)
+        local spHeight = Util:Clamp(math.floor((tonumber(secondaryConfig.size) or defaultSpSize) + 0.5), 8, 60)
+        local defaultSpWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 600)
+        local configuredSpWidth = tonumber(secondaryConfig.width) or defaultSpWidth
+        -- Preserve enough horizontal space for the chosen icon size.
+        local minSpWidth = Util:Clamp(spHeight * 8, 80, 600)
+        local spWidth = Util:Clamp(math.max(configuredSpWidth, minSpWidth), 80, 600)
 
         if pixelPerfect then
             spHeight = Style:Snap(spHeight)
