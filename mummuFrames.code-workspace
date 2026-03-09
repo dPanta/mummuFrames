@@ -98,7 +98,8 @@
 			"DEBUFF_SYMBOL_POISON",
 			"CVarCallbackRegistry",
 			"CooldownFrame_Set",
-			"TextureKitConstants"
+			"TextureKitConstants",
+			"GetIconForRole"
 		],
 		"Lua.type.weakUnionCheck": true
 	}

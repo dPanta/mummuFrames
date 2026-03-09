@@ -133,6 +133,62 @@ local function registerFrameForClickCasting(frame)
     return true
 end
 
+-- Create an optional overlay border that can be toggled for detached bar elements.
+local function ensureDetachedBarBorder(frame)
+    if not frame or frame.DetachedBarBorder then
+        return
+    end
+
+    local border = {}
+
+    border.top = frame:CreateTexture(nil, "OVERLAY")
+    border.top:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    border.top:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    border.top:SetColorTexture(0, 0, 0, 1)
+    border.top:Hide()
+
+    border.bottom = frame:CreateTexture(nil, "OVERLAY")
+    border.bottom:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+    border.bottom:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+    border.bottom:SetColorTexture(0, 0, 0, 1)
+    border.bottom:Hide()
+
+    border.left = frame:CreateTexture(nil, "OVERLAY")
+    border.left:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    border.left:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+    border.left:SetColorTexture(0, 0, 0, 1)
+    border.left:Hide()
+
+    border.right = frame:CreateTexture(nil, "OVERLAY")
+    border.right:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    border.right:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+    border.right:SetColorTexture(0, 0, 0, 1)
+    border.right:Hide()
+
+    frame.DetachedBarBorder = border
+end
+
+-- Update detached bar border thickness and visibility.
+local function updateDetachedBarBorder(frame, shown, borderSize)
+    local border = frame and frame.DetachedBarBorder or nil
+    if not border then
+        return
+    end
+
+    local size = tonumber(borderSize) or 1
+    if size <= 0 then
+        size = 1
+    end
+    border.top:SetHeight(size)
+    border.bottom:SetHeight(size)
+    border.left:SetWidth(size)
+    border.right:SetWidth(size)
+    border.top:SetShown(shown == true)
+    border.bottom:SetShown(shown == true)
+    border.left:SetShown(shown == true)
+    border.right:SetShown(shown == true)
+end
+
 -- Initialize global frames state.
 function GlobalFrames:Constructor()
     self.addon = nil
@@ -481,6 +537,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.Background = Style:CreateBackground(frame, 0.06, 0.06, 0.07, 0.9)
     frame.HealthBar = self:CreateStatusBar(frame, "health")
     frame.PowerBar = self:CreateStatusBar(frame, "primaryPower")
+    ensureDetachedBarBorder(frame.PowerBar)
 
     -- Create text font string.
     frame.NameText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
@@ -518,6 +575,7 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
         self:CreatePlayerStatusIcons(frame)
         self:CreateSecondaryPowerBar(frame)
         self:CreateTertiaryPowerBar(frame)
+        ensureDetachedBarBorder(frame.TertiaryPowerBar)
     end
 
     self:ApplyStyle(frame, unitToken)
@@ -666,6 +724,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
     end
     frame.PowerBar._detached = primaryPowerDetached
     frame.PowerBar._enabled = primaryPowerEnabled
+    updateDetachedBarBorder(frame.PowerBar, primaryPowerDetached and primaryPowerEnabled, border)
 
     if allowLayout then
         frame.NameText:ClearAllPoints()
@@ -825,6 +884,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
         frame.TertiaryPowerBar._enabled = tpEnabled
         frame.TertiaryPowerBar._detached = tpDetached
+        updateDetachedBarBorder(frame.TertiaryPowerBar, tpDetached and tpEnabled, border)
     end
 
     if frame.CastBar then

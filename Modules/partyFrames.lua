@@ -62,6 +62,11 @@ local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
 local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
 local SUMMON_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\summon.png"
+local ROLE_ICON_ATLAS_BY_ROLE = {
+    TANK = "UI-LFG-RoleIcon-Tank",
+    HEALER = "UI-LFG-RoleIcon-Healer",
+    DAMAGER = "UI-LFG-RoleIcon-DPS",
+}
 local ROLE_SORT_PRIORITY = {
     TANK = 1,
     HEALER = 2,
@@ -74,6 +79,13 @@ local TEST_NAME_BY_UNIT = {
     party2 = "Party Member 2",
     party3 = "Party Member 3",
     party4 = "Party Member 4",
+}
+-- Synthetic preview roles so edit/test mode mirrors the live role bucket order.
+local PREVIEW_ROLE_BY_UNIT = {
+    party1 = "TANK",
+    party2 = "HEALER",
+    party3 = "DAMAGER",
+    party4 = "NONE",
 }
 local HEALER_SPEC_BY_CLASS = {
     PRIEST = { [256] = true, [257] = true }, -- Discipline / Holy
@@ -315,6 +327,42 @@ local function normalizePartyDisplayedUnit(unitToken)
         return unitToken
     end
     return nil
+end
+
+local function normalizeRoleToken(roleToken)
+    if roleToken == "TANK" or roleToken == "HEALER" or roleToken == "DAMAGER" then
+        return roleToken
+    end
+    return "NONE"
+end
+
+-- Resolve the default Blizzard role atlas for a role token.
+local function resolveRoleIconAtlas(roleToken)
+    local normalizedRole = normalizeRoleToken(roleToken)
+    if normalizedRole == "NONE" then
+        return nil
+    end
+
+    if type(GetIconForRole) == "function" then
+        local atlas = GetIconForRole(normalizedRole, false)
+        if type(atlas) == "string" and atlas ~= "" then
+            return atlas
+        end
+    end
+
+    return ROLE_ICON_ATLAS_BY_ROLE[normalizedRole]
+end
+
+local function copyUnitList(units)
+    if type(units) ~= "table" then
+        return {}
+    end
+
+    local copy = {}
+    for i = 1, #units do
+        copy[i] = units[i]
+    end
+    return copy
 end
 
 -- Return whether the unit currently has a pending summon.
@@ -596,25 +644,7 @@ function PartyFrames:CreatePartyFrames()
     -- restricted attribute code, so unit assignment is never done from normal Lua in combat.
     local header = CreateFrame("Frame", "mummuFramesPartyHeader", container, "SecureGroupHeaderTemplate")
     header:SetFrameStrata("LOW")
-    -- Prefer explicit party/raid toggles for secure headers. This is the same
-    -- model Blizzard-party headers use and is more reliable across home/instance
-    -- group categories than hard-coded groupFilter tokens.
-    header:SetAttribute("showParty", true)
-    header:SetAttribute("showRaid", false)
-    header:SetAttribute("showPlayer", true)
-    header:SetAttribute("showSolo", true)
-    header:SetAttribute("groupFilter", nil)
     header:SetAttribute("template", "SecureUnitButtonTemplate")
-    header:SetAttribute("groupBy", "ASSIGNEDROLE")
-    header:SetAttribute("groupingOrder", ROLE_GROUPING_ORDER_ASC)
-    header:SetAttribute("sortMethod", "INDEX")
-    header:SetAttribute("sortDir", "ASC")
-    header:SetAttribute("point", "TOP")
-    header:SetAttribute("xOffset", 0)
-    header:SetAttribute("yOffset", -2)
-    header:SetAttribute("frameWidth", 180)
-    header:SetAttribute("frameHeight", 34)
-    header:SetAttribute("maxDisplayed", MAX_PARTY_TEST_FRAMES)
     -- initialConfigFunction runs in the restricted execution environment; only
     -- SetAttribute calls are permitted here.  Click registration and visual
     -- sub-frames are applied in normal Lua by BuildFrameVisuals, called lazily
@@ -625,6 +655,7 @@ function PartyFrames:CreatePartyFrames()
     ]])
     header:SetAllPoints(container)
     self.header = header
+    self:ApplyHeaderConfiguration("vertical", 24, 180, 34, true, true)
 
     -- Separate pool of test frames used exclusively in preview/test mode.
     -- These are plain children of the container, never touched by the secure header.
@@ -657,6 +688,51 @@ function PartyFrames:CreatePartyFrames()
     return container
 end
 
+-- Push layout and sorting attributes into the secure party header.
+function PartyFrames:ApplyHeaderConfiguration(orientation, spacing, width, height, showPlayer, showSelfWithoutGroup)
+    if not self.header then
+        return
+    end
+
+    local layoutOrientation = (orientation == "horizontal") and "horizontal" or "vertical"
+    local growthPoint = "TOP"
+    local xOffset = 0
+    local yOffset = -spacing
+    local columnAnchorPoint = "LEFT"
+
+    if layoutOrientation == "horizontal" then
+        growthPoint = "LEFT"
+        xOffset = spacing
+        yOffset = 0
+        columnAnchorPoint = "TOP"
+    end
+
+    -- Keep the secure header in a single explicit growth axis and let role
+    -- grouping decide the visual order.
+    self.header:SetAttribute("showParty", true)
+    self.header:SetAttribute("showRaid", false)
+    self.header:SetAttribute("showPlayer", showPlayer == true)
+    self.header:SetAttribute("showSolo", showSelfWithoutGroup == true)
+    self.header:SetAttribute("groupFilter", nil)
+    self.header:SetAttribute("roleFilter", nil)
+    self.header:SetAttribute("strictFiltering", false)
+    self.header:SetAttribute("groupBy", "ASSIGNEDROLE")
+    self.header:SetAttribute("groupingOrder", ROLE_GROUPING_ORDER_ASC)
+    self.header:SetAttribute("sortMethod", "INDEX")
+    self.header:SetAttribute("sortDir", "ASC")
+    self.header:SetAttribute("nameList", nil)
+    self.header:SetAttribute("point", growthPoint)
+    self.header:SetAttribute("xOffset", xOffset)
+    self.header:SetAttribute("yOffset", yOffset)
+    self.header:SetAttribute("columnSpacing", 0)
+    self.header:SetAttribute("columnAnchorPoint", columnAnchorPoint)
+    self.header:SetAttribute("unitsPerColumn", MAX_PARTY_TEST_FRAMES)
+    self.header:SetAttribute("maxColumns", 1)
+    self.header:SetAttribute("frameWidth", width)
+    self.header:SetAttribute("frameHeight", height)
+    self.header:SetAttribute("maxDisplayed", MAX_PARTY_TEST_FRAMES)
+end
+
 -- Attach visual sub-frames to a party member button (health bar, power bar, auras, overlays).
 -- Idempotent: safe to call multiple times. Called for both header-managed children and test frames.
 function PartyFrames:BuildFrameVisuals(frame)
@@ -686,6 +762,13 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.NameText:SetJustifyH("LEFT")
     frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.HealthText:SetJustifyH("RIGHT")
+    frame.RoleIconOverlay = CreateFrame("Frame", nil, frame)
+    frame.RoleIconOverlay:SetAllPoints(frame)
+    frame.RoleIconOverlay:SetFrameStrata("DIALOG")
+    frame.RoleIconOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+    frame.RoleIcon = frame.RoleIconOverlay:CreateTexture(nil, "OVERLAY")
+    frame.RoleIcon:SetAlpha(0.95)
+    frame.RoleIcon:Hide()
 
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -801,6 +884,8 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "PLAYER_ROLES_ASSIGNED", self.OnRoleAssignmentChanged)
+    ns.EventRouter:Register(self, "ROLE_CHANGED_INFORM", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
     -- Group unit events are routed centrally by AuraHandle dispatcher.
@@ -874,17 +959,28 @@ function PartyFrames:OnEditModeExit()
     self:RefreshAll(true)
 end
 
--- Handle world/roster/specialization change events; rebuild unit maps with combat awareness.
-function PartyFrames:OnWorldEvent()
+-- Apply one layout-affecting refresh path with combat-safe deferral.
+function PartyFrames:HandleLayoutAffectingChange(reason)
+    local refreshReason = type(reason) == "string" and reason or "world"
     if InCombatLockdown() then
         self.pendingLayoutRefresh = true
         self:RebuildDisplayedUnitMap(true)
-        self:ScheduleMapRebuildSafetyNet("world_combat", true)
+        self:ScheduleMapRebuildSafetyNet(refreshReason .. "_combat", true)
         return
     end
     self:RefreshAll(true)
     self:RebuildDisplayedUnitMap(false)
-    self:ScheduleMapRebuildSafetyNet("world", false)
+    self:ScheduleMapRebuildSafetyNet(refreshReason, false)
+end
+
+-- Handle world/roster/specialization change events; rebuild unit maps with combat awareness.
+function PartyFrames:OnWorldEvent()
+    self:HandleLayoutAffectingChange("world")
+end
+
+-- Re-apply the secure header ordering when party role assignments change.
+function PartyFrames:OnRoleAssignmentChanged()
+    self:HandleLayoutAffectingChange("role_changed")
 end
 
 -- Handle player's current target changing; refresh target highlight.
@@ -1345,9 +1441,10 @@ end
 -- FRAME STYLING & LAYOUT
 -- ============================================================================
 
--- Apply frame styling: dimensions, borders, text insets, power bar height.
+-- Apply frame styling: dimensions, borders, text insets, power bar height,
+-- and optional role-icon spacing.
 -- Deferred to combat-end if called during combat (pendingLayoutRefresh flag).
-function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
+function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRoleIcon)
     if not frame or not partyConfig then
         return
     end
@@ -1376,6 +1473,10 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
     frame:SetSize(width, height)
     local border = pixelPerfect and Style:GetPixelSize() or 1
     local textInset = pixelPerfect and Style:Snap(6) or 6
+    local roleIconSize = math.max(8, math.floor((height * 0.285) + 0.5))
+    if pixelPerfect then
+        roleIconSize = Style:Snap(roleIconSize)
+    end
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
     Style:ApplyStatusBarTexture(frame.PowerBar)
@@ -1401,6 +1502,15 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
         frame.HealthBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -border, -border)
         frame.HealthBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", border, border)
         frame.HealthBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -border, border)
+    end
+
+    if frame.RoleIcon then
+        frame.RoleIcon:ClearAllPoints()
+        frame.RoleIcon:SetPoint("CENTER", frame.HealthBar, "TOPLEFT", border, -border)
+        frame.RoleIcon:SetSize(roleIconSize, roleIconSize)
+        if not showRoleIcon then
+            frame.RoleIcon:Hide()
+        end
     end
 
     frame.NameText:ClearAllPoints()
@@ -1431,6 +1541,32 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar)
     return true
 end
 
+-- Return the player's best-known role token even without a party assignment.
+function PartyFrames:GetPlayerRoleToken()
+    local assignedRole = normalizeRoleToken(
+        type(UnitGroupRolesAssigned) == "function" and UnitGroupRolesAssigned("player") or nil
+    )
+    if assignedRole ~= "NONE" then
+        return assignedRole
+    end
+
+    if type(GetSpecialization) == "function" and type(GetSpecializationRole) == "function" then
+        local currentSpecIndex = GetSpecialization()
+        if type(currentSpecIndex) == "number" then
+            local specRole = normalizeRoleToken(GetSpecializationRole(currentSpecIndex))
+            if specRole ~= "NONE" then
+                return specRole
+            end
+        end
+    end
+
+    if self:ShouldShowPowerBar("player") then
+        return "HEALER"
+    end
+
+    return "DAMAGER"
+end
+
 -- Determine if power bar should be shown for a party unit.
 -- Shows for all Death Knights (runic power) and healer spec members (mana).
 function PartyFrames:ShouldShowPowerBar(unitToken)
@@ -1449,30 +1585,66 @@ function PartyFrames:ShouldShowPowerBar(unitToken)
         return specID and healerSpecs[specID] == true or false
     end
 
-    return UnitGroupRolesAssigned(unitToken) == "HEALER"
+    local assignedRole = type(UnitGroupRolesAssigned) == "function" and UnitGroupRolesAssigned(unitToken) or nil
+    return assignedRole == "HEALER"
+end
+
+-- Return the role token that should be displayed on the frame.
+function PartyFrames:GetDisplayRoleForUnit(unitToken, previewMode, testMode)
+    if previewMode or testMode then
+        return self:GetPreviewRoleForUnit(unitToken)
+    end
+
+    if unitToken == "player" then
+        return self:GetPlayerRoleToken()
+    end
+
+    return normalizeRoleToken(
+        type(UnitGroupRolesAssigned) == "function" and UnitGroupRolesAssigned(unitToken) or nil
+    )
 end
 
 -- Get sort priority value for a given role (for ranking in frame layout).
 function PartyFrames:GetRoleSortPriority(roleToken)
-    local normalized = type(roleToken) == "string" and roleToken or "NONE"
+    local normalized = normalizeRoleToken(roleToken)
     return ROLE_SORT_PRIORITY[normalized] or ROLE_SORT_PRIORITY.NONE
 end
 
--- Sort party unit list in-place by role: tanks first, healers second, dps third, others last.
--- Preserves original order within each role tier.
-function PartyFrames:SortUnitsByRole(unitsToShow)
+-- Return a deterministic preview role for a unit token.
+function PartyFrames:GetPreviewRoleForUnit(unitToken)
+    if unitToken == "player" then
+        return self:GetPlayerRoleToken()
+    end
+
+    return PREVIEW_ROLE_BY_UNIT[unitToken] or "NONE"
+end
+
+-- Return preview units in the same role bucket order as the live header.
+function PartyFrames:BuildPreviewUnitsToShow(showPlayer)
+    local unitsToShow = copyUnitList(showPlayer and TEST_UNITS_WITH_PLAYER or TEST_UNITS_NO_PLAYER)
+    self:SortUnitsByRole(unitsToShow, function(unitToken)
+        return self:GetPreviewRoleForUnit(unitToken)
+    end)
+    return unitsToShow
+end
+
+-- Sort a unit list in-place by role: tanks first, healers second, dps third,
+-- others last. Optional roleResolver lets preview mode inject synthetic roles
+-- while preserving original order within each role tier.
+function PartyFrames:SortUnitsByRole(unitsToShow, roleResolver)
     if type(unitsToShow) ~= "table" or #unitsToShow <= 1 then
         return
     end
 
+    local resolveRole = type(roleResolver) == "function" and roleResolver or nil
     local originalIndexByUnit = {}
     for index = 1, #unitsToShow do
         originalIndexByUnit[unitsToShow[index]] = index
     end
 
     table.sort(unitsToShow, function(a, b)
-        local aRole = UnitGroupRolesAssigned(a)
-        local bRole = UnitGroupRolesAssigned(b)
+        local aRole = normalizeRoleToken(type(resolveRole) == "function" and resolveRole(a) or nil)
+        local bRole = normalizeRoleToken(type(resolveRole) == "function" and resolveRole(b) or nil)
         local aPriority = self:GetRoleSortPriority(aRole)
         local bPriority = self:GetRoleSortPriority(bRole)
         if aPriority ~= bPriority then
@@ -1487,7 +1659,7 @@ end
 -- ============================================================================
 
 -- Refresh visual state of one party member frame: apply style, update vitals,
--- display status icons (disconnected, summon), and update aura visuals.
+-- update role and status icons, and refresh aura visuals.
 -- Supports preview mode (fake data), test mode (periodic animation), and real mode.
 function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, testMode, forceStyle, refreshOptions)
     if not frame then
@@ -1499,12 +1671,19 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     local refreshAuras = refreshOptions.auras == true
 
     local showPowerBar = self:ShouldShowPowerBar(unitToken)
-    local needsStyle = forceStyle == true or frame._mummuStyleApplied ~= true or frame._mummuShowPowerBar ~= showPowerBar
+    local displayRole = self:GetDisplayRoleForUnit(unitToken, previewMode, testMode)
+    local roleIconAtlas = partyConfig.showRoleIcon ~= false and resolveRoleIconAtlas(displayRole) or nil
+    local showRoleIcon = roleIconAtlas ~= nil
+    local needsStyle = forceStyle == true
+        or frame._mummuStyleApplied ~= true
+        or frame._mummuShowPowerBar ~= showPowerBar
+        or frame._mummuShowRoleIcon ~= showRoleIcon
     if needsStyle then
-        local applied = self:ApplyMemberStyle(frame, partyConfig, showPowerBar)
+        local applied = self:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRoleIcon)
         if applied then
             frame._mummuStyleApplied = true
             frame._mummuShowPowerBar = showPowerBar
+            frame._mummuShowRoleIcon = showRoleIcon
         elseif frame._mummuStyleApplied ~= true then
             -- Style never applied (e.g. new frame created in combat lockdown).
             -- FontStrings have no font yet; skip refresh to avoid "Font not set" errors.
@@ -1676,6 +1855,15 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         setStatusBarValueSafe(frame.HealthBar, barHealth, barMaxHealth)
         if showPowerBar then
             setStatusBarValueSafe(frame.PowerBar, barPower, barMaxPower)
+        end
+
+        if frame.RoleIcon then
+            if roleIconAtlas then
+                frame.RoleIcon:SetAtlas(roleIconAtlas, false)
+                frame.RoleIcon:Show()
+            else
+                frame.RoleIcon:Hide()
+            end
         end
 
         frame.NameText:SetText(name)
@@ -1873,7 +2061,7 @@ function PartyFrames:RefreshAll(forceLayout)
         end
         self.header:Hide()
 
-        local unitsToShow = showPlayer and TEST_UNITS_WITH_PLAYER or TEST_UNITS_NO_PLAYER
+        local unitsToShow = self:BuildPreviewUnitsToShow(showPlayer)
         if testMode then
             self:EnsureStaticTestMemberStates(unitsToShow)
             self:EnsureTestTicker()
@@ -1961,27 +2149,14 @@ function PartyFrames:RefreshAll(forceLayout)
     -- Push layout and roster-config into the header's secure attributes.
     -- These updates are safe to call at any time (plain frame attributes on our own frame).
     if shouldApplyLayout and not inCombat then
-        -- Header layout attributes drive child positioning.
-        if orientation == "horizontal" then
-            self.header:SetAttribute("point", "LEFT")
-            self.header:SetAttribute("xOffset", spacing)
-            self.header:SetAttribute("yOffset", 0)
-        else
-            self.header:SetAttribute("point", "TOP")
-            self.header:SetAttribute("xOffset", 0)
-            self.header:SetAttribute("yOffset", -spacing)
-        end
-        self.header:SetAttribute("frameWidth", width)
-        self.header:SetAttribute("frameHeight", height)
-        self.header:SetAttribute("showParty", true)
-        self.header:SetAttribute("showRaid", false)
-        self.header:SetAttribute("showPlayer", showPlayer)
-        self.header:SetAttribute("showSolo", showSelfWithoutGroup)
-        self.header:SetAttribute("groupFilter", nil)
-        self.header:SetAttribute("groupBy", "ASSIGNEDROLE")
-        self.header:SetAttribute("groupingOrder", ROLE_GROUPING_ORDER_ASC)
-        self.header:SetAttribute("sortMethod", "INDEX")
-        self.header:SetAttribute("sortDir", "ASC")
+        self:ApplyHeaderConfiguration(
+            orientation,
+            spacing,
+            width,
+            height,
+            showPlayer,
+            showSelfWithoutGroup
+        )
 
         -- Determine container size from live party count (up to MAX_PARTY_TEST_FRAMES).
         local liveCount = livePartyMemberCount

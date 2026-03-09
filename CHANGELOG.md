@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 - 2026-03-09
+- Added a party layout setting with proper horizontal secure-header growth for live party frames.
+- Hardened party role sorting so headers re-sort on role assignment changes and preview/test ordering mirrors the live tank, healer, dps flow.
+- Added optional party role icons using Blizzard role art, including solo/spec fallback behavior and test-mode support.
+- Tuned party role icon placement and layering so the icon anchors at the health bar corner without shifting name text or falling behind selection borders.
+- Added a black 1-pixel border to detached player bar-style resource elements, covering primary power and tertiary power bars while excluding icon-based secondary resources.
+- Extended party defaults, locale strings, and configuration controls for the new layout and role-icon options.
+
 ## 1.4.0 - 2026-03-08
 - Added a new Global `Dark Mode` toggle stored in profile style settings.
 - Recolored health and main power bars to a granite fill with a red-tinted gray empty-bar backing when Dark Mode is enabled.

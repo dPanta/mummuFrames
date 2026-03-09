@@ -178,6 +178,16 @@ local PARTY_HEALER_SPELL_STYLE_OPTIONS = {
     { key = "icon", label = L.CONFIG_PARTY_HEALER_STYLE_ICON or "Icon" },
     { key = "rectangle", label = L.CONFIG_PARTY_HEALER_STYLE_RECTANGLE or "Colored rectangle" },
 }
+local PARTY_LAYOUT_OPTIONS = {
+    {
+        key = "vertical",
+        label = L.CONFIG_PARTY_LAYOUT_VERTICAL or L.CONFIG_RAID_GROUP_LAYOUT_VERTICAL or "Vertical",
+    },
+    {
+        key = "horizontal",
+        label = L.CONFIG_PARTY_LAYOUT_HORIZONTAL or L.CONFIG_RAID_GROUP_LAYOUT_HORIZONTAL or "Horizontal",
+    },
+}
 local RAID_GROUP_LAYOUT_OPTIONS = {
     { key = "vertical", label = L.CONFIG_RAID_GROUP_LAYOUT_VERTICAL or "Vertical groups" },
     { key = "horizontal", label = L.CONFIG_RAID_GROUP_LAYOUT_HORIZONTAL or "Horizontal groups" },
@@ -1835,6 +1845,61 @@ function Configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
         nil,
         function()
             return BUFF_POSITION_PRESETS[1].label
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize party layout dropdown.
+function Configuration:InitializePartyLayoutDropdown(dropdown)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #PARTY_LAYOUT_OPTIONS do
+                local option = PARTY_LAYOUT_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return "vertical"
+            end
+            local partyConfig = dataHandle:GetUnitConfig("party")
+            return (partyConfig.orientation == "horizontal") and "horizontal" or "vertical"
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+            dataHandle:SetUnitConfig(
+                "party",
+                "orientation",
+                option.value == "horizontal" and "horizontal" or "vertical"
+            )
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RequestUnitFrameRefresh()
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            for i = 1, #PARTY_LAYOUT_OPTIONS do
+                if PARTY_LAYOUT_OPTIONS[i].key == value then
+                    return PARTY_LAYOUT_OPTIONS[i].label
+                end
+            end
+            return PARTY_LAYOUT_OPTIONS[1].label
         end
     )
 
@@ -3661,6 +3726,7 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     local includePlayer = nil
     local showSelfWithoutGroup = nil
+    local showRoleIcon = nil
     local auraControlsAllowed = unitToken ~= "party" and unitToken ~= "raid"
     local auraAnchor = hideBlizzard or enabled
     local buffsEnabled = nil
@@ -3701,7 +3767,20 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RequestUnitFrameRefresh()
         end)
 
-        auraAnchor = showSelfWithoutGroup or includePlayer
+        showRoleIcon = self:CreateCheckbox(
+            "mummuFramesConfig" .. unitToken .. "ShowRoleIcon",
+            page,
+            L.CONFIG_PARTY_SHOW_ROLE_ICON or "Show role icon",
+            showSelfWithoutGroup,
+            0,
+            -8
+        )
+        showRoleIcon:SetScript("OnClick", function(button)
+            dataHandle:SetUnitConfig(unitToken, "showRoleIcon", button:GetChecked() and true or false)
+            self:RequestUnitFrameRefresh()
+        end)
+
+        auraAnchor = showRoleIcon or showSelfWithoutGroup or includePlayer
     end
 
     if auraControlsAllowed then
@@ -3820,6 +3899,7 @@ function Configuration:BuildUnitPage(page, unitToken)
     local spacingX = nil
     local spacingY = nil
     local groupSpacing = nil
+    local partyLayoutDropdown = nil
     local groupLayoutDropdown = nil
     local sortDropdown = nil
     local sortDirectionDropdown = nil
@@ -3839,7 +3919,19 @@ function Configuration:BuildUnitPage(page, unitToken)
             dataHandle:SetUnitConfig(unitToken, "spacing", math.floor((value or 0) + 0.5))
             self:RequestUnitFrameRefresh()
         end)
-        spacingAnchor = spacing.slider
+
+        local partyLayoutControl = createLabeledDropdown(
+            "mummuFramesConfig" .. unitToken .. "LayoutDropdown",
+            page,
+            L.CONFIG_PARTY_LAYOUT or L.CONFIG_RAID_GROUP_LAYOUT or "Layout",
+            spacing.slider
+        )
+        partyLayoutDropdown = partyLayoutControl and partyLayoutControl.dropdown or nil
+        if partyLayoutDropdown then
+            self:InitializePartyLayoutDropdown(partyLayoutDropdown)
+        end
+
+        spacingAnchor = partyLayoutDropdown or spacing.slider
     elseif unitToken == "raid" then
         spacingX = self:CreateNumericControl(
             page,
@@ -4270,6 +4362,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         enabled = enabled,
         includePlayer = includePlayer,
         showSelfWithoutGroup = showSelfWithoutGroup,
+        showRoleIcon = showRoleIcon,
         hideBlizzard = hideBlizzard,
         buffsEnabled = buffsEnabled,
         buffsMax = buffsMax,
@@ -4283,6 +4376,7 @@ function Configuration:BuildUnitPage(page, unitToken)
         spacingX = spacingX,
         spacingY = spacingY,
         groupSpacing = groupSpacing,
+        partyLayoutDropdown = partyLayoutDropdown,
         groupLayoutDropdown = groupLayoutDropdown,
         sortDropdown = sortDropdown,
         sortDirectionDropdown = sortDirectionDropdown,
@@ -4624,6 +4718,9 @@ function Configuration:RefreshConfigWidgets()
             if unitWidgets.showSelfWithoutGroup then
                 unitWidgets.showSelfWithoutGroup:SetChecked(unitConfig.showSelfWithoutGroup ~= false)
             end
+            if unitWidgets.showRoleIcon then
+                unitWidgets.showRoleIcon:SetChecked(unitConfig.showRoleIcon ~= false)
+            end
             if unitWidgets.hideBlizzard then
                 unitWidgets.hideBlizzard:SetChecked(unitConfig.hideBlizzardFrame == true)
             end
@@ -4649,6 +4746,9 @@ function Configuration:RefreshConfigWidgets()
             self:SetNumericControlValue(unitWidgets.height, unitConfig.height or 44)
             if unitWidgets.spacing then
                 self:SetNumericControlValue(unitWidgets.spacing, unitConfig.spacing or 24)
+            end
+            if unitWidgets.partyLayoutDropdown then
+                self:RefreshSelectControlText(unitWidgets.partyLayoutDropdown, false)
             end
             if unitWidgets.spacingX then
                 self:SetNumericControlValue(unitWidgets.spacingX, unitConfig.spacingX or 5)
