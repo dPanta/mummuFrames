@@ -238,7 +238,11 @@ end
 
 -- Resolve spell info by name using modern APIs first, then legacy fallback.
 local function getResolvedSpellInfo(query)
-    if type(query) ~= "string" or query == "" then
+    local queryType = type(query)
+    if queryType == "string" and query == "" then
+        return nil
+    end
+    if queryType ~= "string" and queryType ~= "number" then
         return nil
     end
 
@@ -266,6 +270,39 @@ local function getResolvedSpellInfo(query)
     end
 
     return nil
+end
+
+-- Resolve the most reliable icon texture for a tracked aura.
+-- Prefer cached spell-database icons, then spellID lookups from the live aura,
+-- then the raw aura icon payload, and only finally the question-mark fallback.
+local function resolveTrackedAuraIcon(spellName, trackedSpellInfo, auraData)
+    if type(trackedSpellInfo) == "table" and trackedSpellInfo.icon then
+        return trackedSpellInfo.icon
+    end
+
+    if type(spellName) == "string" and spellName ~= "" then
+        local cachedIcon = _spellIconCache[spellName]
+        if cachedIcon then
+            return cachedIcon
+        end
+    end
+
+    if type(auraData) == "table" then
+        local auraSpellID = normalizeSpellID(auraData.spellId)
+        if auraSpellID then
+            local resolvedInfo = getResolvedSpellInfo(auraSpellID)
+            local resolvedIcon = resolvedInfo and (resolvedInfo.iconID or resolvedInfo.originalIconID) or nil
+            if resolvedIcon then
+                return resolvedIcon
+            end
+        end
+
+        if auraData.icon then
+            return auraData.icon
+        end
+    end
+
+    return DEFAULT_AURA_TEXTURE
 end
 
 -- Returns the canonical unit token if it is a valid group token
@@ -1726,13 +1763,9 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
                 element:SetSize(size, size)
                 element:ClearAllPoints()
                 element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                safeSetTexture(
-                    element.Icon,
-                    (cachedInfo and cachedInfo.icon)
-                        or (type(found) == "table" and found.icon)
-                        or _spellIconCache[spellName]
-                        or DEFAULT_AURA_TEXTURE
-                )
+                if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(spellName, cachedInfo, found)) then
+                    safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
+                end
                 element.Icon:Show()
                 element:Show()
                 usedByKey[tostring(count)] = true
@@ -1755,7 +1788,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
                     element:SetSize(size, size)
                     element:ClearAllPoints()
                     element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                    if not safeSetTexture(element.Icon, auraData.icon) then
+                    if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(nil, nil, auraData)) then
                         safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
                     end
                     element.Icon:Show()
@@ -2103,11 +2136,11 @@ function AuraHandle:RebuildSpellIconCache()
                 end
             end
             addUniqueSpellID(spellIDs, seenSpellIDs, info and info.spellID)
-            _spellIconCache[name] = icon or DEFAULT_AURA_TEXTURE
+            _spellIconCache[name] = icon
             _trackerSpellInfoCache[name] = {
                 name = info and info.name or name,
                 spellIDs = spellIDs,
-                icon = icon or DEFAULT_AURA_TEXTURE,
+                icon = icon,
             }
         end
     end

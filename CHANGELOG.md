@@ -1,7 +1,17 @@
 # Changelog
 
+## 1.6.5 - 2026-03-10
+- Fixed Enhancement shaman Maelstrom Weapon stacks sticking at `10` after `Tempest` consumed the full aura.
+- Filled in the missing `1.6.x` changelog entries and bumped addon metadata to `1.6.5`.
+
+## 1.6.3 - 2026-03-09
+- Bumped addon metadata to `1.6.3`.
+
 ## 1.6.2 - 2026-03-09
-- Git Cleanup
+- Follow-up git release cleanup.
+
+## 1.6.1 - 2026-03-09
+- Git cleanup for release packaging and bundled assets.
 
 ## 1.6.0 - 2026-03-09
 - Brightened the dark-mode health bar backing while keeping the darker primary power backing unchanged.

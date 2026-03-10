@@ -10,6 +10,12 @@ local AuraSafety = {}
 
 local PLAYER_HELPFUL_FILTER = "HELPFUL|PLAYER|RAID_IN_COMBAT"
 local MAX_AURA_SCAN         = 80
+local DIRECT_PLAYER_AURA_ABSENCE_IS_AUTHORITATIVE = {
+    -- Maelstrom Weapon cleanly returns nil when fully spent. Treating that nil
+    -- as authoritative avoids a false "restricted" fallback that can leave the
+    -- UI stuck on the previous stack count after Tempest consumes all stacks.
+    [344179] = true,
+}
 
 -- Coerce any numeric-like input to a positive integer ID.
 local function normalizePositiveInteger(self, value)
@@ -179,6 +185,9 @@ function AuraSafety:GetPlayerAuraBySpellIDSafe(spellID)
                 return nil, true
             end
             return auraData, false
+        end
+        if ok and DIRECT_PLAYER_AURA_ABSENCE_IS_AUTHORITATIVE[normalizedSpellID] == true then
+            return nil, false
         end
     end
 
