@@ -67,6 +67,7 @@ local ROLE_ICON_ATLAS_BY_ROLE = {
     HEALER = "UI-LFG-RoleIcon-Healer",
     DAMAGER = "UI-LFG-RoleIcon-DPS",
 }
+local GROUP_LEADER_ICON_ATLAS = "UI-HUD-UnitFrame-Player-Group-LeaderIcon"
 local ROLE_SORT_PRIORITY = {
     TANK = 1,
     HEALER = 2,
@@ -110,7 +111,16 @@ local function showUnitTooltip(frame)
         return
     end
 
-    local unit = frame.unit or frame.displayedUnit or (frame.GetAttribute and frame:GetAttribute("unit")) or nil
+    local unit = nil
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr and type(attrUnit) == "string" and attrUnit ~= "" then
+            unit = attrUnit
+        end
+    end
+    if not unit then
+        unit = frame.unit or frame.displayedUnit or nil
+    end
     if not unit then
         return
     end
@@ -329,6 +339,37 @@ local function normalizePartyDisplayedUnit(unitToken)
     return nil
 end
 
+-- Read the secure unit currently assigned to a party frame.
+-- Prefer the live secure attribute because header children may be recycled or
+-- reordered while their plain Lua backup fields still hold an older unit token.
+local function getCurrentPartyFrameDisplayedUnit(frame)
+    if type(frame) ~= "table" then
+        return nil
+    end
+
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr then
+            local normalizedAttrUnit = normalizePartyDisplayedUnit(attrUnit)
+            if normalizedAttrUnit then
+                frame.unit = normalizedAttrUnit
+                frame.displayedUnit = normalizedAttrUnit
+                return normalizedAttrUnit
+            end
+            return nil
+        end
+    end
+
+    local cachedUnit = normalizePartyDisplayedUnit(frame.displayedUnit or frame.unit)
+    if cachedUnit then
+        frame.unit = cachedUnit
+        frame.displayedUnit = cachedUnit
+        return cachedUnit
+    end
+
+    return nil
+end
+
 local function normalizeRoleToken(roleToken)
     if roleToken == "TANK" or roleToken == "HEALER" or roleToken == "DAMAGER" then
         return roleToken
@@ -351,6 +392,27 @@ local function resolveRoleIconAtlas(roleToken)
     end
 
     return ROLE_ICON_ATLAS_BY_ROLE[normalizedRole]
+end
+
+local function shouldShowLeaderIcon(unitToken, previewMode)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if previewMode then
+        return unitToken == "player"
+    end
+
+    if type(UnitIsGroupLeader) ~= "function" then
+        return false
+    end
+
+    local okLeader, isLeader = pcall(UnitIsGroupLeader, unitToken)
+    if not okLeader then
+        return false
+    end
+
+    return getSafeBooleanValue(isLeader, false)
 end
 
 local function copyUnitList(units)
@@ -769,6 +831,9 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.RoleIcon = frame.RoleIconOverlay:CreateTexture(nil, "OVERLAY")
     frame.RoleIcon:SetAlpha(0.95)
     frame.RoleIcon:Hide()
+    frame.LeaderIcon = frame.RoleIconOverlay:CreateTexture(nil, "OVERLAY")
+    frame.LeaderIcon:SetAlpha(0.95)
+    frame.LeaderIcon:Hide()
 
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -884,6 +949,7 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_ROLES_ASSIGNED", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "ROLE_CHANGED_INFORM", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
@@ -1062,14 +1128,7 @@ function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
             local isShown = type(frame.IsShown) == "function" and frame:IsShown() or true
 
             if includeHidden or isShown then
-                -- Prefer the non-tainted backup fields; fall back to GetAttribute only when clean.
-                local displayedUnit = normalizePartyDisplayedUnit(frame.displayedUnit or frame.unit)
-                if not displayedUnit and type(frame.GetAttribute) == "function" then
-                    local ok, attrUnit = pcall(frame.GetAttribute, frame, "unit")
-                    if ok then
-                        displayedUnit = normalizePartyDisplayedUnit(attrUnit)
-                    end
-                end
+                local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame)
 
                 local shouldMapUnit = false
                 if displayedUnit == "player" then
@@ -1177,13 +1236,7 @@ function PartyFrames:EnsureMappedFrameForUnit(unitToken)
     for i = 1, #children do
         local child = children[i]
         if child and child._mummuVisualsBuilt then
-            local childUnit = normalizePartyDisplayedUnit(child.displayedUnit or child.unit)
-            if not childUnit and not InCombatLockdown() and type(child.GetAttribute) == "function" then
-                local okAttr, attrUnit = pcall(child.GetAttribute, child, "unit")
-                if okAttr then
-                    childUnit = normalizePartyDisplayedUnit(attrUnit)
-                end
-            end
+            local childUnit = getCurrentPartyFrameDisplayedUnit(child)
             if childUnit == unitToken then
                 matched = child
                 break
@@ -1261,7 +1314,7 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
 
     self:RefreshMember(
         frame,
-        frame.displayedUnit or displayedUnit,
+        getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit,
         partyConfig,
         false,
         false,
@@ -1295,7 +1348,7 @@ function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOption
         return false
     end
 
-    local displayedUnit = frame.displayedUnit or unitToken
+    local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
     self:RefreshMember(
         frame,
         displayedUnit,
@@ -1358,7 +1411,7 @@ function PartyFrames:ResolveDisplayedUnitToken(unitToken)
             if frame then
                 local candidateUnit = frame.displayedUnit
                     or frame.unit
-                    or (type(frame.GetAttribute) == "function" and frame:GetAttribute("unit"))
+                candidateUnit = getCurrentPartyFrameDisplayedUnit(frame) or candidateUnit
                 if type(candidateUnit) == "string" and candidateUnit ~= "" then
                     if guid and getUnitGUIDSafe(candidateUnit) == guid then
                         return candidateUnit
@@ -1405,7 +1458,7 @@ function PartyFrames:RefreshAllVitalsOnly()
         if frame then
             self:RefreshMember(
                 frame,
-                frame.displayedUnit or displayedUnit,
+                getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit,
                 partyConfig,
                 false,
                 false,
@@ -1511,6 +1564,11 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRole
         if not showRoleIcon then
             frame.RoleIcon:Hide()
         end
+    end
+    if frame.LeaderIcon then
+        frame.LeaderIcon:ClearAllPoints()
+        frame.LeaderIcon:SetPoint("CENTER", frame, "LEFT", border, 0)
+        frame.LeaderIcon:SetSize(roleIconSize, roleIconSize)
     end
 
     frame.NameText:ClearAllPoints()
@@ -1674,6 +1732,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     local displayRole = self:GetDisplayRoleForUnit(unitToken, previewMode, testMode)
     local roleIconAtlas = partyConfig.showRoleIcon ~= false and resolveRoleIconAtlas(displayRole) or nil
     local showRoleIcon = roleIconAtlas ~= nil
+    local showLeaderIcon = shouldShowLeaderIcon(unitToken, previewMode or testMode)
     local needsStyle = forceStyle == true
         or frame._mummuStyleApplied ~= true
         or frame._mummuShowPowerBar ~= showPowerBar
@@ -1863,6 +1922,17 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
                 frame.RoleIcon:Show()
             else
                 frame.RoleIcon:Hide()
+            end
+        end
+        if frame.LeaderIcon then
+            if showLeaderIcon and type(frame.LeaderIcon.SetAtlas) == "function" then
+                frame.LeaderIcon:SetAtlas(GROUP_LEADER_ICON_ATLAS, false)
+                frame.LeaderIcon:Show()
+            elseif showLeaderIcon then
+                frame.LeaderIcon:SetTexture("Interface\\GROUPFRAME\\UI-Group-LeaderIcon")
+                frame.LeaderIcon:Show()
+            else
+                frame.LeaderIcon:Hide()
             end
         end
 
@@ -2206,18 +2276,7 @@ function PartyFrames:RefreshAll(forceLayout)
         end
         if child and child._mummuVisualsBuilt then
             -- Read the unit the header has assigned to this child.
-            local unitToken = child.displayedUnit or child.unit
-            if not unitToken and not InCombatLockdown() and type(child.GetAttribute) == "function" then
-                local ok, attrUnit = pcall(child.GetAttribute, child, "unit")
-                if ok and type(attrUnit) == "string" and attrUnit ~= "" then
-                    unitToken = normalizePartyDisplayedUnit(attrUnit)
-                    -- Warm up the backup fields so we can use them in combat.
-                    if unitToken then
-                        child.unit = unitToken
-                        child.displayedUnit = unitToken
-                    end
-                end
-            end
+            local unitToken = getCurrentPartyFrameDisplayedUnit(child)
 
             if unitToken then
                 local isShown = type(child.IsShown) == "function" and child:IsShown() or false

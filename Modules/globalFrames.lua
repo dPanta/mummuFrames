@@ -30,6 +30,12 @@ local function getTooltipUnit(frame)
         return nil
     end
 
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr and type(attrUnit) == "string" and attrUnit ~= "" then
+            return attrUnit
+        end
+    end
     if type(frame.unit) == "string" and frame.unit ~= "" then
         return frame.unit
     end
@@ -38,12 +44,6 @@ local function getTooltipUnit(frame)
     end
     if type(frame.unitToken) == "string" and frame.unitToken ~= "" then
         return frame.unitToken
-    end
-    if type(frame.GetAttribute) == "function" then
-        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
-        if okAttr and type(attrUnit) == "string" and attrUnit ~= "" then
-            return attrUnit
-        end
     end
 
     return nil

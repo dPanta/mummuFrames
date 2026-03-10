@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.6 - 2026-03-11
+- Fixed secure group-frame unit drift that could make party clicks target the wrong member and cause duplicate or missing group displays.
+- Added a Blizzard group leader icon to party and raid unit frames, anchored at the center-left edge to match the existing overlay styling.
+- Added party healthbar debuff overlay coloring by debuff type, including typed debuffs the current player cannot dispel.
+- Bumped addon metadata to `1.6.6`.
+
 ## 1.6.5 - 2026-03-10
 - Fixed Enhancement shaman Maelstrom Weapon stacks sticking at `10` after `Tempest` consumed the full aura.
 - Filled in the missing `1.6.x` changelog entries and bumped addon metadata to `1.6.5`.

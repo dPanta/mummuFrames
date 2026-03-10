@@ -120,6 +120,8 @@ local AuraHandle = ns.Object:Extend()
 -- blizzardAuraCacheByUnit[unitToken] = {
 --   buffs            : { [auraInstanceID] = true }
 --   debuffs          : { [auraInstanceID] = true }
+--   debuffTypeByAuraID           : { [auraInstanceID] = "Magic"|"Curse"|"Poison"|"Disease" }
+--   debuffTypeSet                : { Magic=true, Curse=true, Poison=true, Disease=true }
 --   playerDispellable: { [auraInstanceID] = true }
 --   playerDispellableTypeByAuraID: { [auraInstanceID] = "Magic"|"Curse"|"Poison"|"Disease" }
 --   playerDispellableTypeSet      : { Magic=true, Curse=true, Poison=true, Disease=true }
@@ -485,6 +487,8 @@ local function ensureUnitCache(unitToken)
 
     cache.buffs = cache.buffs or {}
     cache.debuffs = cache.debuffs or {}
+    cache.debuffTypeByAuraID = cache.debuffTypeByAuraID or {}
+    cache.debuffTypeSet = cache.debuffTypeSet or {}
     cache.playerDispellable = cache.playerDispellable or {}
     cache.playerDispellableTypeByAuraID = cache.playerDispellableTypeByAuraID or {}
     cache.playerDispellableTypeSet = cache.playerDispellableTypeSet or {}
@@ -497,17 +501,20 @@ local function ensureUnitCache(unitToken)
 end
 
 -- Extracts the normalised group unit token from any frame that exposes a unit
--- via .displayedUnit, .unit, or GetAttribute("unit").
+-- via GetAttribute("unit"), .displayedUnit, or .unit.
 local function getFrameUnitToken(frame)
     if type(frame) ~= "table" then
         return nil
     end
-    local unitToken = frame.displayedUnit or frame.unit
-    if (type(unitToken) ~= "string" or unitToken == "") and type(frame.GetAttribute) == "function" then
+    local unitToken = nil
+    if type(frame.GetAttribute) == "function" then
         local ok, attrUnit = pcall(frame.GetAttribute, frame, "unit")
         if ok and type(attrUnit) == "string" and attrUnit ~= "" then
             unitToken = attrUnit
         end
+    end
+    if type(unitToken) ~= "string" or unitToken == "" then
+        unitToken = frame.displayedUnit or frame.unit
     end
     return normalizeGroupUnitToken(unitToken)
 end
@@ -684,22 +691,47 @@ local function shouldFrameRenderAuras(frame)
     return true
 end
 
+-- Returns true when a compact aura widget currently represents a shown aura.
+local function isCompactAuraFrameShown(auraFrame)
+    if type(auraFrame) ~= "table" or not auraFrame.auraInstanceID then
+        return false
+    end
+
+    local shown = true
+    if type(auraFrame.IsShown) == "function" then
+        local ok, shownValue = pcall(auraFrame.IsShown, auraFrame)
+        if ok then
+            shown = shownValue == true
+        end
+    end
+
+    return shown
+end
+
 -- Collects visible auraInstanceIDs from a Blizzard aura frame list into setTarget.
 local function captureFromCompactAuraList(auraList, setTarget)
     if type(auraList) ~= "table" then
         return
     end
     for _, auraFrame in pairs(auraList) do
-        if type(auraFrame) == "table" and auraFrame.auraInstanceID then
-            local shown = true
-            if type(auraFrame.IsShown) == "function" then
-                local ok, shownValue = pcall(auraFrame.IsShown, auraFrame)
-                if ok then
-                    shown = shownValue == true
-                end
-            end
-            if shown then
-                setTarget[auraFrame.auraInstanceID] = true
+        if isCompactAuraFrameShown(auraFrame) then
+            setTarget[auraFrame.auraInstanceID] = true
+        end
+    end
+end
+
+-- Collects visible debuff types from a Blizzard compact debuff list.
+local function captureDebuffTypesFromCompactAuraList(auraList, auraTypeByAuraID, typeSet)
+    if type(auraList) ~= "table" or type(auraTypeByAuraID) ~= "table" or type(typeSet) ~= "table" then
+        return
+    end
+
+    for _, auraFrame in pairs(auraList) do
+        if isCompactAuraFrameShown(auraFrame) then
+            local debuffType = extractDispelTypeFromCompactDebuffFrame(auraFrame)
+            if debuffType then
+                auraTypeByAuraID[auraFrame.auraInstanceID] = debuffType
+                typeSet[debuffType] = true
             end
         end
     end
@@ -1165,6 +1197,8 @@ function AuraHandle:CaptureAurasFromBlizzardFrame(frame, triggerUpdate)
     local cache = ensureUnitCache(unitToken)
     wipeTable(cache.buffs)
     wipeTable(cache.debuffs)
+    wipeTable(cache.debuffTypeByAuraID)
+    wipeTable(cache.debuffTypeSet)
     wipeTable(cache.playerDispellable)
     wipeTable(cache.playerDispellableTypeByAuraID)
     wipeTable(cache.playerDispellableTypeSet)
@@ -1172,28 +1206,22 @@ function AuraHandle:CaptureAurasFromBlizzardFrame(frame, triggerUpdate)
 
     captureFromCompactAuraList(frame.buffFrames,   cache.buffs)
     captureFromCompactAuraList(frame.debuffFrames, cache.debuffs)
+    captureDebuffTypesFromCompactAuraList(frame.debuffFrames, cache.debuffTypeByAuraID, cache.debuffTypeSet)
 
     -- dispelDebuffFrames: a subset of debuffs that the player can remove.
     if type(frame.dispelDebuffFrames) == "table" then
         for _, debuffFrame in pairs(frame.dispelDebuffFrames) do
-            if type(debuffFrame) == "table" and debuffFrame.auraInstanceID then
-                local shown = true
-                if type(debuffFrame.IsShown) == "function" then
-                    local ok, shownValue = pcall(debuffFrame.IsShown, debuffFrame)
-                    if ok then
-                        shown = shownValue == true
-                    end
-                end
-                if shown then
-                    local auraInstanceID = debuffFrame.auraInstanceID
-                    cache.debuffs[auraInstanceID]           = true
-                    cache.playerDispellable[auraInstanceID] = true
+            if isCompactAuraFrameShown(debuffFrame) then
+                local auraInstanceID = debuffFrame.auraInstanceID
+                cache.debuffs[auraInstanceID]           = true
+                cache.playerDispellable[auraInstanceID] = true
 
-                    local dispelType = extractDispelTypeFromCompactDebuffFrame(debuffFrame)
-                    if dispelType then
-                        cache.playerDispellableTypeByAuraID[auraInstanceID] = dispelType
-                        cache.playerDispellableTypeSet[dispelType] = true
-                    end
+                local dispelType = extractDispelTypeFromCompactDebuffFrame(debuffFrame)
+                if dispelType then
+                    cache.debuffTypeByAuraID[auraInstanceID] = dispelType
+                    cache.debuffTypeSet[dispelType] = true
+                    cache.playerDispellableTypeByAuraID[auraInstanceID] = dispelType
+                    cache.playerDispellableTypeSet[dispelType] = true
                 end
             end
         end
@@ -1806,6 +1834,61 @@ end
 -- Dispel overlay
 -- ---------------------------------------------------------------------------
 
+local function findPriorityDebuffTypeInAuraMap(auraTypeByAuraID, auraMembershipSet, allowedTypeSet)
+    if type(auraTypeByAuraID) ~= "table" then
+        return nil
+    end
+
+    for i = 1, #DISPEL_TYPE_PRIORITY do
+        local debuffType = DISPEL_TYPE_PRIORITY[i]
+        if type(allowedTypeSet) ~= "table" or allowedTypeSet[debuffType] == true then
+            for auraInstanceID, mappedType in pairs(auraTypeByAuraID) do
+                if mappedType == debuffType and (type(auraMembershipSet) ~= "table" or auraMembershipSet[auraInstanceID] == true) then
+                    return debuffType
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function findPriorityDebuffTypeInSet(debuffTypeSet, allowedTypeSet)
+    if type(debuffTypeSet) ~= "table" then
+        return nil
+    end
+
+    for i = 1, #DISPEL_TYPE_PRIORITY do
+        local debuffType = DISPEL_TYPE_PRIORITY[i]
+        if debuffTypeSet[debuffType] == true and (type(allowedTypeSet) ~= "table" or allowedTypeSet[debuffType] == true) then
+            return debuffType
+        end
+    end
+
+    return nil
+end
+
+-- Returns the debuff type string ("Magic", "Curse", "Poison", "Disease") for
+-- the highest-priority typed debuff found on unitToken, or nil.
+function AuraHandle:GetUnitDebuffType(unitToken)
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    if not normalizedUnit then
+        return nil
+    end
+
+    local cache = blizzardAuraCacheByUnit[normalizedUnit]
+    if type(cache) ~= "table" then
+        return nil
+    end
+
+    local debuffType = findPriorityDebuffTypeInAuraMap(cache.debuffTypeByAuraID, cache.debuffs)
+    if debuffType then
+        return debuffType
+    end
+
+    return findPriorityDebuffTypeInSet(cache.debuffTypeSet)
+end
+
 -- Returns the debuff type string ("Magic", "Curse", "Poison", "Disease") for
 -- the first player-dispellable debuff found on unitToken, or nil.
 function AuraHandle:GetUnitDispellableDebuffType(unitToken)
@@ -1822,36 +1905,34 @@ function AuraHandle:GetUnitDispellableDebuffType(unitToken)
     local playerDispelTypeSet = getPlayerDispelTypeSet()
 
     -- Per-aura type map is the most specific source and avoids aura payload reads.
-    if type(cache.playerDispellableTypeByAuraID) == "table" and type(cache.playerDispellable) == "table" then
-        for auraInstanceID in pairs(cache.playerDispellable) do
-            local debuffType = cache.playerDispellableTypeByAuraID[auraInstanceID]
-            if debuffType and playerDispelTypeSet[debuffType] == true then
-                return debuffType
-            end
-        end
+    local debuffType = findPriorityDebuffTypeInAuraMap(
+        cache.playerDispellableTypeByAuraID,
+        cache.playerDispellable,
+        playerDispelTypeSet
+    )
+    if debuffType then
+        return debuffType
     end
 
     -- Fall back to compact-frame type flags when per-aura mapping is unavailable.
-    if type(cache.playerDispellableTypeSet) == "table" then
-        for i = 1, #DISPEL_TYPE_PRIORITY do
-            local debuffType = DISPEL_TYPE_PRIORITY[i]
-            if cache.playerDispellableTypeSet[debuffType] == true and playerDispelTypeSet[debuffType] == true then
-                return debuffType
-            end
-        end
-    end
-
-    return nil
+    return findPriorityDebuffTypeInSet(cache.playerDispellableTypeSet, playerDispelTypeSet)
 end
 
--- Shows or hides the dispel colour overlay on frame based on whether the unit
--- has a dispellable debuff.
+-- Shows or hides the healthbar overlay on frame based on debuff state.
+-- Party frames use any typed debuff; raid keeps the existing dispel-only path.
 function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken)
     if type(frame) ~= "table" or type(frame.DispelOverlay) ~= "table" then
         return
     end
-    local dispelType = self:GetUnitDispellableDebuffType(unitToken)
-    local color      = dispelType and DebuffTypeColor and DebuffTypeColor[dispelType] or nil
+
+    local debuffType = nil
+    if frame._mummuIsPartyFrame == true then
+        debuffType = self:GetUnitDebuffType(unitToken)
+    else
+        debuffType = self:GetUnitDispellableDebuffType(unitToken)
+    end
+
+    local color = debuffType and DebuffTypeColor and DebuffTypeColor[debuffType] or nil
     if color then
         frame.DispelOverlay:SetColorTexture(color.r, color.g, color.b, DISPEL_OVERLAY_ALPHA)
         frame.DispelOverlay:Show()
@@ -2001,9 +2082,7 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
         if type(module.EnsureMappedFrameForUnit) == "function" then
             local ensuredFrame = module:EnsureMappedFrameForUnit(normalizedUnit)
             if type(ensuredFrame) == "table" then
-                local mappedUnit = (type(ensuredFrame.displayedUnit) == "string" and ensuredFrame.displayedUnit ~= "")
-                    and ensuredFrame.displayedUnit
-                    or normalizedUnit
+                local mappedUnit = getFrameUnitToken(ensuredFrame) or normalizedUnit
                 self:RefreshGroupFrameAuras(ensuredFrame, mappedUnit, nil, unitToken)
                 self:RebuildSharedUnitFrameMap(allowHidden, "unit_aura_dispatch_ensure")
             end

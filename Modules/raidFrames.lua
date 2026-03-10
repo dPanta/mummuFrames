@@ -24,6 +24,7 @@ local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
+local GROUP_LEADER_ICON_ATLAS = "UI-HUD-UnitFrame-Player-Group-LeaderIcon"
 local ROLE_GROUPING_ORDER_ASC = "TANK,HEALER,DAMAGER,NONE"
 local ROLE_GROUPING_ORDER_DESC = "NONE,DAMAGER,HEALER,TANK"
 local TEST_ROLE_BY_SLOT = {
@@ -52,7 +53,16 @@ local function showUnitTooltip(frame)
         return
     end
 
-    local unit = frame.unit or frame.displayedUnit or (frame.GetAttribute and frame:GetAttribute("unit")) or nil
+    local unit = nil
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr and type(attrUnit) == "string" and attrUnit ~= "" then
+            unit = attrUnit
+        end
+    end
+    if not unit then
+        unit = frame.unit or frame.displayedUnit or nil
+    end
     if not unit then
         return
     end
@@ -218,6 +228,58 @@ local function normalizeRaidDisplayedUnit(unitToken)
         return unitToken
     end
     return nil
+end
+
+-- Read the secure unit currently assigned to a raid frame.
+-- Prefer the live secure attribute because header children may be recycled or
+-- reordered while their plain Lua backup fields still hold an older unit token.
+local function getCurrentRaidFrameDisplayedUnit(frame)
+    if type(frame) ~= "table" then
+        return nil
+    end
+
+    if type(frame.GetAttribute) == "function" then
+        local okAttr, attrUnit = pcall(frame.GetAttribute, frame, "unit")
+        if okAttr then
+            local normalizedAttrUnit = normalizeRaidDisplayedUnit(attrUnit)
+            if normalizedAttrUnit then
+                frame.unit = normalizedAttrUnit
+                frame.displayedUnit = normalizedAttrUnit
+                return normalizedAttrUnit
+            end
+            return nil
+        end
+    end
+
+    local cachedUnit = normalizeRaidDisplayedUnit(frame.displayedUnit or frame.unit)
+    if cachedUnit then
+        frame.unit = cachedUnit
+        frame.displayedUnit = cachedUnit
+        return cachedUnit
+    end
+
+    return nil
+end
+
+local function shouldShowLeaderIcon(unitToken, previewMode)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if previewMode then
+        return unitToken == "raid1"
+    end
+
+    if type(UnitIsGroupLeader) ~= "function" then
+        return false
+    end
+
+    local okLeader, isLeader = pcall(UnitIsGroupLeader, unitToken)
+    if not okLeader then
+        return false
+    end
+
+    return getSafeBooleanValue(isLeader, false)
 end
 
 -- Return the displayed raid unit mapped to a GUID.
@@ -517,6 +579,7 @@ function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_REGEN_DISABLED", self.OnCombatStarted)
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
 end
@@ -730,6 +793,13 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame.NameText:SetJustifyH("LEFT")
     frame.HealthText = frame.HealthBar:CreateFontString(nil, "OVERLAY")
     frame.HealthText:SetJustifyH("RIGHT")
+    frame.StatusIconOverlay = CreateFrame("Frame", nil, frame)
+    frame.StatusIconOverlay:SetAllPoints(frame)
+    frame.StatusIconOverlay:SetFrameStrata("DIALOG")
+    frame.StatusIconOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+    frame.LeaderIcon = frame.StatusIconOverlay:CreateTexture(nil, "OVERLAY")
+    frame.LeaderIcon:SetAlpha(0.95)
+    frame.LeaderIcon:Hide()
 
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -782,6 +852,10 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
 
     local border = pixelPerfect and Style:GetPixelSize() or 1
     local textInset = pixelPerfect and Style:Snap(4) or 4
+    local leaderIconSize = math.max(8, math.floor((height * 0.285) + 0.5))
+    if pixelPerfect then
+        leaderIconSize = Style:Snap(leaderIconSize)
+    end
 
     Style:ApplyStatusBarTexture(frame.HealthBar)
     Style:ApplyStatusBarBacking(frame.HealthBar, "health")
@@ -804,6 +878,12 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     frame.HealthText:SetShadowColor(0, 0, 0, 0)
     frame.NameText:SetShadowOffset(0, 0)
     frame.HealthText:SetShadowOffset(0, 0)
+
+    if frame.LeaderIcon then
+        frame.LeaderIcon:ClearAllPoints()
+        frame.LeaderIcon:SetPoint("CENTER", frame, "LEFT", border, 0)
+        frame.LeaderIcon:SetSize(leaderIconSize, leaderIconSize)
+    end
 
     frame.DispelOverlay:SetAllPoints(frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -928,6 +1008,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
     end
 
     if refreshVitals then
+        local showLeaderIcon = shouldShowLeaderIcon(unitToken, previewMode)
         local darkModeEnabled = Style:IsDarkModeEnabled()
         local barFillAlpha = 1
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
@@ -963,6 +1044,17 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         else
             frame.AbsorbOverlayBar:Hide()
             frame.AbsorbOverlayFrame:Hide()
+        end
+        if frame.LeaderIcon then
+            if showLeaderIcon and type(frame.LeaderIcon.SetAtlas) == "function" then
+                frame.LeaderIcon:SetAtlas(GROUP_LEADER_ICON_ATLAS, false)
+                frame.LeaderIcon:Show()
+            elseif showLeaderIcon then
+                frame.LeaderIcon:SetTexture("Interface\\GROUPFRAME\\UI-Group-LeaderIcon")
+                frame.LeaderIcon:Show()
+            else
+                frame.LeaderIcon:Hide()
+            end
         end
 
         frame.NameText:SetText(name)
@@ -1051,13 +1143,7 @@ function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
         if frame then
             local isShown = type(frame.IsShown) == "function" and frame:IsShown() or true
             if includeHidden or isShown then
-                local displayedUnit = normalizeRaidDisplayedUnit(frame.displayedUnit or frame.unit)
-                if not displayedUnit and type(frame.GetAttribute) == "function" and not InCombatLockdown() then
-                    local ok, attrUnit = pcall(frame.GetAttribute, frame, "unit")
-                    if ok then
-                        displayedUnit = normalizeRaidDisplayedUnit(attrUnit)
-                    end
-                end
+                local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame)
 
                 local shouldMapUnit = false
                 if displayedUnit and UnitExists(displayedUnit) then
@@ -1124,13 +1210,7 @@ function RaidFrames:EnsureMappedFrameForUnit(unitToken)
             for childIndex = 1, #children do
                 local child = children[childIndex]
                 if child and child._mummuVisualsBuilt then
-                    local childUnit = normalizeRaidDisplayedUnit(child.displayedUnit or child.unit)
-                    if not childUnit and not InCombatLockdown() and type(child.GetAttribute) == "function" then
-                        local okAttr, attrUnit = pcall(child.GetAttribute, child, "unit")
-                        if okAttr then
-                            childUnit = normalizeRaidDisplayedUnit(attrUnit)
-                        end
-                    end
+                    local childUnit = getCurrentRaidFrameDisplayedUnit(child)
                     if childUnit == unitToken then
                         self._frameByDisplayedUnit[unitToken] = child
                         child.unit = unitToken
@@ -1263,7 +1343,7 @@ function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions
         return true
     end
 
-    local displayedUnit = frame.displayedUnit or unitToken
+    local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
     self:RefreshMember(
         frame,
         displayedUnit,
@@ -1598,17 +1678,7 @@ function RaidFrames:RefreshAll(forceLayout)
                     end
                 end
                 if child and child._mummuVisualsBuilt then
-                    local unitToken = child.displayedUnit or child.unit
-                    if not unitToken and not InCombatLockdown() and type(child.GetAttribute) == "function" then
-                        local ok, attrUnit = pcall(child.GetAttribute, child, "unit")
-                        if ok and type(attrUnit) == "string" and attrUnit ~= "" then
-                            unitToken = normalizeRaidDisplayedUnit(attrUnit)
-                            if unitToken then
-                                child.unit = unitToken
-                                child.displayedUnit = unitToken
-                            end
-                        end
-                    end
+                    local unitToken = getCurrentRaidFrameDisplayedUnit(child)
 
                     if unitToken then
                         local isShown = type(child.IsShown) == "function" and child:IsShown() or false
