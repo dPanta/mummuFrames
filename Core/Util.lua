@@ -37,6 +37,17 @@ local function toNumberSafe(input, fallback)
     return fallback
 end
 
+-- Compare against literal true inside pcall to tolerate wrapped booleans.
+local function equalsTrueSafe(value)
+    local ok, resolved = pcall(function()
+        return value == true
+    end)
+    if ok then
+        return resolved == true
+    end
+    return false
+end
+
 -- Format large values using compact k/m suffixes.
 local function formatAbbrevNumber(value)
     local n = tonumber(value) or 0
@@ -91,6 +102,71 @@ function Util:Clamp(value, minValue, maxValue)
         return resolvedMax
     end
     return resolvedValue
+end
+
+-- Resolve a boolean-like value without letting wrapped or secret values escape.
+function Util:SafeBoolean(value, fallback)
+    local fallbackValue = equalsTrueSafe(fallback)
+
+    local okNil, isNil = pcall(function()
+        return value == nil
+    end)
+    if okNil and isNil then
+        return fallbackValue
+    end
+
+    local auraSafety = ns.AuraSafety
+    if auraSafety and type(auraSafety.SafeTruthy) == "function" then
+        local okSafeTruthy, resolved = pcall(auraSafety.SafeTruthy, auraSafety, value)
+        if okSafeTruthy then
+            return resolved == true
+        end
+        return fallbackValue
+    end
+
+    local okTruthy, resolvedTruthy = pcall(function()
+        if value then
+            return true
+        end
+        return false
+    end)
+    if okTruthy then
+        return resolvedTruthy == true
+    end
+
+    return fallbackValue
+end
+
+-- Return whether a party or raid unit should be considered out of range.
+-- Unknown range states are treated as in range to avoid false dimming, and we
+-- intentionally avoid CheckInteractDistance because its interact buckets do not
+-- match UnitInRange's group-frame semantics.
+function Util:IsGroupUnitOutOfRange(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
+        return false
+    end
+
+    if type(UnitExists) == "function" and not UnitExists(unitToken) then
+        return false
+    end
+
+    if type(UnitInRange) ~= "function" then
+        return false
+    end
+
+    local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
+    if not okInRange then
+        return false
+    end
+
+    if checkedRange ~= nil then
+        local canCheckRange = self:SafeBoolean(checkedRange, true)
+        if not canCheckRange then
+            return false
+        end
+    end
+
+    return not self:SafeBoolean(inRange, true)
 end
 
 -- Format a number using Blizzard formatting, then fall back to compact suffixes.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.7 - 2026-03-12
+- Reworked party and raid out-of-range handling to update from `UNIT_IN_RANGE_UPDATE` instead of waiting for unrelated vitals events.
+- Added dedicated lightweight alpha refresh paths for party and raid frames so range changes do not force full unit redraws.
+- Centralized group range and protected-boolean handling, and removed the `CheckInteractDistance` fallback to avoid mismatched range dimming.
+- Bumped addon metadata to `1.6.7`.
+
 ## 1.6.6 - 2026-03-11
 - Fixed secure group-frame unit drift that could make party clicks target the wrong member and cause duplicate or missing group displays.
 - Added a Blizzard group leader icon to party and raid unit frames, anchored at the center-left edge to match the existing overlay styling.

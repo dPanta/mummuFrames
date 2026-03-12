@@ -84,6 +84,7 @@ local GROUP_EVENT_NAMES = {
     "UNIT_DISPLAYPOWER",
     "UNIT_NAME_UPDATE",
     "UNIT_CONNECTION",
+    "UNIT_IN_RANGE_UPDATE",
     "UNIT_FLAGS",
     "UNIT_ABSORB_AMOUNT_CHANGED",
     "UNIT_HEAL_ABSORB_AMOUNT_CHANGED",
@@ -2041,6 +2042,39 @@ end
 -- Group event dispatcher
 -- ---------------------------------------------------------------------------
 
+-- Resolve the mapped frame and owning module for a shared group unit event.
+function AuraHandle:ResolveGroupDispatchTarget(normalizedUnit, eventName)
+    local frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
+    if not frame then
+        self:RequestSharedMapSelfHeal(InCombatLockdown(), "dispatch_miss")
+        frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
+    end
+
+    if not frame then
+        if self._diagnosticsEnabled then
+            print(string.format(
+                "[mummuFrames:AuraHandle] dispatcher miss event=%s unit=%s",
+                tostring(eventName),
+                tostring(normalizedUnit)
+            ))
+        end
+        return nil, nil, nil
+    end
+
+    local addon = self:GetAddon()
+    if not addon then
+        return nil, nil, nil
+    end
+
+    local effectiveUnit = resolvedUnit or normalizedUnit
+    local module = getModuleForOwner(addon, ownerKey or inferOwnerForUnit(effectiveUnit))
+    if not module then
+        return nil, nil, nil
+    end
+
+    return frame, effectiveUnit, module
+end
+
 -- Routes a unit event to the appropriate mummu module for the unit's owner.
 -- UNIT_AURA is handled specially: tracker icons are refreshed directly here
 -- (the CompactUnitFrame_UpdateAuras hook is unreliable in combat), and
@@ -2090,41 +2124,33 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
         return
     end
 
-    -- Non-UNIT_AURA events: forward a vitals-only refresh to the owning module.
-    local frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
-    if not frame then
-        self:RequestSharedMapSelfHeal(InCombatLockdown(), "dispatch_miss")
-        frame, resolvedUnit, ownerKey = self:ResolveSharedMappedFrame(normalizedUnit)
+    local frame, resolvedUnit, module = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
+    if not frame or not module then
+        return
     end
 
-    if not frame then
-        if self._diagnosticsEnabled then
-            print(string.format(
-                "[mummuFrames:AuraHandle] dispatcher miss event=%s unit=%s",
-                tostring(eventName),
-                tostring(normalizedUnit)
-            ))
+    if eventName == "UNIT_IN_RANGE_UPDATE" then
+        -- Range churn only affects alpha, so prefer the dedicated light-weight
+        -- path instead of re-running a full vitals refresh.
+        if type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
+            module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit)
+            return
         end
-        return
+
+        if type(module.RefreshDisplayedUnitRangeState) == "function" then
+            module:RefreshDisplayedUnitRangeState(resolvedUnit)
+            return
+        end
     end
 
-    local addon = self:GetAddon()
-    if not addon then
-        return
-    end
-
-    local module = getModuleForOwner(addon, ownerKey or inferOwnerForUnit(resolvedUnit or normalizedUnit))
-    if not module then
-        return
-    end
-
+    -- Non-UNIT_AURA events: forward a vitals-only refresh to the owning module.
     if type(module.RefreshDisplayedMappedFrame) == "function" then
-        module:RefreshDisplayedMappedFrame(frame, resolvedUnit or normalizedUnit, VITALS_ONLY_REFRESH)
+        module:RefreshDisplayedMappedFrame(frame, resolvedUnit, VITALS_ONLY_REFRESH)
         return
     end
 
     if type(module.RefreshDisplayedUnit) == "function" then
-        module:RefreshDisplayedUnit(resolvedUnit or normalizedUnit, VITALS_ONLY_REFRESH)
+        module:RefreshDisplayedUnit(resolvedUnit, VITALS_ONLY_REFRESH)
     end
 end
 

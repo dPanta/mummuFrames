@@ -12,7 +12,6 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 local L = ns.L
-local AuraSafety = ns.AuraSafety
 
 local RaidFrames = ns.Object:Extend()
 
@@ -96,49 +95,6 @@ local function hideUnitTooltip(frame)
     end
 
     GameTooltip:Hide()
-end
-
--- Compare against literal true inside pcall to tolerate secret booleans.
-local function equalsTrue(value)
-    local ok, resolved = pcall(function()
-        return value == true
-    end)
-    if ok then
-        return resolved == true
-    end
-    return false
-end
-
--- Resolve a boolean-like value with AuraSafety and fallback handling.
-local function getSafeBooleanValue(value, fallback)
-    local fallbackValue = equalsTrue(fallback)
-
-    local okNil, isNil = pcall(function()
-        return value == nil
-    end)
-    if okNil and isNil then
-        return fallbackValue
-    end
-
-    if AuraSafety and type(AuraSafety.SafeTruthy) == "function" then
-        local okSafeTruthy, resolved = pcall(AuraSafety.SafeTruthy, AuraSafety, value)
-        if okSafeTruthy then
-            return resolved == true
-        end
-        return fallbackValue
-    end
-
-    local okTruthy, resolvedTruthy = pcall(function()
-        if value then
-            return true
-        end
-        return false
-    end)
-    if okTruthy then
-        return resolvedTruthy == true
-    end
-
-    return fallbackValue
 end
 
 -- Coerce a numeric-like value without letting protected payloads escape.
@@ -279,7 +235,7 @@ local function shouldShowLeaderIcon(unitToken, previewMode)
         return false
     end
 
-    return getSafeBooleanValue(isLeader, false)
+    return Util:SafeBoolean(isLeader, false)
 end
 
 -- Return the displayed raid unit mapped to a GUID.
@@ -314,47 +270,6 @@ local function setDisplayedUnitForGUID(guidToUnitMap, guid, displayedUnit)
     end)
 end
 
--- Return whether the raid member should be considered out of range.
-local function isUnitOutOfRange(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return false
-    end
-
-    if type(UnitExists) == "function" and not UnitExists(unitToken) then
-        return false
-    end
-
-    if type(UnitInRange) == "function" then
-        local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
-        if okInRange then
-            if checkedRange ~= nil then
-                local canCheckRange = getSafeBooleanValue(checkedRange, true)
-                if not canCheckRange then
-                    return false
-                end
-            end
-            local isInRange = getSafeBooleanValue(inRange, true)
-            if isInRange then
-                return false
-            end
-            return true
-        end
-    end
-
-    if type(CheckInteractDistance) == "function" then
-        local okInteract, canInteract = pcall(CheckInteractDistance, unitToken, 4)
-        if okInteract then
-            local canUse = getSafeBooleanValue(canInteract, true)
-            if canUse then
-                return false
-            end
-            return true
-        end
-    end
-
-    return false
-end
-
 -- Return whether the player is in a raid for the requested category.
 local function isInRaidCategory(category)
     if type(IsInRaid) ~= "function" then
@@ -366,6 +281,37 @@ local function isInRaidCategory(category)
         return inRaid
     end
     return false
+end
+
+local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode)
+    if previewMode or not exists then
+        return 1
+    end
+
+    if not isConnected then
+        return OFFLINE_FRAME_ALPHA
+    end
+
+    if Util:IsGroupUnitOutOfRange(unitToken) then
+        return OUT_OF_RANGE_ALPHA
+    end
+
+    return 1
+end
+
+local function refreshRaidMemberRangeState(frame, unitToken, previewMode)
+    if not frame then
+        return false
+    end
+
+    local exists = not previewMode and UnitExists(unitToken)
+    local isConnected = true
+    if exists and type(UnitIsConnected) == "function" then
+        isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
+    end
+
+    frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode))
+    return true
 end
 
 -- Count members per raid subgroup and return the active subgroup order.
@@ -981,7 +927,6 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
 
     local exists = not previewMode and UnitExists(unitToken)
     local isConnected = true
-    local isOutOfRange = false
     local _, classToken = UnitClass(unitToken)
     local name = getLiveDisplayName(unitToken)
     local health = 100
@@ -997,10 +942,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         name = string.format("Raid %02d", numericIndex)
     elseif exists then
         if type(UnitIsConnected) == "function" then
-            isConnected = getSafeBooleanValue(UnitIsConnected(unitToken), true)
-        end
-        if isConnected then
-            isOutOfRange = isUnitOutOfRange(unitToken)
+            isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
         end
         health = UnitHealth(unitToken) or 0
         maxHealth = UnitHealthMax(unitToken) or 1
@@ -1087,15 +1029,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             frame.HealthText:SetTextColor(1, 1, 1, 1)
         end
 
-        local frameAlpha = 1
-        if not previewMode then
-            if not isConnected then
-                frameAlpha = OFFLINE_FRAME_ALPHA
-            elseif isOutOfRange then
-                frameAlpha = OUT_OF_RANGE_ALPHA
-            end
-        end
-        frame:SetAlpha(frameAlpha)
+        frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode))
     end
 
     if refreshAuras and ns.AuraHandle and type(ns.AuraHandle.RefreshGroupAuras) == "function" then
@@ -1353,6 +1287,79 @@ function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions
         refreshOptions or MEMBER_REFRESH_AURAS_ONLY
     )
     return true
+end
+
+-- Refresh only the connection/range alpha for the currently displayed raid frame.
+function RaidFrames:RefreshDisplayedUnitRangeState(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local raidConfig = self.dataHandle:GetUnitConfig("raid")
+    local previewMode = self.editModeActive or (profile and profile.testMode == true)
+    if previewMode then
+        self:RefreshAll(false)
+        return true
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
+        return false
+    end
+
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit and InCombatLockdown() then
+        self:RebuildDisplayedUnitMap(true)
+        displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    end
+    if not displayedUnit and InCombatLockdown() then
+        local ensuredFrame = self:EnsureMappedFrameForUnit(unitToken)
+        if ensuredFrame then
+            displayedUnit = unitToken
+        end
+    end
+    if not displayedUnit then
+        return false
+    end
+
+    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
+    if not frame then
+        return false
+    end
+
+    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit)
+end
+
+-- Refresh only the connection/range alpha for a known mapped raid frame.
+function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
+    if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local raidConfig = self.dataHandle:GetUnitConfig("raid")
+    local previewMode = self.editModeActive or (profile and profile.testMode == true)
+    if previewMode then
+        self:RefreshAll(false)
+        return true
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
+        return false
+    end
+
+    local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
+    return refreshRaidMemberRangeState(frame, displayedUnit, false)
 end
 
 -- Refresh every raid frame in live mode or preview mode.

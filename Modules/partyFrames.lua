@@ -29,7 +29,6 @@ local addon = _G.mummuFrames
 local Style = ns.Style
 local Util = ns.Util
 local L = ns.L
-local AuraSafety = ns.AuraSafety
 
 -- ============================================================================
 -- CONFIGURATION CONSTANTS
@@ -159,99 +158,6 @@ end
 -- Compute health/power as a percentage (0-100).
 local function computePercent(value, maxValue)
     return (value / maxValue) * 100
-end
--- Check strict boolean equality.
-local function equalsTrue(value)
-    local ok, resolved = pcall(function()
-        return value == true
-    end)
-    if ok then
-        return resolved == true
-    end
-    return false
-end
-
--- Return boolean or fallback if value is not a boolean.
-local function getSafeBooleanValue(value, fallback)
-    local fallbackValue = equalsTrue(fallback)
-
-    -- Preserve fallback for unknown values (e.g. UnitInRange returns nil when range is not checkable).
-    local okNil, isNil = pcall(function()
-        return value == nil
-    end)
-    if okNil and isNil then
-        return fallbackValue
-    end
-
-    -- Preferred path: shared secret-safe truthiness helper.
-    if AuraSafety and type(AuraSafety.SafeTruthy) == "function" then
-        local okSafeTruthy, resolved = pcall(AuraSafety.SafeTruthy, AuraSafety, value)
-        if okSafeTruthy then
-            return resolved == true
-        end
-        return fallbackValue
-    end
-
-    -- Fallback path: never compare against boolean literals directly.
-    local okTruthy, resolvedTruthy = pcall(function()
-        if value then
-            return true
-        end
-        return false
-    end)
-    if okTruthy then
-        return resolvedTruthy == true
-    end
-
-    return fallbackValue
-end
--- Check if unit is beyond interaction range (currently disabled for security).
--- Prefer UnitInRange (party-aware, cheap). Unknown/nil results are treated as
--- "in range" to avoid false dimming during combat or roster churn.
-local function isUnitOutOfRange(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return false
-    end
-    if unitToken == "player" then
-        return false
-    end
-
-    if type(UnitExists) == "function" and not UnitExists(unitToken) then
-        return false
-    end
-
-    if type(UnitInRange) == "function" then
-        local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
-        if okInRange then
-            -- Two-return API variant: (inRange, checkedRange).
-            -- checkedRange=false means unknown/not checkable, so do not dim.
-            if checkedRange ~= nil then
-                local canCheckRange = getSafeBooleanValue(checkedRange, true)
-                if not canCheckRange then
-                    return false
-                end
-            end
-            local isInRange = getSafeBooleanValue(inRange, true)
-            if isInRange then
-                return false
-            end
-            return true
-        end
-    end
-
-    -- Fallback for units where UnitInRange is unavailable/unknown.
-    if type(CheckInteractDistance) == "function" then
-        local okInteract, canInteract = pcall(CheckInteractDistance, unitToken, 4)
-        if okInteract then
-            local canUse = getSafeBooleanValue(canInteract, true)
-            if canUse then
-                return false
-            end
-            return true
-        end
-    end
-
-    return false
 end
 
 -- Return numeric value or fallback, safely coercing via tostring() roundtrip.
@@ -412,7 +318,7 @@ local function shouldShowLeaderIcon(unitToken, previewMode)
         return false
     end
 
-    return getSafeBooleanValue(isLeader, false)
+    return Util:SafeBoolean(isLeader, false)
 end
 
 local function copyUnitList(units)
@@ -447,11 +353,42 @@ local function hasIncomingSummonPending(unitToken)
     if C_IncomingSummon and type(C_IncomingSummon.HasIncomingSummon) == "function" then
         local okHas, hasSummon = pcall(C_IncomingSummon.HasIncomingSummon, unitToken)
         if okHas then
-            return getSafeBooleanValue(hasSummon, false)
+            return Util:SafeBoolean(hasSummon, false)
         end
     end
 
     return false
+end
+
+local function resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode)
+    if previewMode or testMode or not exists then
+        return 1
+    end
+
+    if not isConnected then
+        return OFFLINE_FRAME_ALPHA
+    end
+
+    if Util:IsGroupUnitOutOfRange(unitToken) then
+        return OUT_OF_RANGE_ALPHA
+    end
+
+    return 1
+end
+
+local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testMode)
+    if not frame then
+        return false
+    end
+
+    local exists = UnitExists(unitToken)
+    local isConnected = true
+    if not previewMode and not testMode and exists and type(UnitIsConnected) == "function" then
+        isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
+    end
+
+    frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode))
+    return true
 end
 
 -- Set status bar value safely.
@@ -1362,6 +1299,79 @@ function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOption
     return true
 end
 
+-- Refresh only the connection/range alpha for the currently displayed party frame.
+function PartyFrames:RefreshDisplayedUnitRangeState(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    if previewMode then
+        self:RefreshAll(false)
+        return true
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    if not addonEnabled or partyConfig.enabled == false then
+        return false
+    end
+
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit and InCombatLockdown() then
+        self:RebuildDisplayedUnitMap(true)
+        displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    end
+    if not displayedUnit and InCombatLockdown() then
+        local ensuredFrame = self:EnsureMappedFrameForUnit(unitToken)
+        if ensuredFrame then
+            displayedUnit = unitToken
+        end
+    end
+    if not displayedUnit then
+        return false
+    end
+
+    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
+    if not frame then
+        return false
+    end
+
+    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit)
+end
+
+-- Refresh only the connection/range alpha for a known mapped party frame.
+function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
+    if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    if previewMode then
+        self:RefreshAll(false)
+        return true
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    if not addonEnabled or partyConfig.enabled == false then
+        return false
+    end
+
+    local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
+    return refreshPartyMemberRangeState(frame, displayedUnit, false, false)
+end
+
 -- Resolve a unit token to its currently-displayed party unit token.
 -- Uses GUID->DisplayedUnit map first, then direct lookup, then GUID comparison,
 -- finally UnitIsUnit() fallback for maximum reliability.
@@ -1755,18 +1765,14 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     local _, classToken = UnitClass(unitToken)
     local isConnected = true
     local isAFK = false
-    local isOutOfRange = false
     local hasPendingSummon = false
 
     if not previewMode and not testMode and exists then
         if type(UnitIsConnected) == "function" then
-            isConnected = getSafeBooleanValue(UnitIsConnected(unitToken), true)
+            isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
         end
         if isConnected and type(UnitIsAFK) == "function" then
-            isAFK = getSafeBooleanValue(UnitIsAFK(unitToken), false)
-        end
-        if isConnected and unitToken ~= "player" then
-            isOutOfRange = isUnitOutOfRange(unitToken)
+            isAFK = Util:SafeBoolean(UnitIsAFK(unitToken), false)
         end
         if isConnected then
             hasPendingSummon = hasIncomingSummonPending(unitToken)
@@ -1989,15 +1995,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             frame.TargetHighlight:SetShown(exists and UnitIsUnit(unitToken, "target"))
         end
 
-        local frameAlpha = 1
-        if not previewMode and not testMode then
-            if not isConnected then
-                frameAlpha = OFFLINE_FRAME_ALPHA
-            elseif isOutOfRange then
-                frameAlpha = OUT_OF_RANGE_ALPHA
-            end
-        end
-        frame:SetAlpha(frameAlpha)
+        frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode))
 
         local shouldShowAbsorb = false
         if previewMode then
