@@ -1,5 +1,22 @@
 # Changelog
 
+This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
+
+## Unreleased
+- No changes yet.
+
+## 1.8.0 - 2026-03-13
+- Added a Midnight-specific party spell-target tracker that highlights party member frames when curated hostile dungeon casts appear to be targeting them.
+- Wired the new tracker into party-frame visuals with a dedicated warning overlay, a lightweight highlight-only refresh path, and a config toggle.
+- Reworked the tracker around Midnight-safe unit spellcast scanning, then hardened it against protected/secret spell payloads so it no longer depends on unsafe combat-log registration or secret table keys.
+- Documented the Midnight Season 1 seed list and limited v1 spell coverage to mechanics backed by current Midnight LittleWigs cast IDs instead of reusing TWW-era assumptions.
+- Reworked the configuration window around top-level `Frames`, `Tracked Auras`, `Global`, and `Profiles` pages instead of flat per-unit tabs.
+- Added a grouped Frames hub with left-side unit navigation, consistent per-unit sections, a basic/advanced toggle, reset-to-defaults for individual frame types, and scope-aware refresh intents.
+- Polished the Frames page so advanced options only show on relevant panes, simpler units expose direct position controls, and the header toggle text stays inside the configuration window.
+- Synced all locale files with the newer configuration keys by seeding missing entries from `enUS`, preserving existing translations and using English fallbacks where translations are still pending.
+- Trimmed older changelog history so only the 10 most recent tagged versions remain alongside `Unreleased`.
+- Bumped addon metadata to `1.8.0`.
+
 ## 1.7.0 - 2026-03-13
 - Added generic empowered-spell castbar support with charging-stage markers and event handling for player, target, and focus castbars.
 - Rewired live raid frames to use fixed `raid1`-`raid40` secure buttons with deterministic sorting/layout, instead of relying on secure-header child discovery.
@@ -50,26 +67,3 @@
 - Recolored health and main power bars to a granite fill with a red-tinted gray empty-bar backing when Dark Mode is enabled.
 - Moved class color emphasis from unit bar fills to player name text in Dark Mode while preserving offline and AFK overrides.
 - Centralized Dark Mode palette and status-bar backing logic so player, party, and raid frames update consistently through the existing deferred refresh flow.
-
-## 1.3.1 - 2026-03-08
-- Cleaned up all locale files and synced them to the current set of live config keys.
-- Removed stale locale entries and fallback leftovers from the translation files.
-- Bumped addon metadata to `1.3.1`.
-
-## 1.3.0 - 2026-03-08
-- Added a dedicated raid frames module with raid layout, spacing, sorting, and test-size support.
-- Fixed party buff handling and expanded aura tracking for party and raid members.
-- Extended the configuration UI for raid and aura options, and added the addon icon asset.
-
-## 1.2.3 - 2026-03-04
-- Fixed party out-of-range detection so units are not dimmed when the game cannot reliably check their range.
-- Updated party range logic to handle both `UnitInRange` API return styles safely.
-
-## 1.2.2 - 2026-03-03
-- Added a breath bar for the player by reusing the primary power bar while underwater.
-- Improved range safety checks in party frames to better handle uncertain API results.
-
-## 1.2.1 - 2026-03-01
-- Fixed follower dungeon party handling across home and instance group categories.
-- Improved secure visibility refresh behavior for dynamic unit frames after combat.
-- Tightened party roster detection and self-display logic for edge-case group states.

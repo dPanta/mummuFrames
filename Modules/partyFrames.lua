@@ -55,6 +55,9 @@ local MEMBER_REFRESH_VITALS_ONLY = {
 local MEMBER_REFRESH_AURAS_ONLY = {
     auras = true,
 }
+local MEMBER_REFRESH_SPELL_TARGET_ONLY = {
+    spellTarget = true,
+}
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
@@ -480,6 +483,7 @@ function PartyFrames:Constructor()
     self.dataHandle = nil
     self.globalFrames = nil
     self.unitFrames = nil
+    self.spellTargetTracker = nil
     self.container = nil
     self.header = nil          -- SecureGroupHeaderTemplate frame
     self.testFrames = {}       -- fixed pool for preview/test mode only
@@ -506,6 +510,7 @@ function PartyFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
     self.unitFrames = self.addon:GetModule("unitFrames")
+    self.spellTargetTracker = self.addon:GetModule("spellTargetTracker")
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
@@ -527,6 +532,7 @@ function PartyFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
+    self.spellTargetTracker = nil
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
     self._combatRemapRetryAt = 0
@@ -846,6 +852,51 @@ function PartyFrames:BuildFrameVisuals(frame)
         targetHighlightColor[3], targetHighlightColor[4]
     )
 
+    frame.SpellTargetHighlight = CreateFrame("Frame", nil, frame)
+    frame.SpellTargetHighlight:SetAllPoints(frame)
+    frame.SpellTargetHighlight:SetFrameStrata(frame:GetFrameStrata())
+    frame.SpellTargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 36)
+    frame.SpellTargetHighlight:Hide()
+
+    local spellHighlightBorder = 3
+    local spellHighlightColor = { 1, 0.28, 0.18, 0.95 }
+    frame.SpellTargetHighlight.Top = frame.SpellTargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.SpellTargetHighlight.Top:SetPoint("TOPLEFT", frame.SpellTargetHighlight, "TOPLEFT", 0, 0)
+    frame.SpellTargetHighlight.Top:SetPoint("TOPRIGHT", frame.SpellTargetHighlight, "TOPRIGHT", 0, 0)
+    frame.SpellTargetHighlight.Top:SetHeight(spellHighlightBorder)
+    frame.SpellTargetHighlight.Top:SetColorTexture(
+        spellHighlightColor[1], spellHighlightColor[2],
+        spellHighlightColor[3], spellHighlightColor[4]
+    )
+    frame.SpellTargetHighlight.Bottom = frame.SpellTargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.SpellTargetHighlight.Bottom:SetPoint("BOTTOMLEFT", frame.SpellTargetHighlight, "BOTTOMLEFT", 0, 0)
+    frame.SpellTargetHighlight.Bottom:SetPoint("BOTTOMRIGHT", frame.SpellTargetHighlight, "BOTTOMRIGHT", 0, 0)
+    frame.SpellTargetHighlight.Bottom:SetHeight(spellHighlightBorder)
+    frame.SpellTargetHighlight.Bottom:SetColorTexture(
+        spellHighlightColor[1], spellHighlightColor[2],
+        spellHighlightColor[3], spellHighlightColor[4]
+    )
+    frame.SpellTargetHighlight.Left = frame.SpellTargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.SpellTargetHighlight.Left:SetPoint("TOPLEFT", frame.SpellTargetHighlight, "TOPLEFT", 0, 0)
+    frame.SpellTargetHighlight.Left:SetPoint("BOTTOMLEFT", frame.SpellTargetHighlight, "BOTTOMLEFT", 0, 0)
+    frame.SpellTargetHighlight.Left:SetWidth(spellHighlightBorder)
+    frame.SpellTargetHighlight.Left:SetColorTexture(
+        spellHighlightColor[1], spellHighlightColor[2],
+        spellHighlightColor[3], spellHighlightColor[4]
+    )
+    frame.SpellTargetHighlight.Right = frame.SpellTargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.SpellTargetHighlight.Right:SetPoint("TOPRIGHT", frame.SpellTargetHighlight, "TOPRIGHT", 0, 0)
+    frame.SpellTargetHighlight.Right:SetPoint("BOTTOMRIGHT", frame.SpellTargetHighlight, "BOTTOMRIGHT", 0, 0)
+    frame.SpellTargetHighlight.Right:SetWidth(spellHighlightBorder)
+    frame.SpellTargetHighlight.Right:SetColorTexture(
+        spellHighlightColor[1], spellHighlightColor[2],
+        spellHighlightColor[3], spellHighlightColor[4]
+    )
+    frame.SpellTargetHighlight.Fill = frame.SpellTargetHighlight:CreateTexture(nil, "OVERLAY")
+    frame.SpellTargetHighlight.Fill:SetPoint("TOPLEFT", frame.SpellTargetHighlight, "TOPLEFT", spellHighlightBorder, -spellHighlightBorder)
+    frame.SpellTargetHighlight.Fill:SetPoint("BOTTOMRIGHT", frame.SpellTargetHighlight, "BOTTOMRIGHT", -spellHighlightBorder, spellHighlightBorder)
+    frame.SpellTargetHighlight.Fill:SetColorTexture(1, 0.18, 0.14, 0.08)
+
     frame._mummuVisualsBuilt = true
 end
 
@@ -1111,6 +1162,11 @@ function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
     for _ in pairs(frameByDisplayedUnit) do
         mappedCount = mappedCount + 1
     end
+
+    if not isPreview and self.spellTargetTracker and type(self.spellTargetTracker.RefreshAllHighlights) == "function" then
+        self.spellTargetTracker:RefreshAllHighlights()
+    end
+
     return mappedCount
 end
 
@@ -1365,6 +1421,76 @@ function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
 
     local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
     return refreshPartyMemberRangeState(frame, displayedUnit, false, false)
+end
+
+-- Refresh only the curated spell-target warning highlight for the displayed party frame.
+function PartyFrames:RefreshDisplayedUnitSpellTargetState(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    if previewMode then
+        return false
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    if not addonEnabled or partyConfig.enabled == false then
+        return false
+    end
+
+    local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
+    if not displayedUnit then
+        return false
+    end
+
+    local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
+    if not frame then
+        return false
+    end
+
+    return self:RefreshDisplayedMappedFrameSpellTargetState(frame, displayedUnit)
+end
+
+-- Refresh only the curated spell-target warning highlight for a known mapped party frame.
+function PartyFrames:RefreshDisplayedMappedFrameSpellTargetState(frame, unitToken)
+    if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    if not self.dataHandle or not self.container then
+        return false
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    if previewMode then
+        return false
+    end
+
+    local addonEnabled = profile and profile.enabled ~= false
+    if not addonEnabled or partyConfig.enabled == false then
+        return false
+    end
+
+    local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
+    self:RefreshMember(
+        frame,
+        displayedUnit,
+        partyConfig,
+        false,
+        false,
+        false,
+        MEMBER_REFRESH_SPELL_TARGET_ONLY
+    )
+    return true
 end
 
 -- Resolve a unit token to its currently-displayed party unit token.
@@ -1721,6 +1847,24 @@ end
 -- MEMBER REFRESH (SINGLE UNIT)
 -- ============================================================================
 
+function PartyFrames:ApplySpellTargetHighlight(frame, unitToken, partyConfig, previewMode, testMode, exists)
+    if not frame or not frame.SpellTargetHighlight then
+        return
+    end
+
+    local highlightConfig = partyConfig and partyConfig.spellTargetHighlight or nil
+    local highlightEnabled = type(highlightConfig) ~= "table" or highlightConfig.enabled ~= false
+    local shouldShow = highlightEnabled
+        and not previewMode
+        and not testMode
+        and exists
+        and self.spellTargetTracker
+        and type(self.spellTargetTracker.IsUnitSpellTarget) == "function"
+        and self.spellTargetTracker:IsUnitSpellTarget(unitToken)
+
+    frame.SpellTargetHighlight:SetShown(shouldShow == true)
+end
+
 -- Refresh visual state of one party member frame: apply style, update vitals,
 -- update role and status icons, and refresh aura visuals.
 -- Supports preview mode (fake data), test mode (periodic animation), and real mode.
@@ -1732,6 +1876,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     refreshOptions = refreshOptions or MEMBER_REFRESH_FULL
     local refreshVitals = refreshOptions.vitals == true
     local refreshAuras = refreshOptions.auras == true
+    local refreshSpellTarget = refreshOptions.spellTarget == true
 
     local showPowerBar = self:ShouldShowPowerBar(unitToken)
     local displayRole = self:GetDisplayRoleForUnit(unitToken, previewMode, testMode)
@@ -1774,7 +1919,9 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         end
     end
 
-    if not refreshVitals and not refreshAuras then
+    self:ApplySpellTargetHighlight(frame, unitToken, partyConfig, previewMode, testMode, exists)
+
+    if not refreshVitals and not refreshAuras and not refreshSpellTarget then
         return
     end
 

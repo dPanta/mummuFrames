@@ -145,6 +145,9 @@ local DEFAULTS = {
                         showPlayer = true,
                         showSelfWithoutGroup = true,
                         showRoleIcon = true,
+                        spellTargetHighlight = {
+                            enabled = true,
+                        },
                         orientation = "vertical",
                         point = "LEFT",
                         relativePoint = "LEFT",
@@ -885,6 +888,34 @@ function DataHandle:SetUnitConfig(unitToken, key, value)
             unitDefaultsApplied[unitToken] = nil
         end
     end
+end
+
+-- Reset one unit config back to its profile defaults.
+function DataHandle:ResetUnitConfig(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+
+    local profile = self:GetProfile()
+    if not profile then
+        return nil
+    end
+
+    profile.units = profile.units or {}
+
+    local defaultUnit = DEFAULTS.global.profiles.Default.units[unitToken]
+    if type(defaultUnit) ~= "table" then
+        defaultUnit = DEFAULTS.global.profiles.Default.units.player
+    end
+
+    profile.units[unitToken] = deepCopy(defaultUnit)
+
+    local charSettings = self:GetCharacterSettings()
+    local profileName = charSettings and (charSettings.activeProfile or "Default") or "Default"
+    self._unitDefaultsAppliedByProfile[profileName] = self._unitDefaultsAppliedByProfile[profileName] or {}
+    self._unitDefaultsAppliedByProfile[profileName][unitToken] = true
+
+    return profile.units[unitToken]
 end
 
 addon:RegisterModule("dataHandle", DataHandle:New())
