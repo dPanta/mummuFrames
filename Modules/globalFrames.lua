@@ -503,6 +503,12 @@ function GlobalFrames:CreateCastBar(frame)
     bar:SetStatusBarColor(0.29, 0.52, 0.90, 1)
     container.Bar = bar
 
+    local empowerOverlay = CreateFrame("Frame", nil, bar)
+    empowerOverlay:SetAllPoints(bar)
+    empowerOverlay:SetFrameLevel(bar:GetFrameLevel() + 5)
+    container.EmpowerOverlay = empowerOverlay
+    container.EmpowerMarkers = {}
+
     -- Create text font string.
     container.SpellText = bar:CreateFontString(nil, "OVERLAY")
     container.SpellText:SetDrawLayer("OVERLAY", 7)

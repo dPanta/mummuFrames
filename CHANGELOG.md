@@ -1,10 +1,15 @@
 # Changelog
 
-## 1.6.7 - 2026-03-12
+## 1.7.0 - 2026-03-13
+- Added generic empowered-spell castbar support with charging-stage markers and event handling for player, target, and focus castbars.
+- Rewired live raid frames to use fixed `raid1`-`raid40` secure buttons with deterministic sorting/layout, instead of relying on secure-header child discovery.
 - Reworked party and raid out-of-range handling to update from `UNIT_IN_RANGE_UPDATE` instead of waiting for unrelated vitals events.
 - Added dedicated lightweight alpha refresh paths for party and raid frames so range changes do not force full unit redraws.
 - Centralized group range and protected-boolean handling, and removed the `CheckInteractDistance` fallback to avoid mismatched range dimming.
-- Bumped addon metadata to `1.6.7`.
+- Fixed group range updates to register `UNIT_IN_RANGE_UPDATE` as a filtered unit event, which restores live out-of-range dimming on party and raid frames.
+- Added a large centered defensive icon for party and raid frames, driven from Blizzard's compact-frame defensive classification and refreshed through the shared aura pipeline.
+- Removed the dead legacy party/raid healer-editor config code and stale aura default data that no live UI path used.
+- Bumped addon metadata to `1.7.0`.
 
 ## 1.6.6 - 2026-03-11
 - Fixed secure group-frame unit drift that could make party clicks target the wrong member and cause duplicate or missing group displays.

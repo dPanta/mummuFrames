@@ -470,11 +470,6 @@ local function getPlayerSpecializationID()
     return specID
 end
 
--- Return party healer config.
-function PartyFrames:GetPartyHealerConfig()
-    return ns.AuraHandle and ns.AuraHandle:GetHealerConfig() or nil
-end
-
 -- ============================================================================
 -- PARTYFRAMES CLASS DEFINITION
 -- ============================================================================
@@ -2014,16 +2009,11 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         end
     end
 
-    if refreshAuras and (previewMode or not exists) then
-        if frame.DispelOverlay then
-            frame.DispelOverlay:Hide()
-        end
-        if type(frame.HealerTrackerElements) == "table" then
-            for _, trackerElement in pairs(frame.HealerTrackerElements) do
-                if trackerElement and type(trackerElement.Hide) == "function" then
-                    trackerElement:Hide()
-                end
-            end
+    if refreshAuras and ns.AuraHandle and type(ns.AuraHandle.RefreshGroupAuras) == "function" then
+        ns.AuraHandle:RefreshGroupAuras(frame, unitToken, exists == true, previewMode or testMode)
+        if frame.DispelOverlay and frame.DispelOverlay:IsShown() then
+            frame.DispelOverlay:SetVertexColor(1, 1, 1, 1)
+            frame.DispelOverlay:SetAlpha(DISPEL_OVERLAY_ALPHA)
         end
     end
 

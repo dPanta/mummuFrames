@@ -43,6 +43,12 @@ local MAP_REBUILD_THROTTLE          = 0.20
 local MAX_TRACKER_AURAS    = 4
 -- Default tracker icon size in pixels.
 local DEFAULT_TRACKER_SIZE = 14
+local CENTER_DEFENSIVE_MIN_SIZE = 16
+local CENTER_DEFENSIVE_MAX_SIZE = 30
+local CENTER_DEFENSIVE_BACKDROP_COLOR = { 0.03, 0.04, 0.06, 0.72 }
+local CENTER_DEFENSIVE_BORDER_COLOR_PERSONAL = { 0.28, 0.82, 1.00, 0.95 }
+local CENTER_DEFENSIVE_BORDER_COLOR_EXTERNAL = { 1.00, 0.76, 0.24, 0.95 }
+local CENTER_DEFENSIVE_BORDER_COLOR_UNKNOWN  = { 0.88, 0.90, 0.94, 0.90 }
 -- Whitelist lookups prefer the PLAYER filter so same-spell buffs from other
 -- players do not satisfy the tracker. A broader HELPFUL scan remains as
 -- fallback when ownership metadata is more reliable than the filter path.
@@ -872,6 +878,166 @@ local function hideUnusedTrackerElements(frame, usedByKey)
     end
 end
 
+local function setDefensiveIndicatorBorderColor(indicator, color)
+    if type(indicator) ~= "table" or type(color) ~= "table" then
+        return
+    end
+
+    local r = color[1] or 1
+    local g = color[2] or 1
+    local b = color[3] or 1
+    local a = color[4] or 1
+
+    local borderTextures = {
+        indicator.BorderTop,
+        indicator.BorderRight,
+        indicator.BorderBottom,
+        indicator.BorderLeft,
+    }
+    for i = 1, #borderTextures do
+        local borderTexture = borderTextures[i]
+        if borderTexture and type(borderTexture.SetColorTexture) == "function" then
+            borderTexture:SetColorTexture(r, g, b, a)
+        end
+    end
+end
+
+local function getSafeFrameHeight(frame)
+    if type(frame) ~= "table" or type(frame.GetHeight) ~= "function" then
+        return 0
+    end
+
+    local okHeight, height = pcall(frame.GetHeight, frame)
+    if okHeight and type(height) == "number" then
+        return height
+    end
+    return 0
+end
+
+local function ensureCenterDefensiveIndicator(frame)
+    if type(frame) ~= "table" then
+        return nil
+    end
+
+    local existing = frame.MummuCenterDefensiveIndicator
+    if existing then
+        return existing
+    end
+
+    local parent = frame.HealthBar or frame
+    local indicator = CreateFrame("Frame", nil, parent)
+    indicator:Hide()
+
+    indicator.Background = indicator:CreateTexture(nil, "BACKGROUND")
+    indicator.Background:SetAllPoints()
+    indicator.Background:SetColorTexture(
+        CENTER_DEFENSIVE_BACKDROP_COLOR[1],
+        CENTER_DEFENSIVE_BACKDROP_COLOR[2],
+        CENTER_DEFENSIVE_BACKDROP_COLOR[3],
+        CENTER_DEFENSIVE_BACKDROP_COLOR[4]
+    )
+
+    indicator.BorderTop = indicator:CreateTexture(nil, "BORDER")
+    indicator.BorderTop:SetPoint("TOPLEFT", indicator, "TOPLEFT", 0, 0)
+    indicator.BorderTop:SetPoint("TOPRIGHT", indicator, "TOPRIGHT", 0, 0)
+    indicator.BorderTop:SetHeight(1)
+
+    indicator.BorderRight = indicator:CreateTexture(nil, "BORDER")
+    indicator.BorderRight:SetPoint("TOPRIGHT", indicator, "TOPRIGHT", 0, 0)
+    indicator.BorderRight:SetPoint("BOTTOMRIGHT", indicator, "BOTTOMRIGHT", 0, 0)
+    indicator.BorderRight:SetWidth(1)
+
+    indicator.BorderBottom = indicator:CreateTexture(nil, "BORDER")
+    indicator.BorderBottom:SetPoint("BOTTOMLEFT", indicator, "BOTTOMLEFT", 0, 0)
+    indicator.BorderBottom:SetPoint("BOTTOMRIGHT", indicator, "BOTTOMRIGHT", 0, 0)
+    indicator.BorderBottom:SetHeight(1)
+
+    indicator.BorderLeft = indicator:CreateTexture(nil, "BORDER")
+    indicator.BorderLeft:SetPoint("TOPLEFT", indicator, "TOPLEFT", 0, 0)
+    indicator.BorderLeft:SetPoint("BOTTOMLEFT", indicator, "BOTTOMLEFT", 0, 0)
+    indicator.BorderLeft:SetWidth(1)
+
+    indicator.Icon = indicator:CreateTexture(nil, "ARTWORK")
+    indicator.Icon:SetPoint("TOPLEFT", indicator, "TOPLEFT", 2, -2)
+    indicator.Icon:SetPoint("BOTTOMRIGHT", indicator, "BOTTOMRIGHT", -2, 2)
+    indicator.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    indicator.Cooldown = CreateFrame("Cooldown", nil, indicator, "CooldownFrameTemplate")
+    indicator.Cooldown:SetAllPoints(indicator.Icon)
+    if type(indicator.Cooldown.SetDrawEdge) == "function" then
+        indicator.Cooldown:SetDrawEdge(false)
+    end
+    if type(indicator.Cooldown.SetDrawBling) == "function" then
+        indicator.Cooldown:SetDrawBling(false)
+    end
+    if type(indicator.Cooldown.SetHideCountdownNumbers) == "function" then
+        indicator.Cooldown:SetHideCountdownNumbers(true)
+    end
+    indicator.Cooldown:Hide()
+
+    setDefensiveIndicatorBorderColor(indicator, CENTER_DEFENSIVE_BORDER_COLOR_UNKNOWN)
+
+    frame.MummuCenterDefensiveIndicator = indicator
+    return indicator
+end
+
+local function layoutCenterDefensiveIndicator(frame, indicator)
+    if type(frame) ~= "table" or type(indicator) ~= "table" then
+        return
+    end
+
+    local parent = frame.HealthBar or frame
+    local frameHeight = getSafeFrameHeight(parent)
+    if frameHeight <= 0 then
+        frameHeight = getSafeFrameHeight(frame)
+    end
+    if frameHeight <= 0 then
+        frameHeight = 24
+    end
+
+    local size = Util:Clamp(math.floor((frameHeight * 0.82) + 0.5), CENTER_DEFENSIVE_MIN_SIZE, CENTER_DEFENSIVE_MAX_SIZE)
+    indicator:ClearAllPoints()
+    indicator:SetPoint("CENTER", parent, "CENTER", 0, 0)
+    indicator:SetSize(size, size)
+
+    if type(parent.GetFrameStrata) == "function" then
+        local okStrata, strata = pcall(parent.GetFrameStrata, parent)
+        if okStrata and type(strata) == "string" and strata ~= "" then
+            indicator:SetFrameStrata(strata)
+            if indicator.Cooldown then
+                indicator.Cooldown:SetFrameStrata(strata)
+            end
+        end
+    end
+
+    if type(parent.GetFrameLevel) == "function" then
+        local okLevel, level = pcall(parent.GetFrameLevel, parent)
+        if okLevel and type(level) == "number" then
+            indicator:SetFrameLevel(level + 24)
+            if indicator.Cooldown then
+                indicator.Cooldown:SetFrameLevel(level + 25)
+            end
+        end
+    end
+end
+
+local function hideCenterDefensiveIndicator(frame)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    local indicator = frame.MummuCenterDefensiveIndicator
+    if type(indicator) ~= "table" then
+        return
+    end
+
+    if indicator.Cooldown and type(indicator.Cooldown.SetCooldown) == "function" then
+        pcall(indicator.Cooldown.SetCooldown, indicator.Cooldown, 0, 0)
+        indicator.Cooldown:Hide()
+    end
+    indicator:Hide()
+end
+
 -- Fetches aura data by scan index; returns the auraData table or nil.
 -- Uses ns.AuraSafety when available so secret indexes are skipped safely.
 local function getAuraDataByIndex(unitToken, index, filter)
@@ -974,6 +1140,24 @@ local function isTrackerAuraOwnedByPlayer(auraData)
     return safeValueEquals(sourceUnit, "player")
         or safeValueEquals(sourceUnit, "pet")
         or safeValueEquals(sourceUnit, "vehicle")
+end
+
+local function isAuraSelfCastOnUnit(unitToken, auraData)
+    if type(unitToken) ~= "string" or unitToken == "" or type(auraData) ~= "table" then
+        return nil
+    end
+
+    local sourceUnit = auraData.sourceUnit
+    if type(sourceUnit) ~= "string" or sourceUnit == "" or type(UnitIsUnit) ~= "function" then
+        return nil
+    end
+
+    local okMatch, isSameUnit = pcall(UnitIsUnit, sourceUnit, unitToken)
+    if not okMatch then
+        return nil
+    end
+
+    return isSameUnit == true
 end
 
 -- Scan a unit for the first tracked aura matching any spell ID in the list.
@@ -1684,7 +1868,8 @@ function AuraHandle:NotifyBlizzardBuffCacheChanged(unitToken, source)
         return
     end
     -- Hook path: unitToken originates from frame.unit and may be tainted.
-    -- Pass dispelOnly=true so RefreshFrameTrackedAuras is never called here.
+    -- Skip the direct C_UnitAuras tracker scan here; the hook path only drives
+    -- cache-backed visuals such as dispel overlays and centre defensive buffs.
     self:RefreshMappedUnit(normalizedUnit, source or "hook", true)
 end
 
@@ -1742,6 +1927,58 @@ function AuraHandle:GetApprovedBuffData(unitToken)
         end
     end
     return buffDataBySpellID
+end
+
+-- Returns an auraInstanceID→auraData map for buffs Blizzard classified as the
+-- prominent centre defensive buff on a compact group frame.
+function AuraHandle:GetApprovedDefensiveBuffDataByAuraInstanceID(unitToken)
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    if not normalizedUnit then
+        return nil
+    end
+
+    local cache = blizzardAuraCacheByUnit[normalizedUnit]
+    if type(cache) ~= "table" or type(cache.defensives) ~= "table" then
+        return nil
+    end
+
+    local buffDataByAuraInstanceID = {}
+    for auraInstanceID in pairs(cache.defensives) do
+        if not isAuraInstanceSecret(normalizedUnit, auraInstanceID) then
+            local auraData = getAuraDataByInstanceID(normalizedUnit, auraInstanceID)
+            if auraData then
+                buffDataByAuraInstanceID[auraInstanceID] = auraData
+            end
+        end
+    end
+
+    if next(buffDataByAuraInstanceID) == nil then
+        return nil
+    end
+    return buffDataByAuraInstanceID
+end
+
+-- Returns the single best defensive aura data table for unitToken, or nil.
+function AuraHandle:GetCenterDefensiveBuffData(unitToken)
+    local buffDataByAuraInstanceID = self:GetApprovedDefensiveBuffDataByAuraInstanceID(unitToken)
+    if type(buffDataByAuraInstanceID) ~= "table" then
+        return nil
+    end
+
+    local bestAura = nil
+    for _, auraData in pairs(buffDataByAuraInstanceID) do
+        if not bestAura then
+            bestAura = auraData
+        else
+            local expirationTime = type(auraData.expirationTime) == "number" and auraData.expirationTime or 0
+            local bestExpirationTime = type(bestAura.expirationTime) == "number" and bestAura.expirationTime or 0
+            if expirationTime > bestExpirationTime then
+                bestAura = auraData
+            end
+        end
+    end
+
+    return bestAura
 end
 
 -- ---------------------------------------------------------------------------
@@ -1829,6 +2066,71 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     end
 
     hideUnusedTrackerElements(frame, usedByKey)
+end
+
+-- Redraws the large centre defensive icon on frame for the given unitToken.
+function AuraHandle:RefreshFrameCenterDefensiveIndicator(frame, unitToken)
+    if type(frame) ~= "table" then
+        return
+    end
+    if frame._mummuIsPartyFrame ~= true and frame._mummuIsRaidFrame ~= true then
+        hideCenterDefensiveIndicator(frame)
+        return
+    end
+
+    local config = self:GetAurasConfig()
+    if not config or config.enabled == false then
+        hideCenterDefensiveIndicator(frame)
+        return
+    end
+
+    local auraData = self:GetCenterDefensiveBuffData(unitToken)
+    if type(auraData) ~= "table" then
+        hideCenterDefensiveIndicator(frame)
+        return
+    end
+
+    local indicator = ensureCenterDefensiveIndicator(frame)
+    if type(indicator) ~= "table" then
+        return
+    end
+
+    layoutCenterDefensiveIndicator(frame, indicator)
+
+    local iconTexture = auraData.icon or DEFAULT_AURA_TEXTURE
+    if not safeSetTexture(indicator.Icon, iconTexture) then
+        safeSetTexture(indicator.Icon, DEFAULT_AURA_TEXTURE)
+    end
+    indicator.Icon:Show()
+
+    local borderColor = CENTER_DEFENSIVE_BORDER_COLOR_UNKNOWN
+    local isSelfCast = isAuraSelfCastOnUnit(unitToken, auraData)
+    if isSelfCast == true then
+        borderColor = CENTER_DEFENSIVE_BORDER_COLOR_PERSONAL
+    elseif isSelfCast == false then
+        borderColor = CENTER_DEFENSIVE_BORDER_COLOR_EXTERNAL
+    end
+    setDefensiveIndicatorBorderColor(indicator, borderColor)
+
+    local duration = type(auraData.duration) == "number" and auraData.duration or 0
+    local expirationTime = type(auraData.expirationTime) == "number" and auraData.expirationTime or 0
+    if indicator.Cooldown then
+        if duration > 0 and expirationTime > 0 and type(indicator.Cooldown.SetCooldown) == "function" then
+            local startTime = expirationTime - duration
+            if startTime < 0 then
+                startTime = 0
+            end
+            indicator.Cooldown:SetCooldown(startTime, duration)
+            indicator.Cooldown:Show()
+        else
+            if type(indicator.Cooldown.SetCooldown) == "function" then
+                pcall(indicator.Cooldown.SetCooldown, indicator.Cooldown, 0, 0)
+            end
+            indicator.Cooldown:Hide()
+        end
+    end
+
+    indicator:Show()
 end
 
 -- ---------------------------------------------------------------------------
@@ -1942,29 +2244,32 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken)
     end
 end
 
--- Hides all aura indicators (tracker elements + dispel overlay) on frame.
+-- Hides all aura indicators (tracker elements, centre defensive icon, and
+-- dispel overlay) on frame.
 function AuraHandle:ClearFrameAuraIndicators(frame)
     if type(frame) ~= "table" then
         return
     end
     hideUnusedTrackerElements(frame, {})
+    hideCenterDefensiveIndicator(frame)
     if frame.DispelOverlay and type(frame.DispelOverlay.Hide) == "function" then
         frame.DispelOverlay:Hide()
     end
 end
 
 -- Updates aura indicators on a group frame.
--- When dispelOnly is true only the dispel overlay is refreshed (used by the
--- Blizzard-frame hook path whose unitToken may be tainted).
+-- When skipTrackedScan is true only cache-backed visuals are refreshed (used by
+-- the Blizzard-frame hook path whose unitToken may be tainted).
 -- rawUnitToken: if provided, passed to RefreshFrameTrackedAuras for untainted
 -- C_UnitAuras API calls; falls back to unitToken when absent.
-function AuraHandle:RefreshGroupFrameAuras(frame, unitToken, dispelOnly, rawUnitToken)
+function AuraHandle:RefreshGroupFrameAuras(frame, unitToken, skipTrackedScan, rawUnitToken)
     if not shouldFrameRenderAuras(frame) then
         return
     end
-    if not dispelOnly then
+    if not skipTrackedScan then
         self:RefreshFrameTrackedAuras(frame, rawUnitToken or unitToken)
     end
+    self:RefreshFrameCenterDefensiveIndicator(frame, unitToken)
     self:RefreshFrameDispelOverlay(frame, unitToken)
 end
 
@@ -1999,7 +2304,7 @@ end
 -- rawUnitToken: the original, unprocessed event arg (clean, from WoW event system).
 -- It is passed to RefreshFrameTrackedAuras so that C_UnitAuras.GetAuraDataByIndex
 -- receives an untainted argument and returns untainted aura data.
-function AuraHandle:RefreshMappedUnit(unitToken, source, dispelOnly, rawUnitToken)
+function AuraHandle:RefreshMappedUnit(unitToken, source, skipTrackedScan, rawUnitToken)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return false
@@ -2025,7 +2330,7 @@ function AuraHandle:RefreshMappedUnit(unitToken, source, dispelOnly, rawUnitToke
         return false
     end
 
-    self:RefreshGroupFrameAuras(frame, resolvedUnit or normalizedUnit, dispelOnly, rawUnitToken)
+    self:RefreshGroupFrameAuras(frame, resolvedUnit or normalizedUnit, skipTrackedScan, rawUnitToken)
 
     if self._diagnosticsEnabled then
         print(string.format(
@@ -2162,11 +2467,22 @@ function AuraHandle:EnsureGroupEventDispatcher()
 
     local selfRef = self
     local frame   = CreateFrame("Frame", "mummuFramesAuraGroupDispatcher")
+    local unpackGroupUnits = (table and table.unpack) or unpack
 
     for i = 1, #GROUP_EVENT_NAMES do
         local eventName = GROUP_EVENT_NAMES[i]
         if eventName ~= "UNIT_AURA" then
-            frame:RegisterEvent(eventName)
+            if eventName == "UNIT_IN_RANGE_UPDATE"
+                and type(frame.RegisterUnitEvent) == "function"
+                and type(unpackGroupUnits) == "function"
+            then
+                -- Range updates are only reliable when filtered to explicit
+                -- group unit tokens; plain RegisterEvent does not consistently
+                -- surface usable group range transitions.
+                frame:RegisterUnitEvent(eventName, unpackGroupUnits(GROUP_UNIT_TOKENS))
+            else
+                frame:RegisterEvent(eventName)
+            end
         end
     end
 
@@ -2322,11 +2638,6 @@ end
 -- Called by configuration.lua when the user adds or removes a spell.
 function AuraHandle:InvalidateAuraNameSetCache()
     self:RebuildSpellIconCache()
-end
-
--- Public alias kept for external callers (partyFrames, raidFrames, configuration).
-function AuraHandle:GetHealerConfig()
-    return self:GetAurasConfig()
 end
 
 -- ---------------------------------------------------------------------------

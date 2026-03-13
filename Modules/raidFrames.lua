@@ -1,10 +1,10 @@
 -- ============================================================================
 -- MUMMUFRAMES RAID FRAMES MODULE
 -- ============================================================================
--- Owns custom raid member frames backed by secure raid-group headers.
--- Each raid group gets its own SecureGroupHeaderTemplate so group spacing and
--- group ordering can be controlled cleanly while secure unit assignment stays
--- Blizzard-owned during combat.
+-- Owns custom raid member frames for live raids and preview/test layouts.
+-- Live mode uses one fixed SecureUnitButtonTemplate per raid token (raid1-raid40)
+-- so unit assignment is deterministic and does not depend on secure-header child
+-- creation timing. Preview mode keeps a separate synthetic frame pool.
 
 local _, ns = ...
 
@@ -24,6 +24,7 @@ local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local GROUP_LEADER_ICON_ATLAS = "UI-HUD-UnitFrame-Player-Group-LeaderIcon"
+local RAID_FRAME_STRATA = "MEDIUM"
 local ROLE_GROUPING_ORDER_ASC = "TANK,HEALER,DAMAGER,NONE"
 local ROLE_GROUPING_ORDER_DESC = "NONE,DAMAGER,HEALER,TANK"
 local TEST_ROLE_BY_SLOT = {
@@ -461,6 +462,77 @@ local function getLiveDisplayName(unitToken)
     return unitToken
 end
 
+local function getRaidFrameIndexFromUnitToken(unitToken)
+    local numericIndex = tonumber(string.match(unitToken or "", "^raid(%d+)$"))
+    if type(numericIndex) ~= "number" then
+        return nil
+    end
+    numericIndex = math.floor(numericIndex + 0.5)
+    if numericIndex < 1 or numericIndex > MAX_RAID_TEST_FRAMES then
+        return nil
+    end
+    return numericIndex
+end
+
+local function getRaidSubgroupForUnit(unitToken, fallbackIndex)
+    local subgroup = nil
+
+    if type(GetRaidRosterInfo) == "function" and type(fallbackIndex) == "number" then
+        local _, _, groupValue = GetRaidRosterInfo(fallbackIndex)
+        subgroup = getSafeNumericValue(groupValue, nil)
+    end
+
+    if type(subgroup) ~= "number" and type(UnitInRaid) == "function" and type(GetRaidRosterInfo) == "function" then
+        local okRosterIndex, rosterIndex = pcall(UnitInRaid, unitToken)
+        if okRosterIndex and type(rosterIndex) == "number" then
+            local _, _, groupValue = GetRaidRosterInfo(rosterIndex)
+            subgroup = getSafeNumericValue(groupValue, nil)
+        end
+    end
+
+    return Util:Clamp(subgroup or math.ceil((fallbackIndex or 1) / MAX_RAID_GROUP_SIZE), 1, MAX_RAID_GROUPS)
+end
+
+local function buildLiveRaidEntries(sortBy, sortDirection)
+    local entries = {}
+
+    for index = 1, MAX_RAID_TEST_FRAMES do
+        local unitToken = "raid" .. tostring(index)
+        if UnitExists(unitToken) then
+            entries[#entries + 1] = {
+                unitToken = unitToken,
+                groupIndex = getRaidSubgroupForUnit(unitToken, index),
+                slotIndex = 0,
+                role = type(UnitGroupRolesAssigned) == "function" and UnitGroupRolesAssigned(unitToken) or "NONE",
+                name = getLiveDisplayName(unitToken),
+                originalIndex = index,
+            }
+        end
+    end
+
+    if #entries == 0 then
+        return {}, {}, {}
+    end
+
+    local sortedEntries, orderedGroups = sortEntriesWithinGroups(entries, sortBy, sortDirection)
+    local groupCounts = {}
+    for entryIndex = 1, #sortedEntries do
+        local entry = sortedEntries[entryIndex]
+        groupCounts[entry.groupIndex] = math.max(groupCounts[entry.groupIndex] or 0, entry.slotIndex or 0)
+    end
+
+    return sortedEntries, orderedGroups, groupCounts
+end
+
+local function hasLiveRaidUnits()
+    for index = 1, MAX_RAID_TEST_FRAMES do
+        if UnitExists("raid" .. tostring(index)) then
+            return true
+        end
+    end
+    return false
+end
+
 -- Initialize raid-frame module state and cached maps.
 function RaidFrames:Constructor()
     self.addon = nil
@@ -468,6 +540,7 @@ function RaidFrames:Constructor()
     self.globalFrames = nil
     self.unitFrames = nil
     self.container = nil
+    self.liveFrames = {}
     self.groupContainers = {}
     self.headers = {}
     self.testFrames = {}
@@ -643,11 +716,7 @@ function RaidFrames:ApplyBlizzardRaidFrameVisibility()
 end
 
 -- Return the shared healer-aura config used by raid indicators.
-function RaidFrames:GetRaidHealerConfig()
-    return ns.AuraHandle and ns.AuraHandle:GetHealerConfig() or nil
-end
-
--- Create the raid container, secure subgroup headers, and preview frames.
+-- Create the raid container, fixed live raid frames, and preview frames.
 function RaidFrames:CreateRaidFrames()
     if self.container then
         return self.container
@@ -657,7 +726,7 @@ function RaidFrames:CreateRaidFrames()
     end
 
     local container = CreateFrame("Frame", "mummuFramesRaidContainer", UIParent)
-    container:SetFrameStrata("LOW")
+    container:SetFrameStrata(RAID_FRAME_STRATA)
     container.unitToken = "raid"
     container:Hide()
     self.container = container
@@ -692,6 +761,25 @@ function RaidFrames:CreateRaidFrames()
 
     for index = 1, MAX_RAID_TEST_FRAMES do
         local unitToken = "raid" .. tostring(index)
+        local liveFrame = CreateFrame(
+            "Button",
+            "mummuFramesRaidFrame" .. tostring(index),
+            container,
+            "SecureUnitButtonTemplate"
+        )
+        liveFrame:SetAttribute("unit", unitToken)
+        liveFrame:SetAttribute("type1", "target")
+        liveFrame:SetAttribute("*type2", "togglemenu")
+        liveFrame:RegisterForClicks("AnyDown", "AnyUp")
+        liveFrame.unit = unitToken
+        liveFrame.displayedUnit = unitToken
+        self:BuildFrameVisuals(liveFrame)
+        liveFrame:Hide()
+        self.liveFrames[index] = liveFrame
+    end
+
+    for index = 1, MAX_RAID_TEST_FRAMES do
+        local unitToken = "raid" .. tostring(index)
         local testFrame = CreateFrame(
             "Button",
             "mummuFramesRaidTestFrame" .. tostring(index),
@@ -718,7 +806,7 @@ function RaidFrames:BuildFrameVisuals(frame)
         return
     end
 
-    frame:SetFrameStrata("LOW")
+    frame:SetFrameStrata((self.container and self.container:GetFrameStrata()) or RAID_FRAME_STRATA)
     frame:SetClampedToScreen(true)
     frame._mummuIsGroupFrame = true
     frame._mummuIsRaidFrame = true
@@ -892,6 +980,12 @@ function RaidFrames:HideAll()
     if self.container then
         self.container:Hide()
     end
+    for index = 1, #self.liveFrames do
+        local frame = self.liveFrames[index]
+        if frame then
+            frame:Hide()
+        end
+    end
     for groupIndex = 1, MAX_RAID_GROUPS do
         local groupContainer = self.groupContainers[groupIndex]
         if groupContainer then
@@ -1049,28 +1143,9 @@ function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
     local previousFrameByDisplayedUnit =
         type(self._frameByDisplayedUnit) == "table" and self._frameByDisplayedUnit or {}
 
-    local candidateFrames
     local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
     local isPreview = (profile and profile.testMode == true) or self.editModeActive
-    if isPreview and type(self.testFrames) == "table" then
-        candidateFrames = self.testFrames
-    elseif type(self.frames) == "table" and #self.frames > 0 then
-        candidateFrames = self.frames
-    else
-        candidateFrames = {}
-        for groupIndex = 1, MAX_RAID_GROUPS do
-            local header = self.headers[groupIndex]
-            if header and type(header.GetChildren) == "function" then
-                local children = { header:GetChildren() }
-                for childIndex = 1, #children do
-                    local child = children[childIndex]
-                    if child and child._mummuVisualsBuilt then
-                        candidateFrames[#candidateFrames + 1] = child
-                    end
-                end
-            end
-        end
-    end
+    local candidateFrames = isPreview and self.testFrames or self.liveFrames
 
     for frameIndex = 1, #candidateFrames do
         local frame = candidateFrames[frameIndex]
@@ -1137,28 +1212,18 @@ function RaidFrames:EnsureMappedFrameForUnit(unitToken)
         return existing
     end
 
-    for groupIndex = 1, MAX_RAID_GROUPS do
-        local header = self.headers[groupIndex]
-        if header and type(header.GetChildren) == "function" then
-            local children = { header:GetChildren() }
-            for childIndex = 1, #children do
-                local child = children[childIndex]
-                if child and child._mummuVisualsBuilt then
-                    local childUnit = getCurrentRaidFrameDisplayedUnit(child)
-                    if childUnit == unitToken then
-                        self._frameByDisplayedUnit[unitToken] = child
-                        child.unit = unitToken
-                        child.displayedUnit = unitToken
-                        local guid = getUnitGUIDSafe(unitToken)
-                        if guid then
-                            self._displayedUnitByGUID = self._displayedUnitByGUID or {}
-                            setDisplayedUnitForGUID(self._displayedUnitByGUID, guid, unitToken)
-                        end
-                        return child
-                    end
-                end
-            end
+    local frameIndex = getRaidFrameIndexFromUnitToken(unitToken)
+    local frame = frameIndex and self.liveFrames[frameIndex] or nil
+    if frame then
+        self._frameByDisplayedUnit[unitToken] = frame
+        frame.unit = unitToken
+        frame.displayedUnit = unitToken
+        local guid = getUnitGUIDSafe(unitToken)
+        if guid then
+            self._displayedUnitByGUID = self._displayedUnitByGUID or {}
+            setDisplayedUnitForGUID(self._displayedUnitByGUID, guid, unitToken)
         end
+        return frame
     end
 
     return nil
@@ -1224,7 +1289,7 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
     end
 
     local addonEnabled = profile and profile.enabled ~= false
-    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    local inAnyRaid = hasLiveRaidUnits()
     if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
         return false
     end
@@ -1307,7 +1372,7 @@ function RaidFrames:RefreshDisplayedUnitRangeState(unitToken)
     end
 
     local addonEnabled = profile and profile.enabled ~= false
-    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    local inAnyRaid = hasLiveRaidUnits()
     if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
         return false
     end
@@ -1353,7 +1418,7 @@ function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
     end
 
     local addonEnabled = profile and profile.enabled ~= false
-    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
+    local inAnyRaid = hasLiveRaidUnits()
     if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
         return false
     end
@@ -1430,6 +1495,17 @@ function RaidFrames:RefreshAll(forceLayout)
         if inCombat then
             self.pendingLayoutRefresh = true
             return
+        end
+
+        for index = 1, #self.liveFrames do
+            if self.liveFrames[index] then
+                self.liveFrames[index]:Hide()
+            end
+        end
+        for groupIndex = 1, MAX_RAID_GROUPS do
+            if self.groupContainers[groupIndex] then
+                self.groupContainers[groupIndex]:Hide()
+            end
         end
 
         local entries, orderedGroups = sortEntriesWithinGroups(
@@ -1553,8 +1629,8 @@ function RaidFrames:RefreshAll(forceLayout)
         return
     end
 
-    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
-    if not inAnyRaid then
+    local entries, orderedGroups, groupCounts = buildLiveRaidEntries(sortBy, sortDirection)
+    if #entries == 0 then
         self.frames = {}
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
@@ -1567,8 +1643,6 @@ function RaidFrames:RefreshAll(forceLayout)
         return
     end
 
-    local groupCounts, activeGroups = getRaidGroupCounts()
-    local orderedGroups = getLiveGroupOrder(activeGroups, sortBy, sortDirection)
     local groupGap = getGroupContainerGap(groupLayout, spacingX, spacingY, groupSpacing)
 
     if shouldApplyLayout and not inCombat then
@@ -1614,48 +1688,6 @@ function RaidFrames:RefreshAll(forceLayout)
             x,
             y
         )
-
-        local cursor = 0
-        for groupOrder = 1, MAX_RAID_GROUPS do
-            local groupIndex = orderedGroups[groupOrder]
-            local groupContainer = groupIndex and self.groupContainers[groupIndex] or nil
-            local header = groupIndex and self.headers[groupIndex] or nil
-            if groupContainer and header then
-                local memberCount = groupCounts[groupIndex] or 0
-                local groupWidth, groupHeight = getGroupContainerSize(
-                    memberCount,
-                    width,
-                    height,
-                    spacingX,
-                    spacingY,
-                    groupLayout
-                )
-                groupContainer:SetSize(groupWidth, groupHeight)
-                groupContainer:ClearAllPoints()
-                if groupLayout == "horizontal" then
-                    groupContainer:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, -cursor)
-                    cursor = cursor + groupHeight + groupGap
-                else
-                    groupContainer:SetPoint("TOPLEFT", self.container, "TOPLEFT", cursor, 0)
-                    cursor = cursor + groupWidth + groupGap
-                end
-                self:ApplyHeaderConfiguration(header, groupIndex, width, height, spacingX, spacingY, sortBy, sortDirection, groupLayout)
-                groupContainer:Show()
-            end
-        end
-        for groupIndex = 1, MAX_RAID_GROUPS do
-            local groupContainer = self.groupContainers[groupIndex]
-            local isActive = false
-            for orderIndex = 1, #orderedGroups do
-                if orderedGroups[orderIndex] == groupIndex then
-                    isActive = true
-                    break
-                end
-            end
-            if groupContainer and not isActive then
-                groupContainer:Hide()
-            end
-        end
     end
 
     if not inCombat then
@@ -1664,42 +1696,82 @@ function RaidFrames:RefreshAll(forceLayout)
                 self.testFrames[index]:Hide()
             end
         end
+        for groupIndex = 1, MAX_RAID_GROUPS do
+            if self.groupContainers[groupIndex] then
+                self.groupContainers[groupIndex]:Hide()
+            end
+        end
+    end
+
+    local groupSlotByIndex = {}
+    for groupOrder = 1, #orderedGroups do
+        groupSlotByIndex[orderedGroups[groupOrder]] = groupOrder
     end
 
     local activeFrames = {}
     local frameByDisplayedUnit = {}
     local displayedUnitByGUID = {}
+    local usedFrameByIndex = {}
 
-    for groupOrder = 1, #orderedGroups do
-        local groupIndex = orderedGroups[groupOrder]
-        local header = self.headers[groupIndex]
-        if header and type(header.GetChildren) == "function" then
-            local children = { header:GetChildren() }
-            for childIndex = 1, #children do
-                local child = children[childIndex]
-                if child and not child._mummuVisualsBuilt then
-                    if inCombat then
-                        self.pendingLayoutRefresh = true
-                    else
-                        self:BuildFrameVisuals(child)
-                    end
-                end
-                if child and child._mummuVisualsBuilt then
-                    local unitToken = getCurrentRaidFrameDisplayedUnit(child)
+    for entryIndex = 1, #entries do
+        local entry = entries[entryIndex]
+        local frameIndex = getRaidFrameIndexFromUnitToken(entry.unitToken)
+        local frame = frameIndex and self.liveFrames[frameIndex] or nil
+        if frame then
+            frame.unit = entry.unitToken
+            frame.displayedUnit = entry.unitToken
+            frameByDisplayedUnit[entry.unitToken] = frame
+            usedFrameByIndex[frameIndex] = true
 
-                    if unitToken then
-                        local isShown = type(child.IsShown) == "function" and child:IsShown() or false
-                        if isShown or inCombat then
-                            frameByDisplayedUnit[unitToken] = child
-                            local guid = getUnitGUIDSafe(unitToken)
-                            if guid then
-                                setDisplayedUnitForGUID(displayedUnitByGUID, guid, unitToken)
-                            end
-                            activeFrames[#activeFrames + 1] = child
-                            self:RefreshMember(child, unitToken, raidConfig, false, shouldApplyLayout, MEMBER_REFRESH_FULL)
-                        end
-                    end
+            local guid = getUnitGUIDSafe(entry.unitToken)
+            if guid then
+                setDisplayedUnitForGUID(displayedUnitByGUID, guid, entry.unitToken)
+            end
+
+            if shouldApplyLayout and not inCombat then
+                local groupSlot = groupSlotByIndex[entry.groupIndex] or entry.groupIndex
+                local memberSlot = entry.slotIndex
+                local groupOffset = 0
+                for previousGroup = 1, groupSlot - 1 do
+                    local previousGroupIndex = orderedGroups[previousGroup]
+                    local previousWidth, previousHeight = getGroupContainerSize(
+                        groupCounts[previousGroupIndex],
+                        width,
+                        height,
+                        spacingX,
+                        spacingY,
+                        groupLayout
+                    )
+                    groupOffset = groupOffset + ((groupLayout == "horizontal") and previousHeight or previousWidth) + groupGap
                 end
+
+                frame:ClearAllPoints()
+                if groupLayout == "horizontal" then
+                    local memberX = (memberSlot - 1) * (width + spacingX)
+                    frame:SetPoint("TOPLEFT", self.container, "TOPLEFT", memberX, -groupOffset)
+                else
+                    local memberY = (memberSlot - 1) * (height + spacingY)
+                    frame:SetPoint("TOPLEFT", self.container, "TOPLEFT", groupOffset, -memberY)
+                end
+                frame:SetSize(width, height)
+            end
+
+            self:RefreshMember(frame, entry.unitToken, raidConfig, false, shouldApplyLayout, MEMBER_REFRESH_FULL)
+            activeFrames[#activeFrames + 1] = frame
+            if not inCombat then
+                if type(frame.EnableMouse) == "function" then
+                    frame:EnableMouse(true)
+                end
+                frame:Show()
+            end
+        end
+    end
+
+    if not inCombat then
+        for index = 1, #self.liveFrames do
+            local frame = self.liveFrames[index]
+            if frame and not usedFrameByIndex[index] then
+                frame:Hide()
             end
         end
     end

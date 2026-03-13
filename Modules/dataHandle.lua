@@ -178,25 +178,6 @@ local DEFAULTS = {
                 -- Shared aura tracking configuration for party/raid frames.
                 auras = {
                     enabled = true,
-                    groups = {
-                        hots = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.22, g = 0.87, b = 0.42, a = 0.85 },
-                        },
-                        absorbs = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 0.32, g = 0.68, b = 1.00, a = 0.85 },
-                        },
-                        externals = {
-                            style = "icon",
-                            size = 14,
-                            color = { r = 1.00, g = 0.76, b = 0.30, a = 0.85 },
-                        },
-                    },
-                    spells = {},
-                    customSpells = {},
                 },
             },
         },

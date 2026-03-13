@@ -119,6 +119,13 @@ end
 
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
+local CASTBAR_MODE_NONE = "none"
+local CASTBAR_MODE_CAST = "cast"
+local CASTBAR_MODE_CHANNEL = "channel"
+local CASTBAR_MODE_EMPOWER = "empower"
+local CASTBAR_EMPOWER_MARKER_COLOR = { 1.00, 1.00, 1.00, 0.38 }
+local CASTBAR_EMPOWER_MARKER_ACTIVE_COLOR = { 1.00, 1.00, 1.00, 0.92 }
+local CASTBAR_EMPOWER_MAX_MARKERS = 6
 local TARGET_OUT_OF_RANGE_ALPHA = 0.55
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
@@ -141,6 +148,7 @@ local BREATH_POWER_COLOR = { 0.00, 0.50, 1.00 }
 local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
 local getSafeNumericValue
+local startCastBarTimer
 
 -- Convert an anchor point into the opposite growth direction for aura buttons.
 local function getAuraAnchorGrowth(anchorPoint)
@@ -1344,6 +1352,9 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_START", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_STOP", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_UPDATE", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_EMPOWER_START", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_EMPOWER_STOP", self.OnUnitCastEvent)
+    ns.EventRouter:Register(self, "UNIT_SPELLCAST_EMPOWER_UPDATE", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_INTERRUPTIBLE", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", self.OnUnitCastEvent)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_SUCCEEDED", self.OnUnitSpellcastSucceeded)
@@ -2856,16 +2867,300 @@ function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMod
     hideTertiaryPowerBar(bar)
 end
 
+local function getSafeCurrentTimeMs()
+    if type(GetTime) ~= "function" then
+        return 0
+    end
+
+    local okNow, nowSeconds = pcall(GetTime)
+    if okNow and type(nowSeconds) == "number" then
+        return nowSeconds * 1000
+    end
+
+    return 0
+end
+
+local function getCastBarEmpowerMarkerThickness()
+    local thickness = 2
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        local pixelSize = type(Style.GetPixelSize) == "function" and Style:GetPixelSize() or nil
+        if type(pixelSize) == "number" and pixelSize > 0 then
+            thickness = math.max(pixelSize, 1)
+        end
+    end
+    return thickness
+end
+
+local function hideCastBarEmpowerMarkers(castBar)
+    local markers = castBar and castBar.EmpowerMarkers or nil
+    if type(markers) ~= "table" then
+        return
+    end
+
+    for index = 1, #markers do
+        local marker = markers[index]
+        if marker and type(marker.Hide) == "function" then
+            marker:Hide()
+        end
+    end
+end
+
+local function ensureCastBarEmpowerMarker(castBar, index)
+    if type(castBar) ~= "table" or type(index) ~= "number" then
+        return nil
+    end
+
+    local overlay = castBar.EmpowerOverlay or castBar.Bar
+    if type(overlay) ~= "table" then
+        return nil
+    end
+
+    castBar.EmpowerMarkers = castBar.EmpowerMarkers or {}
+    local marker = castBar.EmpowerMarkers[index]
+    if marker then
+        return marker
+    end
+
+    marker = overlay:CreateTexture(nil, "OVERLAY")
+    marker:SetDrawLayer("OVERLAY", 6)
+    marker:SetColorTexture(
+        CASTBAR_EMPOWER_MARKER_COLOR[1],
+        CASTBAR_EMPOWER_MARKER_COLOR[2],
+        CASTBAR_EMPOWER_MARKER_COLOR[3],
+        CASTBAR_EMPOWER_MARKER_COLOR[4]
+    )
+    castBar.EmpowerMarkers[index] = marker
+    return marker
+end
+
+local function normalizeEmpowerStageThresholds(rawPercentages, maxMarkerCount)
+    local markerCount = Util:Clamp(math.floor((getSafeNumericValue(maxMarkerCount, 0) or 0) + 0.5), 0, CASTBAR_EMPOWER_MAX_MARKERS)
+    if type(rawPercentages) ~= "table" or markerCount <= 0 then
+        return {}
+    end
+
+    local thresholds = {}
+    local cumulativePercent = 0
+    for index = 1, #rawPercentages do
+        local percent = getSafeNumericValue(rawPercentages[index], nil)
+        if percent and percent > 0 then
+            cumulativePercent = cumulativePercent + percent
+            if index <= markerCount then
+                local threshold = Util:Clamp(cumulativePercent, 0, 1)
+                if threshold > 0 and threshold < 0.9995 then
+                    thresholds[#thresholds + 1] = threshold
+                end
+            end
+        end
+    end
+
+    return thresholds
+end
+
+local function getEmpowerStageThresholds(unitToken, numEmpowerStages)
+    local stageCount = Util:Clamp(
+        math.floor((getSafeNumericValue(numEmpowerStages, 0) or 0) + 0.5),
+        0,
+        CASTBAR_EMPOWER_MAX_MARKERS
+    )
+    if type(unitToken) ~= "string" or unitToken == "" or stageCount <= 0 then
+        return {}
+    end
+
+    if type(UnitEmpoweredStagePercentages) == "function" then
+        local okPercentages, rawPercentages = pcall(UnitEmpoweredStagePercentages, unitToken, true)
+        if okPercentages and type(rawPercentages) == "table" then
+            local thresholds = normalizeEmpowerStageThresholds(rawPercentages, stageCount)
+            if #thresholds > 0 then
+                return thresholds
+            end
+        end
+    end
+
+    local thresholds = {}
+    if type(GetUnitEmpowerStageDuration) ~= "function" then
+        return thresholds
+    end
+
+    local totalDuration = 0
+    local cumulativeDuration = 0
+    local stageDurations = {}
+    for stageIndex = 1, stageCount do
+        local okDuration, rawDuration = pcall(GetUnitEmpowerStageDuration, unitToken, stageIndex)
+        local duration = getSafeNumericValue(okDuration and rawDuration or nil, 0) or 0
+        if duration > 0 then
+            stageDurations[#stageDurations + 1] = duration
+            totalDuration = totalDuration + duration
+        end
+    end
+
+    if type(GetUnitEmpowerHoldAtMaxTime) == "function" then
+        local okHoldTime, rawHoldTime = pcall(GetUnitEmpowerHoldAtMaxTime, unitToken)
+        local holdTime = getSafeNumericValue(okHoldTime and rawHoldTime or nil, 0) or 0
+        if holdTime > 0 then
+            totalDuration = totalDuration + holdTime
+        end
+    end
+
+    if totalDuration <= 0 then
+        return thresholds
+    end
+
+    for stageIndex = 1, #stageDurations do
+        cumulativeDuration = cumulativeDuration + stageDurations[stageIndex]
+        local threshold = Util:Clamp(cumulativeDuration / totalDuration, 0, 1)
+        if threshold > 0 and threshold < 0.9995 then
+            thresholds[#thresholds + 1] = threshold
+        end
+    end
+
+    return thresholds
+end
+
+local function layoutCastBarEmpowerMarkers(castBar)
+    local overlay = castBar and (castBar.EmpowerOverlay or castBar.Bar) or nil
+    local thresholds = castBar and castBar._empowerStageThresholds or nil
+    if type(overlay) ~= "table" or type(thresholds) ~= "table" or #thresholds == 0 then
+        hideCastBarEmpowerMarkers(castBar)
+        return
+    end
+
+    local overlayWidth = overlay:GetWidth() or 0
+    if overlayWidth <= 0 then
+        hideCastBarEmpowerMarkers(castBar)
+        return
+    end
+
+    local thickness = getCastBarEmpowerMarkerThickness()
+    for index = 1, #thresholds do
+        local threshold = Util:Clamp(thresholds[index] or 0, 0, 1)
+        local marker = ensureCastBarEmpowerMarker(castBar, index)
+        if marker then
+            local xOffset = overlayWidth * threshold
+            marker:ClearAllPoints()
+            marker:SetPoint("TOP", overlay, "TOPLEFT", xOffset, 0)
+            marker:SetPoint("BOTTOM", overlay, "BOTTOMLEFT", xOffset, 0)
+            marker:SetWidth(thickness)
+            marker:Show()
+        end
+    end
+
+    if type(castBar.EmpowerMarkers) == "table" then
+        for index = #thresholds + 1, #castBar.EmpowerMarkers do
+            local marker = castBar.EmpowerMarkers[index]
+            if marker then
+                marker:Hide()
+            end
+        end
+    end
+end
+
+local function updateCastBarEmpowerMarkerState(castBar, nowMs)
+    local thresholds = castBar and castBar._empowerStageThresholds or nil
+    local startClean = castBar and castBar._castStartClean or 0
+    local endClean = castBar and castBar._castEndClean or 0
+    if type(thresholds) ~= "table" or #thresholds == 0 or endClean <= startClean then
+        hideCastBarEmpowerMarkers(castBar)
+        return
+    end
+
+    local progress = Util:Clamp(((nowMs or startClean) - startClean) / (endClean - startClean), 0, 1)
+    for index = 1, #thresholds do
+        local marker = castBar.EmpowerMarkers and castBar.EmpowerMarkers[index] or nil
+        if marker then
+            local passed = progress + 0.0005 >= thresholds[index]
+            local color = passed and CASTBAR_EMPOWER_MARKER_ACTIVE_COLOR or CASTBAR_EMPOWER_MARKER_COLOR
+            marker:SetColorTexture(color[1], color[2], color[3], color[4])
+            marker:SetShown(true)
+        end
+    end
+end
+
+local function clearCastBarEmpowerState(castBar)
+    if not castBar then
+        return
+    end
+
+    castBar._empowerStageCount = 0
+    castBar._empowerStageThresholds = nil
+    hideCastBarEmpowerMarkers(castBar)
+end
+
+local function resetCastBarRuntimeState(castBar)
+    if not castBar then
+        return
+    end
+
+    castBar._castMode = CASTBAR_MODE_NONE
+    castBar._castStartClean = 0
+    castBar._castEndClean = 0
+    clearCastBarEmpowerState(castBar)
+end
+
+local function setCastBarStatusColor(castBar, notInterruptible)
+    if not castBar or not castBar.Bar then
+        return
+    end
+
+    local color = safeBool(notInterruptible) and CASTBAR_COLOR_NOINTERRUPT or CASTBAR_COLOR_NORMAL
+    castBar.Bar:SetStatusBarColor(color[1], color[2], color[3], 1)
+end
+
+local function applyCastBarState(castBar, unitToken, state)
+    if not castBar or type(state) ~= "table" then
+        return false
+    end
+
+    local startClean = getSafeNumericValue(state.startTimeMs, 0) or 0
+    local endClean = getSafeNumericValue(state.endTimeMs, 0) or 0
+    if endClean <= startClean then
+        return false
+    end
+
+    local castMode = type(state.mode) == "string" and state.mode or CASTBAR_MODE_NONE
+    castBar._castMode = castMode
+    castBar._castStartClean = startClean
+    castBar._castEndClean = endClean
+    castBar.Bar:SetMinMaxValues(startClean, endClean)
+    castBar.Bar:SetReverseFill(castMode == CASTBAR_MODE_CHANNEL)
+    castBar.Bar:SetValue(startClean)
+    castBar.SpellText:SetText(state.spellName or "")
+    castBar.TimeText:SetText("")
+    castBar.Icon:SetTexture(state.iconTexture or DEFAULT_AURA_TEXTURE)
+    setCastBarStatusColor(castBar, state.notInterruptible)
+
+    if castMode == CASTBAR_MODE_EMPOWER then
+        local stageCount = Util:Clamp(
+            math.floor((getSafeNumericValue(state.numEmpowerStages, 0) or 0) + 0.5),
+            0,
+            CASTBAR_EMPOWER_MAX_MARKERS
+        )
+        castBar._empowerStageCount = stageCount
+        castBar._empowerStageThresholds = getEmpowerStageThresholds(unitToken, stageCount)
+        layoutCastBarEmpowerMarkers(castBar)
+        updateCastBarEmpowerMarkerState(castBar, getSafeCurrentTimeMs())
+    else
+        clearCastBarEmpowerState(castBar)
+    end
+
+    castBar:Show()
+    startCastBarTimer(castBar)
+    return true
+end
+
 -- Start the cast-bar OnUpdate loop that advances time-based casts.
-local function startCastBarTimer(castBar)
+startCastBarTimer = function(castBar)
     if castBar._timerActive then
         return
     end
     castBar._timerActive = true
     -- Handle OnUpdate script callback.
     castBar:SetScript("OnUpdate", function(self, _)
-        local nowMs = GetTime() * 1000
+        local nowMs = getSafeCurrentTimeMs()
         self.Bar:SetValue(nowMs)
+        if self._castMode == CASTBAR_MODE_EMPOWER then
+            updateCastBarEmpowerMarkerState(self, nowMs)
+        end
 
         local endClean = self._castEndClean
         if endClean and endClean > 0 then
@@ -2874,6 +3169,7 @@ local function startCastBarTimer(castBar)
             if nowMs >= endClean then
                 self:SetScript("OnUpdate", nil)
                 self._timerActive = false
+                resetCastBarRuntimeState(self)
                 self:Hide()
             end
         else
@@ -2886,6 +3182,7 @@ end
 local function stopCastBarTimer(castBar)
     castBar:SetScript("OnUpdate", nil)
     castBar._timerActive = false
+    resetCastBarRuntimeState(castBar)
     castBar:Hide()
 end
 
@@ -2916,6 +3213,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         castBar.Icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
         castBar:SetScript("OnUpdate", nil)
         castBar._timerActive = false
+        resetCastBarRuntimeState(castBar)
         castBar:Show()
         return
     end
@@ -2926,44 +3224,38 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
 
     if spellName then
-        castBar.Bar:SetMinMaxValues(startTimeMs, endTimeMs)
-        castBar.Bar:SetReverseFill(false)
-        castBar._castEndClean = getSafeNumericValue(endTimeMs, 0) or 0
-        castBar.SpellText:SetText(spellName)
-        castBar.Icon:SetTexture(iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark")
-
-        if safeBool(notInterruptible) then
-            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
-        else
-            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
+        if applyCastBarState(castBar, unitToken, {
+            mode = CASTBAR_MODE_CAST,
+            spellName = spellName,
+            iconTexture = iconTexture,
+            startTimeMs = startTimeMs,
+            endTimeMs = endTimeMs,
+            notInterruptible = notInterruptible,
+        }) then
+            return
         end
-
-        castBar:Show()
-        startCastBarTimer(castBar)
-        return
     end
 
-    local channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible
+    local channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible, _, isEmpowered, numEmpowerStages
     if type(UnitChannelInfo) == "function" then
-        channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible = UnitChannelInfo(unitToken)
+        channelName, _, channelIcon, channelStartMs, channelEndMs, _, channelNotInterruptible, _, isEmpowered, numEmpowerStages =
+            UnitChannelInfo(unitToken)
     end
 
     if channelName then
-        castBar.Bar:SetMinMaxValues(channelStartMs, channelEndMs)
-        castBar.Bar:SetReverseFill(true)
-        castBar._castEndClean = getSafeNumericValue(channelEndMs, 0) or 0
-        castBar.SpellText:SetText(channelName)
-        castBar.Icon:SetTexture(channelIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-
-        if safeBool(channelNotInterruptible) then
-            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NOINTERRUPT[1], CASTBAR_COLOR_NOINTERRUPT[2], CASTBAR_COLOR_NOINTERRUPT[3], 1)
-        else
-            castBar.Bar:SetStatusBarColor(CASTBAR_COLOR_NORMAL[1], CASTBAR_COLOR_NORMAL[2], CASTBAR_COLOR_NORMAL[3], 1)
+        local empowerStageCount = getSafeNumericValue(numEmpowerStages, 0) or 0
+        local isEmpowerCast = safeBool(isEmpowered, false) or empowerStageCount > 0
+        if applyCastBarState(castBar, unitToken, {
+            mode = isEmpowerCast and CASTBAR_MODE_EMPOWER or CASTBAR_MODE_CHANNEL,
+            spellName = channelName,
+            iconTexture = channelIcon,
+            startTimeMs = channelStartMs,
+            endTimeMs = channelEndMs,
+            notInterruptible = channelNotInterruptible,
+            numEmpowerStages = empowerStageCount,
+        }) then
+            return
         end
-
-        castBar:Show()
-        startCastBarTimer(castBar)
-        return
     end
 
     stopCastBarTimer(castBar)
