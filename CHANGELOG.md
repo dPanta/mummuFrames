@@ -5,6 +5,9 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 1.8.2 - 2026-03-13
+- Bumped addon metadata to `1.8.2`.
+
 ## 1.8.1 - 2026-03-13
 - Hardened the Midnight party spell-target tracker against protected-event and secret-value issues.
 - Fixed configuration refresh errors and tightened the Frames UI so advanced controls only appear where they matter.
