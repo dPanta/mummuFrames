@@ -58,6 +58,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_SPELL_TARGET_ONLY = {
     spellTarget = true,
 }
+local RANGE_POLL_INTERVAL = 0.2
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
@@ -488,6 +489,7 @@ function PartyFrames:Constructor()
     self.header = nil          -- SecureGroupHeaderTemplate frame
     self.testFrames = {}       -- fixed pool for preview/test mode only
     self.frames = {}           -- active frame set; populated by RefreshAll
+    self._rangeTicker = nil
     self._testTicker = nil
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
@@ -514,6 +516,7 @@ function PartyFrames:OnEnable()
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
+    self:EnsureRangeTicker()
     self._combatRemapRetryAt = 0
     self._lastLiveUnitsToShow = nil
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
@@ -541,6 +544,7 @@ function PartyFrames:OnDisable()
     self._displayedUnitByGUID = {}
     self._lastLiveUnitsToShow = nil
     ns.activeMummuPartyFrames = {}
+    self:StopRangeTicker()
     self:StopTestTicker()
     self:SetBlizzardPartyFramesHidden(false)
     if self.container then
@@ -1608,6 +1612,33 @@ function PartyFrames:RefreshAllVitalsOnly()
     end
 end
 
+-- Refresh alpha-only range state for every currently displayed live party frame.
+function PartyFrames:RefreshAllDisplayedRangeStates()
+    if not self.dataHandle or not self.container then
+        return
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local partyConfig = self.dataHandle:GetUnitConfig("party")
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+    local addonEnabled = profile and profile.enabled ~= false
+    if previewMode or not addonEnabled or partyConfig.enabled == false or getLivePartyUnitCount() == 0 then
+        return
+    end
+
+    local frameByDisplayedUnit = self._frameByDisplayedUnit
+    if type(frameByDisplayedUnit) ~= "table" then
+        return
+    end
+
+    for displayedUnit, frame in pairs(frameByDisplayedUnit) do
+        if frame and (type(frame.IsShown) ~= "function" or frame:IsShown()) then
+            refreshPartyMemberRangeState(frame, getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit, false, false)
+        end
+    end
+end
+
 -- Stop the periodic test mode ticker (updates fake data for preview).
 function PartyFrames:StopTestTicker()
     local ticker = self._testTicker
@@ -1615,6 +1646,26 @@ function PartyFrames:StopTestTicker()
         ticker:Cancel()
     end
     self._testTicker = nil
+end
+
+-- Stop the periodic live range fallback ticker.
+function PartyFrames:StopRangeTicker()
+    local ticker = self._rangeTicker
+    if ticker and type(ticker.Cancel) == "function" then
+        ticker:Cancel()
+    end
+    self._rangeTicker = nil
+end
+
+-- Start a lightweight live range fallback ticker if not already running.
+function PartyFrames:EnsureRangeTicker()
+    if self._rangeTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
+        return
+    end
+
+    self._rangeTicker = C_Timer.NewTicker(RANGE_POLL_INTERVAL, function()
+        self:RefreshAllDisplayedRangeStates()
+    end)
 end
 
 -- Start periodic test mode ticker if not already running.

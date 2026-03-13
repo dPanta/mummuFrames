@@ -402,6 +402,42 @@ local function safeBool(val, fallback)
     return fallback == true
 end
 
+local function normalizeBooleanLike(value)
+    if Util and type(Util.NormalizeBooleanLike) == "function" then
+        return Util:NormalizeBooleanLike(value)
+    end
+
+    if value == nil then
+        return nil
+    end
+
+    if type(value) == "number" then
+        return value ~= 0
+    end
+
+    if type(value) == "string" then
+        local normalizedString = string.lower(value)
+        if normalizedString == "true" or normalizedString == "1" then
+            return true
+        end
+        if normalizedString == "false" or normalizedString == "0" or normalizedString == "" then
+            return false
+        end
+    end
+
+    local okEval, evaluated = pcall(function()
+        if value then
+            return true
+        end
+        return false
+    end)
+    if okEval then
+        return evaluated
+    end
+
+    return nil
+end
+
 -- Return active player breath mirror timer state.
 local function getMirrorTimerBreathState()
     if type(GetMirrorTimerInfo) ~= "function" then
@@ -492,8 +528,31 @@ local function isUnitOutOfRange(unitToken)
         return false
     end
 
-    -- Range APIs can produce secret booleans in insecure code paths.
-    -- Avoid evaluating them here to prevent combat taint propagation.
+    if type(UnitExists) == "function" and not UnitExists(unitToken) then
+        return false
+    end
+
+    if type(UnitInRange) == "function" then
+        local okRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
+        if okRange then
+            local canCheckRange = normalizeBooleanLike(checkedRange)
+            local normalizedInRange = normalizeBooleanLike(inRange)
+            if canCheckRange ~= false and normalizedInRange ~= nil then
+                return normalizedInRange == false
+            end
+        end
+    end
+
+    if type(CheckInteractDistance) == "function" then
+        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
+        if okDistance then
+            local isWithinDistance = normalizeBooleanLike(withinDistance)
+            if isWithinDistance ~= nil then
+                return isWithinDistance == false
+            end
+        end
+    end
+
     return false
 end
 

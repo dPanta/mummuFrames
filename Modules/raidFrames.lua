@@ -44,6 +44,7 @@ local MEMBER_REFRESH_VITALS_ONLY = {
 local MEMBER_REFRESH_AURAS_ONLY = {
     auras = true,
 }
+local RANGE_POLL_INTERVAL = 0.2
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 
@@ -545,6 +546,7 @@ function RaidFrames:Constructor()
     self.headers = {}
     self.testFrames = {}
     self.frames = {}
+    self._rangeTicker = nil
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
     self.pendingLayoutRefresh = false
@@ -566,6 +568,7 @@ function RaidFrames:OnEnable()
     self:CreateRaidFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
+    self:EnsureRangeTicker()
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     if self.editModeActive then
         self:EnsureEditModeSelection()
@@ -584,6 +587,7 @@ function RaidFrames:OnDisable()
     self.editModeActive = false
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
+    self:StopRangeTicker()
     self.frames = {}
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
@@ -1425,6 +1429,52 @@ function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
 
     local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
     return refreshRaidMemberRangeState(frame, displayedUnit, false)
+end
+
+-- Refresh alpha-only range state for every currently displayed live raid frame.
+function RaidFrames:RefreshAllDisplayedRangeStates()
+    if not self.dataHandle or not self.container then
+        return
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local raidConfig = self.dataHandle:GetUnitConfig("raid")
+    local previewMode = self.editModeActive or (profile and profile.testMode == true)
+    local addonEnabled = profile and profile.enabled ~= false
+    if previewMode or not addonEnabled or raidConfig.enabled == false or not hasLiveRaidUnits() then
+        return
+    end
+
+    local frameByDisplayedUnit = self._frameByDisplayedUnit
+    if type(frameByDisplayedUnit) ~= "table" then
+        return
+    end
+
+    for displayedUnit, frame in pairs(frameByDisplayedUnit) do
+        if frame and (type(frame.IsShown) ~= "function" or frame:IsShown()) then
+            refreshRaidMemberRangeState(frame, getCurrentRaidFrameDisplayedUnit(frame) or displayedUnit, false)
+        end
+    end
+end
+
+-- Stop the periodic live range fallback ticker.
+function RaidFrames:StopRangeTicker()
+    local ticker = self._rangeTicker
+    if ticker and type(ticker.Cancel) == "function" then
+        ticker:Cancel()
+    end
+    self._rangeTicker = nil
+end
+
+-- Start a lightweight live range fallback ticker if not already running.
+function RaidFrames:EnsureRangeTicker()
+    if self._rangeTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
+        return
+    end
+
+    self._rangeTicker = C_Timer.NewTicker(RANGE_POLL_INTERVAL, function()
+        self:RefreshAllDisplayedRangeStates()
+    end)
 end
 
 -- Refresh every raid frame in live mode or preview mode.

@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 1.8.3 - 2026-03-13
+- Fixed target, party, and raid out-of-range dimming.
+- Hardened range checks against Retail secret booleans and added a lightweight live refresh fallback.
+- Bumped addon metadata to `1.8.3`.
+
 ## 1.8.2 - 2026-03-13
 - Bumped addon metadata to `1.8.2`.
 

@@ -48,6 +48,49 @@ local function equalsTrueSafe(value)
     return false
 end
 
+-- Normalize WoW boolean-like returns (true/false, 1/0, "1"/"0") without
+-- letting wrapped or secret values escape.
+local function normalizeBooleanLike(value)
+    if value == nil then
+        return nil
+    end
+
+    if type(value) == "number" then
+        return value ~= 0
+    end
+
+    if type(value) == "string" then
+        local normalizedString = string.lower(value)
+        if normalizedString == "true" or normalizedString == "1" then
+            return true
+        end
+        if normalizedString == "false" or normalizedString == "0" or normalizedString == "" then
+            return false
+        end
+    end
+
+    local auraSafety = ns.AuraSafety
+    if auraSafety and type(auraSafety.SafeTruthy) == "function" then
+        local okSafeTruthy, resolved = pcall(auraSafety.SafeTruthy, auraSafety, value)
+        if okSafeTruthy then
+            return resolved == true
+        end
+        return nil
+    end
+
+    local okTruthy, resolvedTruthy = pcall(function()
+        if value then
+            return true
+        end
+        return false
+    end)
+    if okTruthy then
+        return resolvedTruthy == true
+    end
+
+    return nil
+end
+
 -- Format large values using compact k/m suffixes.
 local function formatAbbrevNumber(value)
     local n = tonumber(value) or 0
@@ -105,36 +148,23 @@ function Util:Clamp(value, minValue, maxValue)
 end
 
 -- Resolve a boolean-like value without letting wrapped or secret values escape.
+function Util:NormalizeBooleanLike(value)
+    return normalizeBooleanLike(value)
+end
+
+-- Resolve a boolean-like value without letting wrapped or secret values escape.
 function Util:SafeBoolean(value, fallback)
-    local fallbackValue = equalsTrueSafe(fallback)
-
-    local okNil, isNil = pcall(function()
-        return value == nil
-    end)
-    if okNil and isNil then
-        return fallbackValue
+    local normalizedValue = normalizeBooleanLike(value)
+    if normalizedValue ~= nil then
+        return normalizedValue
     end
 
-    local auraSafety = ns.AuraSafety
-    if auraSafety and type(auraSafety.SafeTruthy) == "function" then
-        local okSafeTruthy, resolved = pcall(auraSafety.SafeTruthy, auraSafety, value)
-        if okSafeTruthy then
-            return resolved == true
-        end
-        return fallbackValue
+    local normalizedFallback = normalizeBooleanLike(fallback)
+    if normalizedFallback ~= nil then
+        return normalizedFallback
     end
 
-    local okTruthy, resolvedTruthy = pcall(function()
-        if value then
-            return true
-        end
-        return false
-    end)
-    if okTruthy then
-        return resolvedTruthy == true
-    end
-
-    return fallbackValue
+    return equalsTrueSafe(fallback)
 end
 
 -- Return whether a party or raid unit should be considered out of range.

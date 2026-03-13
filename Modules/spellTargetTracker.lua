@@ -95,13 +95,43 @@ local TRACKED_SPELLS = {
     [468429] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 4.0 }, -- Windrunner Spire / Restless Heart / Bullseye Windblast
 }
 
-local function isNpcGuid(guid)
-    if type(guid) ~= "string" or guid == "" then
+local function unitsMatch(unitA, unitB)
+    if type(unitA) ~= "string" or unitA == "" or type(unitB) ~= "string" or unitB == "" then
+        return false
+    end
+    if unitA == unitB then
+        return true
+    end
+    if type(UnitIsUnit) ~= "function" then
         return false
     end
 
-    local unitType = strsplit("-", guid)
-    return unitType == "Creature" or unitType == "Vehicle"
+    local okMatch, isSameUnit = pcall(UnitIsUnit, unitA, unitB)
+    return okMatch and isSameUnit == true
+end
+
+local function isStableSourceUnit(unit)
+    if type(unit) ~= "string" or unit == "" then
+        return false
+    end
+
+    return string.match(unit, "^boss%d+$") ~= nil
+        or string.match(unit, "^nameplate%d+$") ~= nil
+end
+
+local function normalizePartyUnitToken(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+
+    for i = 1, #PARTY_UNIT_TOKENS do
+        local partyUnit = PARTY_UNIT_TOKENS[i]
+        if unitsMatch(unitToken, partyUnit) then
+            return partyUnit
+        end
+    end
+
+    return nil
 end
 
 local function isHostileNpcUnit(unit)
@@ -117,8 +147,11 @@ local function isHostileNpcUnit(unit)
     if UnitPlayerControlled(unit) then
         return false
     end
+    if type(UnitIsPlayer) == "function" and UnitIsPlayer(unit) then
+        return false
+    end
 
-    return isNpcGuid(UnitGUID(unit))
+    return true
 end
 
 local function getSpellConfig(spellId)
@@ -203,8 +236,7 @@ function SpellTargetTracker:Constructor()
     self.addon = nil
     self.activeCasts = {}
     self.activeCastKeyBySourceSpell = {}
-    self.sourceUnitsByGUID = {}
-    self.highlightCountsByGUID = {}
+    self.highlightCountsByUnit = {}
     self.scanTicker = nil
 end
 
@@ -215,8 +247,7 @@ end
 function SpellTargetTracker:OnEnable()
     self.activeCasts = {}
     self.activeCastKeyBySourceSpell = {}
-    self.sourceUnitsByGUID = {}
-    self.highlightCountsByGUID = {}
+    self.highlightCountsByUnit = {}
     self:RegisterEvents()
 end
 
@@ -276,8 +307,9 @@ function SpellTargetTracker:RefreshAllHighlights()
     end
 end
 
-function SpellTargetTracker:NotifyHighlightForGUID(guid)
-    if type(guid) ~= "string" or guid == "" then
+function SpellTargetTracker:NotifyHighlightForUnit(unitToken)
+    local normalizedUnit = normalizePartyUnitToken(unitToken)
+    if not normalizedUnit then
         return
     end
 
@@ -286,51 +318,46 @@ function SpellTargetTracker:NotifyHighlightForGUID(guid)
         return
     end
 
-    for i = 1, #PARTY_UNIT_TOKENS do
-        local unitToken = PARTY_UNIT_TOKENS[i]
-        if UnitGUID(unitToken) == guid then
-            partyFrames:RefreshDisplayedUnitSpellTargetState(unitToken)
-            return
-        end
-    end
+    partyFrames:RefreshDisplayedUnitSpellTargetState(normalizedUnit)
 end
 
-function SpellTargetTracker:IncrementHighlight(guid)
-    if type(guid) ~= "string" or guid == "" then
+function SpellTargetTracker:IncrementHighlight(unitToken)
+    local normalizedUnit = normalizePartyUnitToken(unitToken)
+    if not normalizedUnit then
         return
     end
 
-    local previous = self.highlightCountsByGUID[guid] or 0
-    self.highlightCountsByGUID[guid] = previous + 1
+    local previous = self.highlightCountsByUnit[normalizedUnit] or 0
+    self.highlightCountsByUnit[normalizedUnit] = previous + 1
     if previous == 0 then
-        self:NotifyHighlightForGUID(guid)
+        self:NotifyHighlightForUnit(normalizedUnit)
     end
 end
 
-function SpellTargetTracker:DecrementHighlight(guid)
-    if type(guid) ~= "string" or guid == "" then
+function SpellTargetTracker:DecrementHighlight(unitToken)
+    local normalizedUnit = normalizePartyUnitToken(unitToken)
+    if not normalizedUnit then
         return
     end
 
-    local previous = self.highlightCountsByGUID[guid] or 0
+    local previous = self.highlightCountsByUnit[normalizedUnit] or 0
     if previous <= 1 then
-        self.highlightCountsByGUID[guid] = nil
+        self.highlightCountsByUnit[normalizedUnit] = nil
         if previous > 0 then
-            self:NotifyHighlightForGUID(guid)
+            self:NotifyHighlightForUnit(normalizedUnit)
         end
         return
     end
 
-    self.highlightCountsByGUID[guid] = previous - 1
+    self.highlightCountsByUnit[normalizedUnit] = previous - 1
 end
 
 function SpellTargetTracker:ClearAllState()
-    local hadHighlights = next(self.highlightCountsByGUID) ~= nil
+    local hadHighlights = next(self.highlightCountsByUnit) ~= nil
 
     self.activeCasts = {}
     self.activeCastKeyBySourceSpell = {}
-    self.sourceUnitsByGUID = {}
-    self.highlightCountsByGUID = {}
+    self.highlightCountsByUnit = {}
 
     if hadHighlights then
         self:RefreshAllHighlights()
@@ -338,47 +365,39 @@ function SpellTargetTracker:ClearAllState()
 end
 
 function SpellTargetTracker:RememberSourceUnit(unit)
+    local resolvedUnit = self:ResolveBestSourceUnit(unit)
+    if not resolvedUnit then
+        return nil
+    end
+
+    return resolvedUnit
+end
+
+function SpellTargetTracker:ResolveBestSourceUnit(unit)
     if not isHostileNpcUnit(unit) then
         return nil
     end
 
-    local guid = UnitGUID(unit)
-    if type(guid) ~= "string" or guid == "" then
-        return nil
-    end
-
-    self.sourceUnitsByGUID[guid] = unit
-    return guid, unit
-end
-
-function SpellTargetTracker:GetSourceUnit(sourceGUID)
-    if type(sourceGUID) ~= "string" or sourceGUID == "" then
-        return nil
-    end
-
-    local rememberedUnit = self.sourceUnitsByGUID[sourceGUID]
-    if rememberedUnit and UnitGUID(rememberedUnit) == sourceGUID and isHostileNpcUnit(rememberedUnit) then
-        return rememberedUnit
-    end
-    self.sourceUnitsByGUID[sourceGUID] = nil
-
-    if type(UnitTokenFromGUID) == "function" then
-        local ok, resolvedUnit = pcall(UnitTokenFromGUID, sourceGUID)
-        if ok and resolvedUnit and isHostileNpcUnit(resolvedUnit) then
-            self.sourceUnitsByGUID[sourceGUID] = resolvedUnit
-            return resolvedUnit
-        end
+    if isStableSourceUnit(unit) then
+        return unit
     end
 
     for i = 1, #SOURCE_SCAN_UNITS do
-        local unit = SOURCE_SCAN_UNITS[i]
-        if UnitGUID(unit) == sourceGUID and isHostileNpcUnit(unit) then
-            self.sourceUnitsByGUID[sourceGUID] = unit
-            return unit
+        local candidate = SOURCE_SCAN_UNITS[i]
+        if candidate ~= unit and isStableSourceUnit(candidate) and isHostileNpcUnit(candidate) and unitsMatch(candidate, unit) then
+            return candidate
         end
     end
 
-    return nil
+    return unit
+end
+
+function SpellTargetTracker:GetSourceUnit(sourceUnit)
+    if type(sourceUnit) ~= "string" or sourceUnit == "" then
+        return nil
+    end
+
+    return self:ResolveBestSourceUnit(sourceUnit)
 end
 
 function SpellTargetTracker:ResolvePartyTargetUnit(sourceUnit)
@@ -413,22 +432,21 @@ function SpellTargetTracker:SetAssignedTarget(castState, unitToken)
         return
     end
 
-    local targetGUID = UnitGUID(unitToken)
-    if type(targetGUID) ~= "string" or targetGUID == "" then
+    local normalizedTargetUnit = normalizePartyUnitToken(unitToken)
+    if not normalizedTargetUnit then
         return
     end
 
-    if castState.assignedTargetGUID == targetGUID then
+    if castState.assignedUnit == normalizedTargetUnit then
         return
     end
 
-    if castState.assignedTargetGUID then
-        self:DecrementHighlight(castState.assignedTargetGUID)
+    if castState.assignedUnit then
+        self:DecrementHighlight(castState.assignedUnit)
     end
 
-    castState.assignedTargetGUID = targetGUID
-    castState.assignedUnit = unitToken
-    self:IncrementHighlight(targetGUID)
+    castState.assignedUnit = normalizedTargetUnit
+    self:IncrementHighlight(normalizedTargetUnit)
 end
 
 function SpellTargetTracker:AttemptResolveCastTarget(castState, now)
@@ -436,7 +454,7 @@ function SpellTargetTracker:AttemptResolveCastTarget(castState, now)
         return
     end
 
-    local sourceUnit = self:GetSourceUnit(castState.sourceGUID)
+    local sourceUnit = self:GetSourceUnit(castState.sourceUnit)
     if not sourceUnit then
         castState.nextScanAt = now + (castState.spellInfo.retryDelay or DEFAULT_RETRY_DELAY)
         return
@@ -466,28 +484,29 @@ function SpellTargetTracker:ClearCast(castKey)
 
     self.activeCasts[castKey] = nil
 
-    local bySpell = self.activeCastKeyBySourceSpell[castState.sourceGUID]
+    local bySpell = self.activeCastKeyBySourceSpell[castState.sourceUnit]
     if bySpell and bySpell[castState.spellId] == castKey then
         bySpell[castState.spellId] = nil
         if not next(bySpell) then
-            self.activeCastKeyBySourceSpell[castState.sourceGUID] = nil
+            self.activeCastKeyBySourceSpell[castState.sourceUnit] = nil
         end
     end
 
-    if castState.assignedTargetGUID then
-        self:DecrementHighlight(castState.assignedTargetGUID)
+    if castState.assignedUnit then
+        self:DecrementHighlight(castState.assignedUnit)
     end
 
     return true
 end
 
-function SpellTargetTracker:ClearCastBySourceSpell(sourceGUID, spellId)
+function SpellTargetTracker:ClearCastBySourceSpell(sourceUnit, spellId)
+    local normalizedSourceUnit = self:RememberSourceUnit(sourceUnit) or sourceUnit
     local normalizedSpellId = normalizeSpellId(spellId)
-    if type(sourceGUID) ~= "string" or sourceGUID == "" or type(normalizedSpellId) ~= "number" or normalizedSpellId <= 0 then
+    if type(normalizedSourceUnit) ~= "string" or normalizedSourceUnit == "" or type(normalizedSpellId) ~= "number" or normalizedSpellId <= 0 then
         return false
     end
 
-    local bySpell = self.activeCastKeyBySourceSpell[sourceGUID]
+    local bySpell = self.activeCastKeyBySourceSpell[normalizedSourceUnit]
     local castKey = bySpell and bySpell[normalizedSpellId] or nil
     if not castKey then
         return false
@@ -496,8 +515,13 @@ function SpellTargetTracker:ClearCastBySourceSpell(sourceGUID, spellId)
     return self:ClearCast(castKey)
 end
 
-function SpellTargetTracker:ClearCastsForSource(sourceGUID)
-    local bySpell = self.activeCastKeyBySourceSpell[sourceGUID]
+function SpellTargetTracker:ClearCastsForSource(sourceUnit)
+    local normalizedSourceUnit = self:RememberSourceUnit(sourceUnit) or sourceUnit
+    if type(normalizedSourceUnit) ~= "string" or normalizedSourceUnit == "" then
+        return
+    end
+
+    local bySpell = self.activeCastKeyBySourceSpell[normalizedSourceUnit]
     if not bySpell then
         return
     end
@@ -539,8 +563,8 @@ function SpellTargetTracker:GetTrackedSpellForUnitEvent(eventName, unitToken, sp
 end
 
 function SpellTargetTracker:BeginTrackingFromUnitEvent(eventName, unitToken, spellId)
-    local sourceGUID = self:RememberSourceUnit(unitToken)
-    if not sourceGUID then
+    local sourceUnit = self:RememberSourceUnit(unitToken)
+    if not sourceUnit then
         return
     end
 
@@ -549,41 +573,40 @@ function SpellTargetTracker:BeginTrackingFromUnitEvent(eventName, unitToken, spe
         return
     end
 
-    self:BeginCastTracking(sourceGUID, resolvedSpellId, spellInfo)
+    self:BeginCastTracking(sourceUnit, resolvedSpellId, spellInfo)
 end
 
-function SpellTargetTracker:BeginCastTracking(sourceGUID, spellId, spellInfo)
+function SpellTargetTracker:BeginCastTracking(sourceUnit, spellId, spellInfo)
     local resolvedSpellInfo = spellInfo
     local normalizedSpellId = spellId
+    local normalizedSourceUnit = self:RememberSourceUnit(sourceUnit) or sourceUnit
     if not resolvedSpellInfo or type(normalizedSpellId) ~= "number" then
         resolvedSpellInfo, normalizedSpellId = getSpellConfig(spellId)
     end
 
-    if type(sourceGUID) ~= "string" or sourceGUID == "" or type(normalizedSpellId) ~= "number" or not resolvedSpellInfo then
+    if type(normalizedSourceUnit) ~= "string" or normalizedSourceUnit == "" or type(normalizedSpellId) ~= "number" or not resolvedSpellInfo then
         return
     end
 
-    self:ClearCastBySourceSpell(sourceGUID, normalizedSpellId)
+    self:ClearCastBySourceSpell(normalizedSourceUnit, normalizedSpellId)
 
     local now = GetTime()
-    local castKey = sourceGUID .. ":" .. tostring(normalizedSpellId)
+    local castKey = normalizedSourceUnit .. ":" .. tostring(normalizedSpellId)
     local castState = {
         castKey = castKey,
-        sourceGUID = sourceGUID,
         spellId = normalizedSpellId,
         spellInfo = resolvedSpellInfo,
         startedAt = now,
         expiresAt = now + (resolvedSpellInfo.scanWindow or DEFAULT_SCAN_WINDOW),
         hardExpireAt = now + (resolvedSpellInfo.lifetime or DEFAULT_LIFETIME),
         nextScanAt = now,
-        assignedTargetGUID = nil,
         assignedUnit = nil,
-        sourceUnit = nil,
+        sourceUnit = normalizedSourceUnit,
     }
 
     self.activeCasts[castKey] = castState
-    self.activeCastKeyBySourceSpell[sourceGUID] = self.activeCastKeyBySourceSpell[sourceGUID] or {}
-    self.activeCastKeyBySourceSpell[sourceGUID][normalizedSpellId] = castKey
+    self.activeCastKeyBySourceSpell[normalizedSourceUnit] = self.activeCastKeyBySourceSpell[normalizedSourceUnit] or {}
+    self.activeCastKeyBySourceSpell[normalizedSourceUnit][normalizedSpellId] = castKey
 
     self:AttemptResolveCastTarget(castState, now)
     self:EnsureScanTicker()
@@ -597,7 +620,7 @@ function SpellTargetTracker:OnScanTick()
     for castKey, castState in pairs(self.activeCasts) do
         hasActiveCasts = true
 
-        if castState.assignedTargetGUID then
+        if castState.assignedUnit then
             if now >= castState.hardExpireAt then
                 keysToClear = keysToClear or {}
                 keysToClear[#keysToClear + 1] = castKey
@@ -626,25 +649,21 @@ function SpellTargetTracker:OnScanTick()
 end
 
 function SpellTargetTracker:IsUnitSpellTarget(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" then
+    local normalizedUnit = normalizePartyUnitToken(unitToken)
+    if not normalizedUnit then
         return false
     end
 
-    local guid = UnitGUID(unitToken)
-    if type(guid) ~= "string" or guid == "" then
-        return false
-    end
-
-    return (self.highlightCountsByGUID[guid] or 0) > 0
+    return (self.highlightCountsByUnit[normalizedUnit] or 0) > 0
 end
 
 function SpellTargetTracker:RefreshSourceScansForUnit(unit)
-    local guid = self:RememberSourceUnit(unit)
-    if not guid then
+    local sourceUnit = self:RememberSourceUnit(unit)
+    if not sourceUnit then
         return
     end
 
-    local bySpell = self.activeCastKeyBySourceSpell[guid]
+    local bySpell = self.activeCastKeyBySourceSpell[sourceUnit]
     if not bySpell then
         return
     end
@@ -681,18 +700,18 @@ function SpellTargetTracker:OnUnitSpellcastStart(eventName, unitToken, _, spellI
 end
 
 function SpellTargetTracker:OnUnitSpellcastSucceeded(eventName, unitToken, _, spellId)
-    local sourceGUID = self:RememberSourceUnit(unitToken)
+    local sourceUnit = self:RememberSourceUnit(unitToken)
     local spellInfo, normalizedSpellId = getSpellConfig(spellId)
-    if not sourceGUID or type(normalizedSpellId) ~= "number" then
+    if not sourceUnit or type(normalizedSpellId) ~= "number" then
         return
     end
 
     if spellInfo and unitEventMatchesTrigger(eventName, spellInfo) then
-        self:BeginCastTracking(sourceGUID, normalizedSpellId, spellInfo)
+        self:BeginCastTracking(sourceUnit, normalizedSpellId, spellInfo)
         return
     end
 
-    self:ClearCastBySourceSpell(sourceGUID, normalizedSpellId)
+    self:ClearCastBySourceSpell(sourceUnit, normalizedSpellId)
 end
 
 function SpellTargetTracker:OnUnitSpellcastStop(eventName, unitToken, _, spellId)
@@ -700,17 +719,17 @@ function SpellTargetTracker:OnUnitSpellcastStop(eventName, unitToken, _, spellId
         return
     end
 
-    local sourceGUID = self:RememberSourceUnit(unitToken)
-    if not sourceGUID then
+    local sourceUnit = self:RememberSourceUnit(unitToken)
+    if not sourceUnit then
         return
     end
 
     local normalizedSpellId = normalizeSpellId(spellId)
-    if type(normalizedSpellId) == "number" and normalizedSpellId > 0 and self:ClearCastBySourceSpell(sourceGUID, normalizedSpellId) then
+    if type(normalizedSpellId) == "number" and normalizedSpellId > 0 and self:ClearCastBySourceSpell(sourceUnit, normalizedSpellId) then
         return
     end
 
-    self:ClearCastsForSource(sourceGUID)
+    self:ClearCastsForSource(sourceUnit)
 end
 
 addon:RegisterModule("spellTargetTracker", SpellTargetTracker:New())
