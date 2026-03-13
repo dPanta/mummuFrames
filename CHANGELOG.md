@@ -5,16 +5,20 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 1.8.1 - 2026-03-13
+- Hardened the Midnight party spell-target tracker against protected-event and secret-value issues.
+- Fixed configuration refresh errors and tightened the Frames UI so advanced controls only appear where they matter.
+- Kept party target and spell-target warning borders readable while frames are dimmed for range or offline state.
+- Removed the dead generated font catalog path and kept bundled fonts local to the shared style module.
+
 ## 1.8.0 - 2026-03-13
 - Added a Midnight-specific party spell-target tracker that highlights party member frames when curated hostile dungeon casts appear to be targeting them.
 - Wired the new tracker into party-frame visuals with a dedicated warning overlay, a lightweight highlight-only refresh path, and a config toggle.
-- Reworked the tracker around Midnight-safe unit spellcast scanning, then hardened it against protected/secret spell payloads so it no longer depends on unsafe combat-log registration or secret table keys.
-- Documented the Midnight Season 1 seed list and limited v1 spell coverage to mechanics backed by current Midnight LittleWigs cast IDs instead of reusing TWW-era assumptions.
+- Documented the Midnight Season 1 seed list and limited spell coverage to mechanics backed by current Midnight cast IDs.
 - Reworked the configuration window around top-level `Frames`, `Tracked Auras`, `Global`, and `Profiles` pages instead of flat per-unit tabs.
 - Added a grouped Frames hub with left-side unit navigation, consistent per-unit sections, a basic/advanced toggle, reset-to-defaults for individual frame types, and scope-aware refresh intents.
 - Polished the Frames page so advanced options only show on relevant panes, simpler units expose direct position controls, and the header toggle text stays inside the configuration window.
 - Synced all locale files with the newer configuration keys by seeding missing entries from `enUS`, preserving existing translations and using English fallbacks where translations are still pending.
-- Trimmed older changelog history so only the 10 most recent tagged versions remain alongside `Unreleased`.
 - Bumped addon metadata to `1.8.0`.
 
 ## 1.7.0 - 2026-03-13
@@ -61,9 +65,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Tuned party role icon placement and layering so the icon anchors at the health bar corner without shifting name text or falling behind selection borders.
 - Added a black 1-pixel border to detached player bar-style resource elements, covering primary power and tertiary power bars while excluding icon-based secondary resources.
 - Extended party defaults, locale strings, and configuration controls for the new layout and role-icon options.
-
-## 1.4.0 - 2026-03-08
-- Added a new Global `Dark Mode` toggle stored in profile style settings.
-- Recolored health and main power bars to a granite fill with a red-tinted gray empty-bar backing when Dark Mode is enabled.
-- Moved class color emphasis from unit bar fills to player name text in Dark Mode while preserving offline and AFK overrides.
-- Centralized Dark Mode palette and status-bar backing logic so player, party, and raid frames update consistently through the existing deferred refresh flow.

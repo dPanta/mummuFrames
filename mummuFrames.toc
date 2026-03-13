@@ -2,7 +2,7 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 1.8.0
+## Version: 1.8.1
 ## IconTexture: Interface\AddOns\mummuFrames\Icons\mummuF.png
 ## SavedVariables: mummuFramesDB
 ## OptionalDeps: LibSharedMedia-3.0, SharedMedia
@@ -27,7 +27,6 @@ Locales\ptBR.lua
 Core\Object.lua
 Core\ModuleManager.lua
 Core\EventRouter.lua
-Core\FontCatalog.lua
 Core\Style.lua
 Core\Util.lua
 Core\AuraSafety.lua

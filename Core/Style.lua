@@ -12,6 +12,18 @@ local availableBarTexturesCache = nil
 local fontProbe = nil
 local lsm = nil
 local lsmCallbacksRegistered = false
+local BUNDLED_FONTS = {
+    {
+        key = "expressway",
+        label = "Expressway",
+        path = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf",
+    },
+    {
+        key = "Fredoka_SemiBold",
+        label = "Fredoka Semi Bold",
+        path = "Interface\\AddOns\\mummuFrames\\Fonts\\Fredoka-SemiBold.ttf",
+    },
+}
 
 Style.DEFAULT_FONT = "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 Style.DEFAULT_BAR_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga"
@@ -168,8 +180,6 @@ function Style:GetAvailableFonts(forceRefresh)
 
     local available = {}
     local seenPaths = {}
-    local catalog = ns.FontCatalog and ns.FontCatalog.list or {}
-
     -- Add font option.
     local function addFontOption(key, label, path)
         if type(path) ~= "string" or path == "" then
@@ -192,8 +202,8 @@ function Style:GetAvailableFonts(forceRefresh)
         end
     end
 
-    for i = 1, #catalog do
-        local entry = catalog[i]
+    for i = 1, #BUNDLED_FONTS do
+        local entry = BUNDLED_FONTS[i]
         local path = type(entry) == "table" and entry.path or nil
         if type(path) == "string" and path ~= "" then
             addFontOption(entry.key or path, entry.label or path, path)

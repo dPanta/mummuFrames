@@ -815,6 +815,10 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.TargetHighlight:SetAllPoints(frame)
     frame.TargetHighlight:SetFrameStrata(frame:GetFrameStrata())
     frame.TargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 35)
+    if type(frame.TargetHighlight.SetIgnoreParentAlpha) == "function" then
+        -- Keep the border readable even when the base frame is dimmed for range/offline state.
+        frame.TargetHighlight:SetIgnoreParentAlpha(true)
+    end
     frame.TargetHighlight:Hide()
 
     local targetHighlightBorder = 2
@@ -856,6 +860,10 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.SpellTargetHighlight:SetAllPoints(frame)
     frame.SpellTargetHighlight:SetFrameStrata(frame:GetFrameStrata())
     frame.SpellTargetHighlight:SetFrameLevel(frame:GetFrameLevel() + 36)
+    if type(frame.SpellTargetHighlight.SetIgnoreParentAlpha) == "function" then
+        -- Danger-cast warnings should stay high contrast even when the party frame itself is faded.
+        frame.SpellTargetHighlight:SetIgnoreParentAlpha(true)
+    end
     frame.SpellTargetHighlight:Hide()
 
     local spellHighlightBorder = 3
