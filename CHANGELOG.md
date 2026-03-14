@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 1.8.4 - 2026-03-14
+- Restored stable GUID-based party spell-target tracking and `UnitTokenFromGUID` reacquisition.
+- Hardened party spell-target source/target checks against Retail secret booleans and clarified the feature's curated Midnight scope.
+- Bumped addon metadata to `1.8.4`.
+
 ## 1.8.3 - 2026-03-13
 - Fixed target, party, and raid out-of-range dimming.
 - Hardened range checks against Retail secret booleans and added a lightweight live refresh fallback.

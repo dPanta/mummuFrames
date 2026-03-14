@@ -91,7 +91,7 @@ local FRAME_SELECTOR_GROUPS = {
     },
 }
 local FRAME_UNIT_DESCRIPTION = {
-    party = L.CONFIG_FRAME_DESC_PARTY or "Tune party spacing, role indicators, and dungeon-focused alerts.",
+    party = L.CONFIG_FRAME_DESC_PARTY or "Tune party spacing, role indicators, and curated Midnight alerts.",
     raid = L.CONFIG_FRAME_DESC_RAID or "Configure raid sizing, sorting, and group layout for larger rosters.",
     player = L.CONFIG_FRAME_DESC_PLAYER or "Shape your player frame, cast bar, and class resource layout.",
     pet = L.CONFIG_FRAME_DESC_PET or "Keep the pet frame compact and aligned with your primary layout.",
@@ -3438,7 +3438,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         )
         spellTargetHighlight = registerCheckbox(
             "SpellTargetHighlight",
-            L.CONFIG_PARTY_SPELL_TARGET_HIGHLIGHT or "Show hostile spell target highlight",
+            L.CONFIG_PARTY_SPELL_TARGET_HIGHLIGHT or "Show curated Midnight cast target highlight",
             showRoleIcon,
             "spellTargetHighlight.enabled",
             REFRESH_INTENT_APPEARANCE,
