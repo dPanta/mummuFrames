@@ -107,110 +107,110 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
     }
 end
 
--- Baseline SavedVariables structure applied on first load and during migrations.
-local DEFAULTS = {
-    global = {
-        version = 1,
-        defaultProfileSeedApplied = false,
-        profiles = {
-            Default = {
+local DEFAULT_PROFILE = {
+    enabled = true,
+    hideBlizzardUnitFrames = false,
+    testMode = false,
+    -- Minimap launcher settings.
+    minimap = {
+        hide = false,
+        angle = 220,
+    },
+    -- Shared styling defaults.
+    style = {
+        fontPath = DEFAULT_FONT_PATH,
+        fontSize = 12,
+        fontFlags = "OUTLINE",
+        pixelPerfect = true,
+        darkMode = false,
+        barTexturePath = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga",
+    },
+    -- Per-unit layout defaults.
+    units = {
+        player = newUnitDefaults("CENTER", "CENTER", -260, -220, 240, 46),
+        pet = newUnitDefaults("CENTER", "CENTER", -260, -275, 170, 32),
+        target = newUnitDefaults("CENTER", "CENTER", 260, -220, 240, 46),
+        targettarget = newUnitDefaults("CENTER", "CENTER", 260, -275, 170, 32),
+        focus = newUnitDefaults("CENTER", "CENTER", 0, -275, 200, 38),
+        focustarget = newUnitDefaults("CENTER", "CENTER", 0, -320, 160, 30),
+        -- Party-frame defaults.
+        party = {
+            enabled = true,
+            hideBlizzardFrame = false,
+            showPlayer = true,
+            showSelfWithoutGroup = true,
+            showRoleIcon = true,
+            spellTargetHighlight = {
                 enabled = true,
-                hideBlizzardUnitFrames = false,
-                testMode = false,
-                -- Minimap launcher settings.
-                minimap = {
-                    hide = false,
-                    angle = 220,
-                },
-                -- Shared styling defaults.
-                style = {
-                    fontPath = DEFAULT_FONT_PATH,
-                    fontSize = 12,
-                    fontFlags = "OUTLINE",
-                    pixelPerfect = true,
-                    darkMode = false,
-                    barTexturePath = "Interface\\AddOns\\mummuFrames\\Media\\o8.tga",
-                },
-                -- Per-unit layout defaults.
-                units = {
-                    player = newUnitDefaults("CENTER", "CENTER", -260, -220, 240, 46),
-                    pet = newUnitDefaults("CENTER", "CENTER", -260, -275, 170, 32),
-                    target = newUnitDefaults("CENTER", "CENTER", 260, -220, 240, 46),
-                    targettarget = newUnitDefaults("CENTER", "CENTER", 260, -275, 170, 32),
-                    focus = newUnitDefaults("CENTER", "CENTER", 0, -275, 200, 38),
-                    focustarget = newUnitDefaults("CENTER", "CENTER", 0, -320, 160, 30),
-                    -- Party-frame defaults.
-                    party = {
-                        enabled = true,
-                        hideBlizzardFrame = false,
-                        showPlayer = true,
-                        showSelfWithoutGroup = true,
-                        showRoleIcon = true,
-                        spellTargetHighlight = {
-                            enabled = true,
-                        },
-                        orientation = "vertical",
-                        point = "LEFT",
-                        relativePoint = "LEFT",
-                        x = 26,
-                        y = -30,
-                        width = 180,
-                        height = 34,
-                        spacing = 24,
-                        fontSize = 11,
-                        aura = {
-                            enabled = true,
-                            debuffs = {
-                                enabled = true,
-                                anchorPoint = "TOPRIGHT",
-                                relativePoint = "BOTTOMRIGHT",
-                                x = 0,
-                                y = -4,
-                                size = 16,
-                                scale = 1,
-                                max = 4,
-                            },
-                        },
-                    },
-                    -- Raid-frame defaults.
-                    raid = {
-                        enabled = true,
-                        hideBlizzardFrame = false,
-                        point = "TOPLEFT",
-                        relativePoint = "TOPLEFT",
-                        x = 22,
-                        y = -190,
-                        width = 92,
-                        height = 28,
-                        spacingX = 5,
-                        spacingY = 6,
-                        groupSpacing = 12,
-                        groupLayout = "vertical",
-                        sortBy = "group",
-                        sortDirection = "asc",
-                        testSize = 20,
-                        fontSize = 10,
-                        aura = {
-                            enabled = true,
-                            debuffs = {
-                                enabled = true,
-                                anchorPoint = "TOPRIGHT",
-                                relativePoint = "BOTTOMRIGHT",
-                                x = 0,
-                                y = -3,
-                                size = 12,
-                                scale = 1,
-                                max = 3,
-                            },
-                        },
-                    },
-                },
-                -- Shared aura tracking configuration for party/raid frames.
-                auras = {
+            },
+            orientation = "vertical",
+            point = "LEFT",
+            relativePoint = "LEFT",
+            x = 26,
+            y = -30,
+            width = 180,
+            height = 34,
+            spacing = 24,
+            fontSize = 11,
+            aura = {
+                enabled = true,
+                debuffs = {
                     enabled = true,
+                    anchorPoint = "TOPRIGHT",
+                    relativePoint = "BOTTOMRIGHT",
+                    x = 0,
+                    y = -4,
+                    size = 16,
+                    scale = 1,
+                    max = 4,
                 },
             },
         },
+        -- Raid-frame defaults.
+        raid = {
+            enabled = true,
+            hideBlizzardFrame = false,
+            point = "TOPLEFT",
+            relativePoint = "TOPLEFT",
+            x = 22,
+            y = -190,
+            width = 92,
+            height = 28,
+            spacingX = 5,
+            spacingY = 6,
+            groupSpacing = 12,
+            groupLayout = "vertical",
+            sortBy = "group",
+            sortDirection = "asc",
+            testSize = 20,
+            fontSize = 10,
+            aura = {
+                enabled = true,
+                debuffs = {
+                    enabled = true,
+                    anchorPoint = "TOPRIGHT",
+                    relativePoint = "BOTTOMRIGHT",
+                    x = 0,
+                    y = -3,
+                    size = 12,
+                    scale = 1,
+                    max = 3,
+                },
+            },
+        },
+    },
+    -- Shared aura tracking configuration for party/raid frames.
+    auras = {
+        enabled = true,
+    },
+}
+
+-- Baseline SavedVariables structure applied on first load and during migrations.
+local DEFAULTS = {
+    global = {
+        version = 2,
+        defaultProfileSeedApplied = false,
+        characterProfilesMigrationApplied = false,
     },
     char = {},
 }
@@ -246,6 +246,13 @@ local function deepCopy(value, seen)
         copy[deepCopy(key, seen)] = deepCopy(nested, seen)
     end
     return copy
+end
+
+-- Return default profile collection for a character.
+local function newDefaultProfiles()
+    return {
+        Default = deepCopy(DEFAULT_PROFILE),
+    }
 end
 
 -- Return sorted table keys.
@@ -477,6 +484,97 @@ local function normalizeProfileName(name)
     return trimmed
 end
 
+-- Return a cache key scoped to one character/profile pair.
+local function getProfileCacheKey(charKey, profileName)
+    return string.format("%s::%s", tostring(charKey or "UnknownCharacter"), tostring(profileName or "Default"))
+end
+
+-- Apply runtime-safe defaults and migrations to one profile table.
+local function maintainProfile(profile, defaultFontPath)
+    if type(profile) ~= "table" then
+        return
+    end
+
+    mergeDefaults(profile, DEFAULT_PROFILE)
+
+    profile.style = profile.style or {}
+    local fontPath = profile.style.fontPath
+    if type(fontPath) ~= "string" or fontPath == "" then
+        profile.style.fontPath = defaultFontPath
+    end
+    if profile.style.fontFlags == nil or profile.style.fontFlags == "" then
+        profile.style.fontFlags = "OUTLINE"
+    end
+    if profile.style.fontSize == nil then
+        profile.style.fontSize = 12
+    end
+    if profile.style.pixelPerfect == nil then
+        profile.style.pixelPerfect = true
+    end
+    if profile.style.darkMode == nil then
+        profile.style.darkMode = false
+    end
+
+    if type(profile.units) == "table" then
+        for unitToken, unitConfig in pairs(profile.units) do
+            if NAME_TEXT_UNITS[unitToken] and type(unitConfig) == "table" and unitConfig.showNameText == false then
+                unitConfig.showNameText = true
+            end
+        end
+    end
+end
+
+-- Run the legacy account-wide default-profile seed before migration copies it.
+local function seedLegacyProfiles(globalSettings)
+    local profiles = globalSettings and globalSettings.profiles
+    if type(globalSettings) ~= "table" or type(profiles) ~= "table" then
+        return profiles
+    end
+
+    if globalSettings.defaultProfileSeedApplied == true then
+        return profiles
+    end
+
+    if type(profiles.mummuFramesDefault) ~= "table" and type(profiles.Default) == "table" then
+        profiles.mummuFramesDefault = deepCopy(profiles.Default)
+    end
+
+    local seededProfile = profiles.mummuFramesDefault
+    if type(seededProfile) == "table" then
+        profiles.Default = deepCopy(seededProfile)
+        globalSettings.defaultProfileSeedApplied = true
+    end
+
+    return profiles
+end
+
+-- Ensure one character entry has a usable local profile collection.
+local function ensureCharacterSettings(charSettings, sourceProfiles)
+    if type(charSettings) ~= "table" then
+        charSettings = {}
+    end
+
+    if type(charSettings.profiles) ~= "table" then
+        if type(sourceProfiles) == "table" then
+            charSettings.profiles = deepCopy(sourceProfiles)
+        else
+            charSettings.profiles = newDefaultProfiles()
+        end
+    end
+
+    if type(charSettings.profiles.Default) ~= "table" then
+        charSettings.profiles.Default = deepCopy(DEFAULT_PROFILE)
+    end
+
+    local activeProfile = normalizeProfileName(charSettings.activeProfile) or "Default"
+    if type(charSettings.profiles[activeProfile]) ~= "table" then
+        activeProfile = "Default"
+    end
+    charSettings.activeProfile = activeProfile
+
+    return charSettings
+end
+
 -- Split dotted configuration path.
 local function splitPath(path)
     -- Split dotted config paths like "style.fontSize" into path segments.
@@ -491,6 +589,7 @@ end
 function DataHandle:Constructor()
     self.addon = nil
     self.db = nil
+    self._defaultFontPath = DEFAULT_FONT_PATH
     -- Tracks one-time default application per profile.
     self._profileDefaultsApplied = {}
     -- Tracks one-time unit-default application per profile/unit pair.
@@ -509,58 +608,23 @@ function DataHandle:OnInitialize(addonRef)
     if Style and type(Style.GetDefaultFontPath) == "function" then
         defaultFontPath = Style:GetDefaultFontPath()
     end
+    self._defaultFontPath = defaultFontPath
 
-    local profiles = mummuFramesDB.global and mummuFramesDB.global.profiles
     local globalSettings = mummuFramesDB.global
-
-    if type(globalSettings) == "table" and type(profiles) == "table" and globalSettings.defaultProfileSeedApplied ~= true then
-        if type(profiles.mummuFramesDefault) ~= "table" and type(profiles.Default) == "table" then
-            profiles.mummuFramesDefault = deepCopy(profiles.Default)
-        end
-
-        local seededProfile = profiles.mummuFramesDefault
-        if type(seededProfile) == "table" then
-            profiles.Default = deepCopy(seededProfile)
-            globalSettings.defaultProfileSeedApplied = true
-        end
+    if type(globalSettings) == "table" then
+        globalSettings.version = 2
     end
+    local legacyProfiles = seedLegacyProfiles(globalSettings)
 
-    if type(profiles) == "table" then
-        for _, profile in pairs(profiles) do
-            if type(profile) == "table" then
-                profile.style = profile.style or {}
-                local fontPath = profile.style.fontPath
-                if type(fontPath) ~= "string" or fontPath == "" then
-                    profile.style.fontPath = defaultFontPath
-                end
-                if profile.style.fontFlags == nil or profile.style.fontFlags == "" then
-                    profile.style.fontFlags = "OUTLINE"
-                end
-                if profile.style.fontSize == nil then
-                    profile.style.fontSize = 12
-                end
-                if profile.style.pixelPerfect == nil then
-                    profile.style.pixelPerfect = true
-                end
-                if profile.style.darkMode == nil then
-                    profile.style.darkMode = false
-                end
+    if type(globalSettings) == "table" and globalSettings.characterProfilesMigrationApplied ~= true then
+        local charStorage = mummuFramesDB.char or {}
+        mummuFramesDB.char = charStorage
 
-                if type(profile.units) == "table" then
-                    for unitToken, unitConfig in pairs(profile.units) do
-                        if NAME_TEXT_UNITS[unitToken] and type(unitConfig) == "table" and unitConfig.showNameText == false then
-                            unitConfig.showNameText = true
-                        end
-                    end
-
-                end
-
-                if type(profile.auras) ~= "table" then
-                    profile.auras = deepCopy(DEFAULTS.global.profiles.Default.auras)
-                end
-
-            end
+        for charKey, charSettings in pairs(charStorage) do
+            charStorage[charKey] = ensureCharacterSettings(charSettings, legacyProfiles)
         end
+
+        globalSettings.characterProfilesMigrationApplied = true
     end
 
     self.db = mummuFramesDB
@@ -577,9 +641,8 @@ function DataHandle:GetCharacterSettings()
         return nil
     end
     local charKey = Util:GetCharacterKey()
-    self.db.char[charKey] = self.db.char[charKey] or {
-        activeProfile = "Default",
-    }
+    self.db.char = self.db.char or {}
+    self.db.char[charKey] = ensureCharacterSettings(self.db.char[charKey])
     return self.db.char[charKey]
 end
 
@@ -589,20 +652,23 @@ function DataHandle:GetProfile()
     if not charSettings then
         return nil
     end
+
+    local charKey = Util:GetCharacterKey()
     local profileName = charSettings.activeProfile or "Default"
-    local profiles = self.db.global.profiles
+    local profiles = charSettings.profiles
 
     if type(profiles[profileName]) ~= "table" then
         profiles[profileName] = {}
     end
 
     local profile = profiles[profileName]
-    if not self._profileDefaultsApplied[profileName] then
-        mergeDefaults(profile, DEFAULTS.global.profiles.Default)
-        self._profileDefaultsApplied[profileName] = true
+    local cacheKey = getProfileCacheKey(charKey, profileName)
+    if not self._profileDefaultsApplied[cacheKey] then
+        maintainProfile(profile, self._defaultFontPath or DEFAULT_FONT_PATH)
+        self._profileDefaultsApplied[cacheKey] = true
     end
 
-    self._unitDefaultsAppliedByProfile[profileName] = self._unitDefaultsAppliedByProfile[profileName] or {}
+    self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
     return profile
 end
 
@@ -617,7 +683,8 @@ end
 
 -- Return sorted profile names.
 function DataHandle:GetProfileNames()
-    local profiles = self.db and self.db.global and self.db.global.profiles or {}
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or {}
     local names = {}
     for name, profile in pairs(profiles) do
         if type(name) == "string" and type(profile) == "table" then
@@ -637,7 +704,8 @@ function DataHandle:ProfileExists(name)
         return false
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or {}
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or {}
     return type(profiles[normalized]) == "table"
 end
 
@@ -648,7 +716,8 @@ function DataHandle:CreateProfile(name, sourceProfileName)
         return false, "invalid_name"
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
     end
@@ -659,12 +728,13 @@ function DataHandle:CreateProfile(name, sourceProfileName)
     local sourceName = normalizeProfileName(sourceProfileName) or self:GetActiveProfileName()
     local sourceProfile = profiles[sourceName]
     if type(sourceProfile) ~= "table" then
-        sourceProfile = DEFAULTS.global.profiles.Default
+        sourceProfile = DEFAULT_PROFILE
     end
 
     profiles[normalizedName] = deepCopy(sourceProfile)
-    self._profileDefaultsApplied[normalizedName] = nil
-    self._unitDefaultsAppliedByProfile[normalizedName] = nil
+    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), normalizedName)
+    self._profileDefaultsApplied[cacheKey] = nil
+    self._unitDefaultsAppliedByProfile[cacheKey] = nil
     return true
 end
 
@@ -675,7 +745,8 @@ function DataHandle:SetActiveProfile(name)
         return false, "invalid_name"
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
     end
@@ -683,7 +754,6 @@ function DataHandle:SetActiveProfile(name)
         return false, "not_found"
     end
 
-    local charSettings = self:GetCharacterSettings()
     charSettings.activeProfile = normalizedName
     self:GetProfile()
     return true
@@ -697,7 +767,8 @@ function DataHandle:RenameProfile(oldName, newName)
         return false, "invalid_name"
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
     end
@@ -710,12 +781,14 @@ function DataHandle:RenameProfile(oldName, newName)
 
     profiles[newNormalized] = profiles[oldNormalized]
     profiles[oldNormalized] = nil
-    self._profileDefaultsApplied[newNormalized] = self._profileDefaultsApplied[oldNormalized]
-    self._profileDefaultsApplied[oldNormalized] = nil
-    self._unitDefaultsAppliedByProfile[newNormalized] = self._unitDefaultsAppliedByProfile[oldNormalized]
-    self._unitDefaultsAppliedByProfile[oldNormalized] = nil
+    local charKey = Util:GetCharacterKey()
+    local oldCacheKey = getProfileCacheKey(charKey, oldNormalized)
+    local newCacheKey = getProfileCacheKey(charKey, newNormalized)
+    self._profileDefaultsApplied[newCacheKey] = self._profileDefaultsApplied[oldCacheKey]
+    self._profileDefaultsApplied[oldCacheKey] = nil
+    self._unitDefaultsAppliedByProfile[newCacheKey] = self._unitDefaultsAppliedByProfile[oldCacheKey]
+    self._unitDefaultsAppliedByProfile[oldCacheKey] = nil
 
-    local charSettings = self:GetCharacterSettings()
     if charSettings.activeProfile == oldNormalized then
         charSettings.activeProfile = newNormalized
     end
@@ -733,7 +806,8 @@ function DataHandle:DeleteProfile(name)
         return false, "cannot_delete_default"
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
     end
@@ -741,21 +815,22 @@ function DataHandle:DeleteProfile(name)
         return false, "not_found"
     end
 
-    local charSettings = self:GetCharacterSettings()
     if charSettings.activeProfile == normalized then
         return false, "active_profile"
     end
 
     profiles[normalized] = nil
-    self._profileDefaultsApplied[normalized] = nil
-    self._unitDefaultsAppliedByProfile[normalized] = nil
+    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), normalized)
+    self._profileDefaultsApplied[cacheKey] = nil
+    self._unitDefaultsAppliedByProfile[cacheKey] = nil
     return true
 end
 
 -- Export profile as import code.
 function DataHandle:ExportProfileCode(profileName)
     local normalized = normalizeProfileName(profileName) or self:GetActiveProfileName()
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return nil, "missing_storage"
     end
@@ -764,6 +839,8 @@ function DataHandle:ExportProfileCode(profileName)
     if type(profile) ~= "table" then
         return nil, "not_found"
     end
+    maintainProfile(profile, self._defaultFontPath or DEFAULT_FONT_PATH)
+    self._profileDefaultsApplied[getProfileCacheKey(Util:GetCharacterKey(), normalized)] = true
 
     local lines = {
         "MMFPROFILE1",
@@ -831,7 +908,8 @@ function DataHandle:ImportProfileCode(code, targetProfileName, overwriteExisting
         targetName = "Imported"
     end
 
-    local profiles = self.db and self.db.global and self.db.global.profiles or nil
+    local charSettings = self:GetCharacterSettings()
+    local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return nil, "missing_storage"
     end
@@ -841,10 +919,11 @@ function DataHandle:ImportProfileCode(code, targetProfileName, overwriteExisting
     end
 
     profiles[targetName] = importedProfile
-    self._profileDefaultsApplied[targetName] = nil
-    self._unitDefaultsAppliedByProfile[targetName] = nil
-    mergeDefaults(profiles[targetName], DEFAULTS.global.profiles.Default)
-    self._profileDefaultsApplied[targetName] = true
+    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), targetName)
+    self._profileDefaultsApplied[cacheKey] = nil
+    self._unitDefaultsAppliedByProfile[cacheKey] = nil
+    maintainProfile(profiles[targetName], self._defaultFontPath or DEFAULT_FONT_PATH)
+    self._profileDefaultsApplied[cacheKey] = true
     return targetName, nil
 end
 
@@ -855,11 +934,13 @@ function DataHandle:GetUnitConfig(unitToken)
     if not charSettings then
         return nil
     end
+    local charKey = Util:GetCharacterKey()
     local profileName = charSettings.activeProfile or "Default"
-    local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+    local cacheKey = getProfileCacheKey(charKey, profileName)
+    local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[cacheKey]
     if type(unitDefaultsApplied) ~= "table" then
         unitDefaultsApplied = {}
-        self._unitDefaultsAppliedByProfile[profileName] = unitDefaultsApplied
+        self._unitDefaultsAppliedByProfile[cacheKey] = unitDefaultsApplied
     end
 
     if type(profile.units[unitToken]) ~= "table" then
@@ -868,11 +949,11 @@ function DataHandle:GetUnitConfig(unitToken)
     end
 
     if not unitDefaultsApplied[unitToken] then
-        local defaultUnit = DEFAULTS.global.profiles.Default.units[unitToken]
+        local defaultUnit = DEFAULT_PROFILE.units[unitToken]
         if type(defaultUnit) == "table" then
             mergeDefaults(profile.units[unitToken], defaultUnit)
         else
-            mergeDefaults(profile.units[unitToken], DEFAULTS.global.profiles.Default.units.player)
+            mergeDefaults(profile.units[unitToken], DEFAULT_PROFILE.units.player)
         end
         unitDefaultsApplied[unitToken] = true
     end
@@ -883,7 +964,9 @@ end
 -- Set unit config.
 function DataHandle:SetUnitConfig(unitToken, key, value)
     local unitConfig = self:GetUnitConfig(unitToken)
-    local profileName = (self:GetCharacterSettings().activeProfile or "Default")
+    local charSettings = self:GetCharacterSettings()
+    local profileName = (charSettings and charSettings.activeProfile or "Default")
+    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), profileName)
     if type(key) ~= "string" or key == "" then
         return
     end
@@ -900,7 +983,7 @@ function DataHandle:SetUnitConfig(unitToken, key, value)
         end
         cursor[parts[#parts]] = value
         if value == nil then
-            local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+            local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[cacheKey]
             if type(unitDefaultsApplied) == "table" then
                 unitDefaultsApplied[unitToken] = nil
             end
@@ -910,7 +993,7 @@ function DataHandle:SetUnitConfig(unitToken, key, value)
 
     unitConfig[key] = value
     if value == nil then
-        local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[profileName]
+        local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[cacheKey]
         if type(unitDefaultsApplied) == "table" then
             unitDefaultsApplied[unitToken] = nil
         end
@@ -930,17 +1013,18 @@ function DataHandle:ResetUnitConfig(unitToken)
 
     profile.units = profile.units or {}
 
-    local defaultUnit = DEFAULTS.global.profiles.Default.units[unitToken]
+    local defaultUnit = DEFAULT_PROFILE.units[unitToken]
     if type(defaultUnit) ~= "table" then
-        defaultUnit = DEFAULTS.global.profiles.Default.units.player
+        defaultUnit = DEFAULT_PROFILE.units.player
     end
 
     profile.units[unitToken] = deepCopy(defaultUnit)
 
     local charSettings = self:GetCharacterSettings()
     local profileName = charSettings and (charSettings.activeProfile or "Default") or "Default"
-    self._unitDefaultsAppliedByProfile[profileName] = self._unitDefaultsAppliedByProfile[profileName] or {}
-    self._unitDefaultsAppliedByProfile[profileName][unitToken] = true
+    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), profileName)
+    self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
+    self._unitDefaultsAppliedByProfile[cacheKey][unitToken] = true
 
     return profile.units[unitToken]
 end

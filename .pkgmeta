@@ -10,3 +10,4 @@ ignore:
   - mummuFrames.code-workspace
   - scripts
   - LICENSE
+  - Docs

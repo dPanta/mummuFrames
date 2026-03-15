@@ -5,6 +5,12 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.0.2 - 2026-03-15
+- Changed profile storage to be character-local, so profile lists and active selections no longer bleed across the whole account.
+- Added a one-time migration that copies legacy account-wide profiles into each existing character's local profile set while preserving that character's selected profile when possible.
+- Updated the Profiles page copy to explain the new per-character behavior and position export/import as the way to move layouts between characters.
+- Bumped addon metadata to `2.0.2`.
+
 ## 2.0.1 - 2026-03-15
 - Fixed tracked priest buffs so `Atonement` and `Prayer of Mending` use the same explicit spellID-driven fallback path as `Renewing Mist`, including broader `Prayer of Mending` aura alias coverage.
 - Hardened tracked-buff matching against Midnight ownership metadata gaps by trusting direct override-family spellID hits without touching the dedicated debuff cache.
@@ -65,10 +71,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Added a Blizzard group leader icon to party and raid unit frames, anchored at the center-left edge to match the existing overlay styling.
 - Added party healthbar debuff overlay coloring by debuff type, including typed debuffs the current player cannot dispel.
 - Bumped addon metadata to `1.6.6`.
-
-## 1.6.5 - 2026-03-10
-- Fixed Enhancement shaman Maelstrom Weapon stacks sticking at `10` after `Tempest` consumed the full aura.
-- Filled in the missing `1.6.x` changelog entries and bumped addon metadata to `1.6.5`.
-
-## 1.6.3 - 2026-03-09
-- Bumped addon metadata to `1.6.3`.

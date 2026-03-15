@@ -1301,7 +1301,7 @@ function Configuration:InitializeProfilesDropdown(dropdown)
             self:SetSelectControlText(dropdown, option.label, nil)
             self:RefreshConfigWidgets()
             self:SetProfilesStatus(
-                string.format(L.CONFIG_PROFILES_SELECTED or "Selected profile: %s", option.value),
+                string.format(L.CONFIG_PROFILES_SELECTED or "Selected character profile: %s", option.value),
                 0.82,
                 0.84,
                 0.9
@@ -2444,7 +2444,7 @@ function Configuration:BuildProfilesPage(page)
     local intro = self:CreateHelpText(
         page,
         L.CONFIG_PROFILES_HELP
-            or "Profiles let you keep separate frame layouts for different roles, characters, or content types without reconfiguring everything from scratch.",
+            or "Profiles on this page are saved per character. Create separate layouts for this character, then export or import them when you want to share with another one.",
         page,
         0
     )
@@ -2452,7 +2452,7 @@ function Configuration:BuildProfilesPage(page)
     local currentProfileAnchor = self:CreateSectionHeader(
         page,
         L.CONFIG_PROFILES_SECTION_CURRENT or "Current Profile",
-        L.CONFIG_PROFILES_SECTION_CURRENT_HELP or "Choose which saved profile you are working with and switch to it when you are ready.",
+        L.CONFIG_PROFILES_SECTION_CURRENT_HELP or "Choose which saved profile this character is using, then switch when you are ready.",
         intro,
         18
     )
@@ -2460,7 +2460,7 @@ function Configuration:BuildProfilesPage(page)
     local profileControl = createLabeledDropdown(
         "mummuFramesConfigProfilesDropdown",
         page,
-        L.CONFIG_PROFILES_SELECT or "Active profile",
+        L.CONFIG_PROFILES_SELECT or "Character profile",
         currentProfileAnchor
     )
     local profileDropdown = profileControl and profileControl.dropdown or nil
@@ -2471,13 +2471,13 @@ function Configuration:BuildProfilesPage(page)
     local activateButton = CreateFrame("Button", "mummuFramesConfigProfileActivateButton", page, "UIPanelButtonTemplate")
     activateButton:SetSize(126, 22)
     activateButton:SetPoint("TOPLEFT", profileDropdown or page, "BOTTOMLEFT", 0, -8)
-    activateButton:SetText(L.CONFIG_PROFILES_ACTIVATE or "Activate selected")
+    activateButton:SetText(L.CONFIG_PROFILES_ACTIVATE or "Use selected on this character")
     activateButton:SetScript("OnClick", function()
         local selectedName = self:GetSelectedProfileName()
         local ok, err = dataHandle:SetActiveProfile(selectedName)
         if not ok then
             self:SetProfilesStatus(
-                (L.CONFIG_PROFILES_SWITCH_FAILED or "Failed to switch profile") .. " (" .. tostring(err or "error") .. ")",
+                (L.CONFIG_PROFILES_SWITCH_FAILED or "Failed to change this character's profile") .. " (" .. tostring(err or "error") .. ")",
                 1,
                 0.3,
                 0.3
@@ -2489,7 +2489,7 @@ function Configuration:BuildProfilesPage(page)
         self:RefreshConfigWidgets()
         self:RequestUnitFrameRefresh(REFRESH_INTENT_LAYOUT, "global", true)
         self:SetProfilesStatus(
-            string.format(L.CONFIG_PROFILES_SWITCHED or "Switched to profile: %s", selectedName),
+            string.format(L.CONFIG_PROFILES_SWITCHED or "This character is now using profile: %s", selectedName),
             0.3,
             1,
             0.45
@@ -2499,7 +2499,7 @@ function Configuration:BuildProfilesPage(page)
     local manageAnchor = self:CreateSectionHeader(
         page,
         L.CONFIG_PROFILES_SECTION_MANAGE or "Manage Profiles",
-        L.CONFIG_PROFILES_SECTION_MANAGE_HELP or "Create a new profile from the current setup, rename the selected one, or delete old profiles you no longer use.",
+        L.CONFIG_PROFILES_SECTION_MANAGE_HELP or "Create, rename, or delete profiles that belong only to this character.",
         activateButton,
         20
     )
@@ -2536,7 +2536,7 @@ function Configuration:BuildProfilesPage(page)
     local transferAnchor = self:CreateSectionHeader(
         page,
         L.CONFIG_PROFILES_SECTION_TRANSFER or "Share & Import",
-        L.CONFIG_PROFILES_SECTION_TRANSFER_HELP or "Export a profile to text, or import one into a new or existing profile name.",
+        L.CONFIG_PROFILES_SECTION_TRANSFER_HELP or "Export a profile to move it to another character, or import one into this character under a new or existing profile name.",
         deleteButton,
         20
     )
