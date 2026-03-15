@@ -5,6 +5,13 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.0.1 - 2026-03-15
+- Fixed tracked priest buffs so `Atonement` and `Prayer of Mending` use the same explicit spellID-driven fallback path as `Renewing Mist`, including broader `Prayer of Mending` aura alias coverage.
+- Hardened tracked-buff matching against Midnight ownership metadata gaps by trusting direct override-family spellID hits without touching the dedicated debuff cache.
+- Fixed a Lua scoping bug in the group debuff overlay helper that could call `isGroupAuraFilteredIn` before it was defined.
+- Removed the target-frame `CheckInteractDistance` fallback that could trigger `ADDON_ACTION_BLOCKED` during secure target changes.
+- Bumped addon metadata to `2.0.1`.
+
 ## 2.0.0 - 2026-03-15
 - Refactored party and raid debuff tracking around a dedicated Midnight-safe `UNIT_AURA` cache built from `C_UnitAuras` slot scans and delta updates, instead of relying on hidden Blizzard compact-frame aura state.
 - Added configurable party and raid debuff icon rows, while keeping the regular unit-frame debuff strips dispel-agnostic.

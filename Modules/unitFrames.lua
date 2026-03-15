@@ -556,17 +556,9 @@ local function isUnitOutOfRange(unitToken)
             end
         end
     end
-
-    if type(CheckInteractDistance) == "function" then
-        local okDistance, withinDistance = pcall(CheckInteractDistance, unitToken, 4)
-        if okDistance then
-            local isWithinDistance = normalizeBooleanLike(withinDistance)
-            if isWithinDistance ~= nil then
-                return isWithinDistance == false
-            end
-        end
-    end
-
+    -- Do not fall back to CheckInteractDistance here. It can trigger protected
+    -- action blocks during secure target changes, and its interact buckets do
+    -- not match UnitInRange semantics anyway.
     return false
 end
 

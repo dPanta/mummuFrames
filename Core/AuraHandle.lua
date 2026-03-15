@@ -87,7 +87,7 @@ local TRACKER_SPELL_ID_OVERRIDES_BY_NAME = {
     -- returns only the base cast or passive spell.
     ["Renewing Mist"] = { 119611, 281231 },
     ["Atonement"] = { 194384, 81749, 81751 },
-    ["Prayer of Mending"] = { 41635, 33110, 123259 },
+    ["Prayer of Mending"] = { 41635, 33076, 33110, 123259, 319912 },
 }
 local DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER = {
     party = {
@@ -885,6 +885,8 @@ local function getFirstAuraDataInBucket(bucket)
     return nil
 end
 
+local isGroupAuraFilteredIn
+
 -- Return the first dispellable debuff aura for unitToken.
 -- Prefer the dedicated dispellable bucket, but fall back to validating the
 -- harmful bucket against the dispel filter so the overlay still works when the
@@ -1076,7 +1078,7 @@ local function collectAuraSlots(unitToken, filter, fallbackFilter, maxCount)
 end
 
 -- Return true when auraInstanceID currently matches the requested aura filter.
-local function isGroupAuraFilteredIn(unitToken, auraInstanceID, primaryFilter, fallbackFilter, auraData)
+isGroupAuraFilteredIn = function(unitToken, auraInstanceID, primaryFilter, fallbackFilter, auraData)
     local normalizedAuraInstanceID = normalizeAuraInstanceID(auraInstanceID)
     if not normalizedAuraInstanceID then
         return false
@@ -2182,6 +2184,10 @@ local function findTrackedAuraBySpellIDs(unitToken, filter, trackedSpellIDs, req
     return nil
 end
 
+local function shouldTrustDirectTrackedSpellMatch(trackedSpellInfo)
+    return type(trackedSpellInfo) == "table" and trackedSpellInfo.preferDirectSpellIDMatch == true
+end
+
 -- Resolve the best tracked aura match for a spell name or its known spell IDs.
 local function findTrackedAura(unitToken, spellName, trackedSpellInfo)
     local trackedSpellIDs = trackedSpellInfo and trackedSpellInfo.spellIDs or nil
@@ -2204,8 +2210,24 @@ local function findTrackedAura(unitToken, spellName, trackedSpellInfo)
     if type(trackedSpellIDs) == "table" then
         for spellIndex = 1, #trackedSpellIDs do
             local directSpellIDAura = getUnitAuraBySpellID(unitToken, trackedSpellIDs[spellIndex])
-            if directSpellIDAura and isTrackerAuraOwnedByPlayer(directSpellIDAura) then
-                return directSpellIDAura
+            if directSpellIDAura then
+                if isTrackerAuraOwnedByPlayer(directSpellIDAura) then
+                    return directSpellIDAura
+                end
+
+                local selfCastOnUnit = isAuraSelfCastOnUnit(unitToken, directSpellIDAura)
+                if selfCastOnUnit == true then
+                    return directSpellIDAura
+                end
+
+                -- Midnight can still answer direct spellID lookups for curated
+                -- healer-buff families even when ownership metadata is missing.
+                -- Treat the explicit override-family lookup as authoritative so
+                -- spells like Renewing Mist, Atonement, and Prayer of Mending
+                -- behave consistently without touching the debuff pipeline.
+                if shouldTrustDirectTrackedSpellMatch(trackedSpellInfo) then
+                    return directSpellIDAura
+                end
             end
         end
     end
@@ -3660,6 +3682,7 @@ function AuraHandle:RebuildSpellIconCache()
                 name = info and info.name or name,
                 spellIDs = spellIDs,
                 icon = icon,
+                preferDirectSpellIDMatch = type(overrideSpellIDs) == "table" and #overrideSpellIDs > 0,
             }
         end
     end
