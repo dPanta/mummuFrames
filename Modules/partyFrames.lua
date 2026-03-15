@@ -227,14 +227,10 @@ end
 
 -- Safely read a unit GUID without letting API faults escape.
 local function getUnitGUIDSafe(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
-        return nil
+    if Util and type(Util.GetUnitGUIDSafe) == "function" then
+        return Util:GetUnitGUIDSafe(unitToken)
     end
 
-    local okGUID, guid = pcall(UnitGUID, unitToken)
-    if okGUID and type(guid) == "string" and guid ~= "" then
-        return guid
-    end
     return nil
 end
 

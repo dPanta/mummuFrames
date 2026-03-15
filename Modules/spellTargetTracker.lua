@@ -141,13 +141,8 @@ local function safeToString(value)
 end
 
 local function getUnitGUIDSafe(unitToken)
-    if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
-        return nil
-    end
-
-    local okGUID, guid = pcall(UnitGUID, unitToken)
-    if okGUID and type(guid) == "string" and guid ~= "" then
-        return guid
+    if Util and type(Util.GetUnitGUIDSafe) == "function" then
+        return Util:GetUnitGUIDSafe(unitToken)
     end
 
     return nil

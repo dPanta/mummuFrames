@@ -3500,8 +3500,14 @@ function Configuration:BuildUnitPage(page, unitToken, options)
     local buffsSize
     local buffsPositionDropdown
     local buffsSourceDropdown
+    local debuffsEnabled
+    local debuffsMax
+    local debuffsSize
     local debuffsPositionDropdown
-    if unitToken ~= "party" and unitToken ~= "raid" then
+    local debuffsX
+    local debuffsY
+    local isGroupFrameUnit = unitToken == "party" or unitToken == "raid"
+    do
         cursor = self:CreateSectionHeader(
             page,
             L.CONFIG_SECTION_BUFFS or "Buffs & Debuffs",
@@ -3509,71 +3515,136 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             textAnchor
         )
 
-        buffsEnabled = registerCheckbox(
-            "BuffsEnabled",
-            L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
-            cursor,
-            "aura.buffs.enabled",
+        local debuffAnchor = cursor
+        if not isGroupFrameUnit then
+            buffsEnabled = registerCheckbox(
+                "BuffsEnabled",
+                L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
+                cursor,
+                "aura.buffs.enabled",
+                REFRESH_INTENT_APPEARANCE,
+                boolValue("aura.buffs.enabled", true),
+                -14
+            )
+            buffsMax = registerNumeric(
+                "BuffsMax",
+                L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
+                1,
+                16,
+                1,
+                buffsEnabled,
+                "aura.buffs.max",
+                REFRESH_INTENT_APPEARANCE,
+                numericValue("aura.buffs.max", 8),
+                function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+                20
+            )
+            buffsSize = registerNumeric(
+                "BuffsSize",
+                L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
+                10,
+                48,
+                1,
+                buffsMax.slider,
+                "aura.buffs.size",
+                REFRESH_INTENT_APPEARANCE,
+                numericValue("aura.buffs.size", 18),
+                function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+            )
+            local _, buffPosition = registerDropdown(
+                "BuffPosition",
+                L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
+                buffsSize.slider,
+                function(configuration, dropdown)
+                    configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
+                end,
+                false
+            )
+            buffsPositionDropdown = buffPosition
+            local _, buffSource = registerDropdown(
+                "BuffSource",
+                L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
+                buffsPositionDropdown or buffsSize.slider,
+                function(configuration, dropdown)
+                    configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
+                end,
+                false
+            )
+            buffsSourceDropdown = buffSource
+            debuffAnchor = buffsSourceDropdown or buffsPositionDropdown or buffsSize.slider or cursor
+        end
+
+        debuffsEnabled = registerCheckbox(
+            "DebuffsEnabled",
+            L.CONFIG_UNIT_DEBUFFS_ENABLE or "Show debuffs",
+            debuffAnchor,
+            "aura.debuffs.enabled",
             REFRESH_INTENT_APPEARANCE,
-            boolValue("aura.buffs.enabled", true),
+            boolValue("aura.debuffs.enabled", true),
             -14
         )
-        buffsMax = registerNumeric(
-            "BuffsMax",
-            L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
+        debuffsMax = registerNumeric(
+            "DebuffsMax",
+            L.CONFIG_UNIT_DEBUFFS_MAX or "Debuff count",
             1,
             16,
             1,
-            buffsEnabled,
-            "aura.buffs.max",
+            debuffsEnabled,
+            "aura.debuffs.max",
             REFRESH_INTENT_APPEARANCE,
-            numericValue("aura.buffs.max", 8),
+            numericValue("aura.debuffs.max", 8),
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
             20
         )
-        buffsSize = registerNumeric(
-            "BuffsSize",
-            L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
+        debuffsSize = registerNumeric(
+            "DebuffsSize",
+            L.CONFIG_UNIT_DEBUFFS_SIZE or "Debuff size",
             10,
             48,
             1,
-            buffsMax.slider,
-            "aura.buffs.size",
+            debuffsMax.slider,
+            "aura.debuffs.size",
             REFRESH_INTENT_APPEARANCE,
-            numericValue("aura.buffs.size", 18),
+            numericValue("aura.debuffs.size", 18),
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end
         )
-        local _, buffPosition = registerDropdown(
-            "BuffPosition",
-            L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
-            buffsSize.slider,
-            function(configuration, dropdown)
-                configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
-            end,
-            false
-        )
-        buffsPositionDropdown = buffPosition
-        local _, buffSource = registerDropdown(
-            "BuffSource",
-            L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
-            buffsPositionDropdown or buffsSize.slider,
-            function(configuration, dropdown)
-                configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
-            end,
-            false
-        )
-        buffsSourceDropdown = buffSource
         local _, debuffPosition = registerDropdown(
             "DebuffPosition",
             L.CONFIG_UNIT_DEBUFFS_POSITION or "Debuff position",
-            buffsSourceDropdown or buffsPositionDropdown or buffsSize.slider,
+            debuffsSize.slider,
             function(configuration, dropdown)
                 configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
             end,
             false
         )
         debuffsPositionDropdown = debuffPosition
-        textAnchor = debuffsPositionDropdown or buffsSourceDropdown or buffsPositionDropdown or buffsSize.slider
+        debuffsX = registerNumeric(
+            "DebuffsX",
+            L.CONFIG_UNIT_DEBUFFS_X or "Debuff X offset",
+            -80,
+            80,
+            1,
+            debuffsPositionDropdown or debuffsSize.slider,
+            "aura.debuffs.x",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.x", 0),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        debuffsY = registerNumeric(
+            "DebuffsY",
+            L.CONFIG_UNIT_DEBUFFS_Y or "Debuff Y offset",
+            -80,
+            80,
+            1,
+            debuffsX.slider,
+            "aura.debuffs.y",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.y", -4),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        textAnchor = debuffsY.slider or debuffsX.slider or debuffsPositionDropdown or debuffsSize.slider
     end
 
     local castbarEnabled
@@ -3901,19 +3972,40 @@ function Configuration:BuildUnitPage(page, unitToken, options)
 
         self._owner:SyncWidgetRegistry(self.registry, unitConfig)
 
-        if buffsMax then
+        if buffsEnabled then
             local enabledBuffs = getTableValueAtPath(unitConfig, "aura.buffs.enabled")
             local buffWidgetsEnabled = enabledBuffs ~= false
-            self._owner:SetNumericControlEnabled(buffsMax, buffWidgetsEnabled)
-            self._owner:SetNumericControlEnabled(buffsSize, buffWidgetsEnabled)
+            if buffsMax then
+                self._owner:SetNumericControlEnabled(buffsMax, buffWidgetsEnabled)
+            end
+            if buffsSize then
+                self._owner:SetNumericControlEnabled(buffsSize, buffWidgetsEnabled)
+            end
             if buffsPositionDropdown then
                 self._owner:SetSelectControlEnabled(buffsPositionDropdown, buffWidgetsEnabled)
             end
             if buffsSourceDropdown then
                 self._owner:SetSelectControlEnabled(buffsSourceDropdown, buffWidgetsEnabled)
             end
+        end
+
+        if debuffsEnabled then
+            local enabledDebuffs = getTableValueAtPath(unitConfig, "aura.debuffs.enabled")
+            local debuffWidgetsEnabled = enabledDebuffs ~= false
+            if debuffsMax then
+                self._owner:SetNumericControlEnabled(debuffsMax, debuffWidgetsEnabled)
+            end
+            if debuffsSize then
+                self._owner:SetNumericControlEnabled(debuffsSize, debuffWidgetsEnabled)
+            end
             if debuffsPositionDropdown then
-                self._owner:SetSelectControlEnabled(debuffsPositionDropdown, buffWidgetsEnabled)
+                self._owner:SetSelectControlEnabled(debuffsPositionDropdown, debuffWidgetsEnabled)
+            end
+            if debuffsX then
+                self._owner:SetNumericControlEnabled(debuffsX, debuffWidgetsEnabled)
+            end
+            if debuffsY then
+                self._owner:SetNumericControlEnabled(debuffsY, debuffWidgetsEnabled)
             end
         end
 

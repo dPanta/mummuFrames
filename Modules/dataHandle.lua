@@ -94,6 +94,7 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
             },
             -- Debuff row defaults.
             debuffs = {
+                enabled = true,
                 anchorPoint = "TOPRIGHT",
                 relativePoint = "BOTTOMRIGHT",
                 x = 0,
@@ -157,6 +158,19 @@ local DEFAULTS = {
                         height = 34,
                         spacing = 24,
                         fontSize = 11,
+                        aura = {
+                            enabled = true,
+                            debuffs = {
+                                enabled = true,
+                                anchorPoint = "TOPRIGHT",
+                                relativePoint = "BOTTOMRIGHT",
+                                x = 0,
+                                y = -4,
+                                size = 16,
+                                scale = 1,
+                                max = 4,
+                            },
+                        },
                     },
                     -- Raid-frame defaults.
                     raid = {
@@ -176,6 +190,19 @@ local DEFAULTS = {
                         sortDirection = "asc",
                         testSize = 20,
                         fontSize = 10,
+                        aura = {
+                            enabled = true,
+                            debuffs = {
+                                enabled = true,
+                                anchorPoint = "TOPRIGHT",
+                                relativePoint = "BOTTOMRIGHT",
+                                x = 0,
+                                y = -3,
+                                size = 12,
+                                scale = 1,
+                                max = 3,
+                            },
+                        },
                     },
                 },
                 -- Shared aura tracking configuration for party/raid frames.

@@ -91,6 +91,17 @@ local function normalizeBooleanLike(value)
     return nil
 end
 
+-- Return true when Blizzard marks a value as secret/tainted on Retail.
+local function isSecretValue(value)
+    local secretCheck = _G.issecretvalue
+    if type(secretCheck) ~= "function" then
+        return false
+    end
+
+    local okSecret, isSecret = pcall(secretCheck, value)
+    return okSecret and isSecret == true
+end
+
 -- Format large values using compact k/m suffixes.
 local function formatAbbrevNumber(value)
     local n = tonumber(value) or 0
@@ -165,6 +176,28 @@ function Util:SafeBoolean(value, fallback)
     end
 
     return equalsTrueSafe(fallback)
+end
+
+-- Read a unit GUID without letting secret-value wrappers or comparison faults
+-- escape into callers that only need stable, non-secret GUID strings.
+function Util:GetUnitGUIDSafe(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
+        return nil
+    end
+
+    local okGUID, guid = pcall(UnitGUID, unitToken)
+    if not okGUID or guid == nil or isSecretValue(guid) or type(guid) ~= "string" then
+        return nil
+    end
+
+    local okNonEmpty, isNonEmpty = pcall(function()
+        return guid ~= ""
+    end)
+    if okNonEmpty and isNonEmpty then
+        return guid
+    end
+
+    return nil
 end
 
 -- Return whether a party or raid unit should be considered out of range.

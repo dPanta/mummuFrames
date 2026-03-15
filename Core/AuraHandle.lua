@@ -3,11 +3,15 @@
 -- the suppression of Blizzard's compact unit frames when mummuFrames replaces them.
 --
 -- Architecture overview:
---   * A hook on CompactUnitFrame_UpdateAuras populates blizzardAuraCacheByUnit,
---     a per-unit set of active auraInstanceIDs keyed by category (buffs, debuffs,
---     playerDispellable, defensives).
+--   * A hook on CompactUnitFrame_UpdateAuras still populates blizzardAuraCacheByUnit
+--     for tracked helpful buffs and centre defensive indicators that intentionally
+--     mirror Blizzard compact-frame behaviour.
+--   * Group debuffs now use a dedicated per-unit cache driven by UNIT_AURA
+--     updateInfo and C_UnitAuras slot scans, so party/raid debuff icons and the
+--     dispel overlay no longer depend on hidden Blizzard compact frames staying
+--     current in combat.
 --   * Per-unit UNIT_AURA dispatcher frames drive indicator refreshes directly,
---     bypassing Blizzard's compact frame filter which is unreliable in combat.
+--     bypassing Blizzard's compact frame hook path when rendering debuff state.
 --   * A shared unitToken→frame map (sharedUnitFrameMap) lets the dispatcher
 --     locate the mummu frame for any group unit without scanning every frame.
 --   * HoT/buff indicators query current unit auras directly and prefer
@@ -27,6 +31,8 @@ local AuraSafety = ns.AuraSafety
 local MAX_AURA_SCAN        = 80
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 local DISPEL_OVERLAY_ALPHA = 0.24
+local GROUP_AURA_SLOT_BATCH_SIZE = 16
+local GROUP_AURA_SLOT_SCAN_GUARD = 8
 
 -- Maximum pool sizes used when enumerating Blizzard's compact unit frames.
 local MAX_BLIZZARD_PARTY_FRAMES       = 5
@@ -43,6 +49,8 @@ local MAP_REBUILD_THROTTLE          = 0.20
 local MAX_TRACKER_AURAS    = 4
 -- Default tracker icon size in pixels.
 local DEFAULT_TRACKER_SIZE = 14
+local GROUP_DEBUFF_BUTTON_GAP = 2
+local GROUP_DEBUFF_MAX_BUTTONS = 8
 local CENTER_DEFENSIVE_MIN_SIZE = 16
 local CENTER_DEFENSIVE_MAX_SIZE = 30
 local CENTER_DEFENSIVE_BACKDROP_COLOR = { 0.03, 0.04, 0.06, 0.72 }
@@ -54,12 +62,54 @@ local CENTER_DEFENSIVE_BORDER_COLOR_UNKNOWN  = { 0.88, 0.90, 0.94, 0.90 }
 -- fallback when ownership metadata is more reliable than the filter path.
 local TRACKER_PLAYER_HELPFUL_FILTER = "HELPFUL|PLAYER|RAID_IN_COMBAT"
 local TRACKER_HELPFUL_FILTER        = "HELPFUL|RAID_IN_COMBAT"
+-- Midnight-era group aura consumers in other addons successfully rely on
+-- INCLUDE_NAME_PLATE_ONLY with C_UnitAuras slot enumeration. We keep a plain
+-- HARMFUL fallback so the cache still works if Blizzard changes the stricter
+-- filter path again.
+local GROUP_HARMFUL_FILTER          = "HARMFUL|INCLUDE_NAME_PLATE_ONLY"
+local GROUP_HARMFUL_FALLBACK_FILTER = "HARMFUL"
+local GROUP_DISPELLABLE_FILTER          = "HARMFUL|INCLUDE_NAME_PLATE_ONLY|RAID_PLAYER_DISPELLABLE"
+local GROUP_DISPELLABLE_FALLBACK_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
+-- This is only a safety net for missed UNIT_AURA events; normal combat updates
+-- should keep the cache fresh long before the fallback window elapses.
+local DEBUFF_CACHE_STALE_WINDOW     = 15.0
 local DISPEL_TYPE_PRIORITY  = { "Magic", "Curse", "Poison", "Disease" }
+local DISPEL_INDEX_BY_NAME = {
+    None = 0,
+    Magic = 1,
+    Curse = 2,
+    Disease = 3,
+    Poison = 4,
+}
 local TRACKER_SPELL_ID_OVERRIDES_BY_NAME = {
-    -- Retail/Midnight can surface Renewing Mist on units through multiple
-    -- aura spellIDs even though spell-name resolution typically returns only
-    -- the base cast spell.
+    -- Retail/Midnight can surface tracked healer buffs on units through
+    -- alternate aura spellIDs even though spell-name resolution typically
+    -- returns only the base cast or passive spell.
     ["Renewing Mist"] = { 119611, 281231 },
+    ["Atonement"] = { 194384, 81749, 81751 },
+    ["Prayer of Mending"] = { 41635, 33110, 123259 },
+}
+local DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER = {
+    party = {
+        enabled = true,
+        anchorPoint = "TOPRIGHT",
+        relativePoint = "BOTTOMRIGHT",
+        x = 0,
+        y = -4,
+        size = 16,
+        scale = 1,
+        max = 4,
+    },
+    raid = {
+        enabled = true,
+        anchorPoint = "TOPRIGHT",
+        relativePoint = "BOTTOMRIGHT",
+        x = 0,
+        y = -3,
+        size = 12,
+        scale = 1,
+        max = 3,
+    },
 }
 
 -- Per-class default spell-name whitelists. Empty table = no name filter (show all player-cast buffs).
@@ -124,6 +174,10 @@ local VITALS_ONLY_REFRESH = {
 local AuraHandle = ns.Object:Extend()
 
 -- Per-unit aura cache populated by the Blizzard compact-frame hook.
+-- This remains useful for visuals that intentionally mirror Blizzard compact
+-- frames, such as tracked helpful buffs and the centre defensive indicator.
+-- Group debuff rows and dispel overlays are authoritative in
+-- groupDebuffStateByUnit instead.
 -- blizzardAuraCacheByUnit[unitToken] = {
 --   buffs            : { [auraInstanceID] = true }
 --   debuffs          : { [auraInstanceID] = true }
@@ -136,6 +190,24 @@ local AuraHandle = ns.Object:Extend()
 --   updatedAt        : number  (GetTime() at last capture)
 -- }
 local blizzardAuraCacheByUnit = {}
+
+-- Dedicated group debuff cache populated from live C_UnitAuras reads.
+-- groupDebuffStateByUnit[unitToken] = {
+--   harmful = {
+--     auras          : { [auraInstanceID] = auraData }
+--     order          : { auraInstanceID, ... }
+--     indexByAuraID  : { [auraInstanceID] = orderIndex }
+--     dispelTypeByAuraID : { [auraInstanceID] = "Magic"|"Curse"|"Poison"|"Disease" }
+--     dispelTypeCount    : { Magic=number, Curse=number, Poison=number, Disease=number }
+--   }
+--   dispellable = { same shape as harmful }
+--   revision     : number  (incremented on any harmful/dispellable change)
+--   updatedAt    : number  (GetTime() at last successful update)
+--   lastFullScanAt : number
+--   lastDeltaAt    : number
+--   lastSource     : string
+-- }
+local groupDebuffStateByUnit = {}
 
 -- Whether Blizzard's compact party/raid frames are currently suppressed.
 local blizzardFramesHiddenByOwner = {
@@ -158,8 +230,6 @@ local sharedMapLastSelfHealAt   = 0
 local blizzardHooksInstalled = false
 local blizzardHookState = {
     updateAuras      = false,
-    updateBuffs      = false,
-    updateDebuffs    = false,
     updateUnitEvents = false,
 }
 
@@ -171,12 +241,14 @@ local cacheBootstrapToken = 0
 local cacheBootstrapFrame      = nil
 local groupDispatcherFrame     = nil
 local unitAuraDispatcherFrames = {}
+local clearGroupDebuffState
 
 -- Pre-resolved icon textures for whitelisted spell names (spellName → texture path).
 -- Built by RebuildSpellIconCache outside combat so the hot path never reads
 -- tainted auraData.icon fields.
 local _spellIconCache = {}
 local _trackerSpellInfoCache = {}
+local _groupDispelColorCurve = nil
 
 -- ---------------------------------------------------------------------------
 -- Pure helper functions
@@ -279,6 +351,101 @@ local function getResolvedSpellInfo(query)
     end
 
     return nil
+end
+
+-- Build the dispel-color curve expected by C_UnitAuras.GetAuraDispelTypeColor.
+local function getGroupDispelColorCurve()
+    if _groupDispelColorCurve ~= nil then
+        return _groupDispelColorCurve or nil
+    end
+    _groupDispelColorCurve = false
+
+    if not (C_CurveUtil and type(C_CurveUtil.CreateColorCurve) == "function") then
+        return nil
+    end
+
+    local curve = C_CurveUtil.CreateColorCurve()
+    if not curve then
+        return nil
+    end
+    if Enum and Enum.LuaCurveType and Enum.LuaCurveType.Step and type(curve.SetType) == "function" then
+        curve:SetType(Enum.LuaCurveType.Step)
+    end
+
+    local debuffColorsByIndex = {
+        [DISPEL_INDEX_BY_NAME.None] = _G.DEBUFF_TYPE_NONE_COLOR,
+        [DISPEL_INDEX_BY_NAME.Magic] = _G.DEBUFF_TYPE_MAGIC_COLOR,
+        [DISPEL_INDEX_BY_NAME.Curse] = _G.DEBUFF_TYPE_CURSE_COLOR,
+        [DISPEL_INDEX_BY_NAME.Disease] = _G.DEBUFF_TYPE_DISEASE_COLOR,
+        [DISPEL_INDEX_BY_NAME.Poison] = _G.DEBUFF_TYPE_POISON_COLOR,
+    }
+
+    for dispelIndex, colorValue in pairs(debuffColorsByIndex) do
+        if colorValue and type(curve.AddPoint) == "function" then
+            curve:AddPoint(dispelIndex, colorValue)
+        end
+    end
+
+    _groupDispelColorCurve = curve
+    return curve
+end
+
+-- Coerce any aura-instance-like input to a positive integer ID.
+local function normalizeAuraInstanceID(value)
+    local numeric = nil
+    if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+        numeric = AuraSafety:SafeNumber(value, nil)
+    elseif type(value) == "number" then
+        local okString, asString = pcall(tostring, value)
+        if okString and type(asString) == "string" then
+            numeric = tonumber(asString)
+        end
+    elseif type(value) == "string" then
+        numeric = tonumber(value)
+    else
+        local okTonumber, coerced = pcall(tonumber, value)
+        if okTonumber and type(coerced) == "number" then
+            numeric = coerced
+        end
+    end
+    if type(numeric) ~= "number" then
+        return nil
+    end
+    local rounded = math.floor(numeric + 0.5)
+    if rounded <= 0 then
+        return nil
+    end
+    return rounded
+end
+
+-- Coerce numeric-like aura payload fields without letting secret wrappers leak
+-- into render code that performs comparisons or cooldown math.
+local function getSafeAuraNumericValue(value, fallback)
+    if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+        return AuraSafety:SafeNumber(value, fallback)
+    end
+    if type(value) == "number" then
+        local okString, asString = pcall(tostring, value)
+        if okString and type(asString) == "string" then
+            local parsed = tonumber(asString)
+            if type(parsed) == "number" then
+                return parsed
+            end
+        end
+        return fallback
+    end
+    if type(value) == "string" then
+        local parsed = tonumber(value)
+        if type(parsed) == "number" then
+            return parsed
+        end
+        return fallback
+    end
+    local okTonumber, coerced = pcall(tonumber, value)
+    if okTonumber and type(coerced) == "number" then
+        return coerced
+    end
+    return fallback
 end
 
 -- Resolve the most reliable icon texture for a tracked aura.
@@ -505,6 +672,453 @@ local function ensureUnitCache(unitToken)
     end
 
     return cache
+end
+
+-- Return true when Blizzard marks a slot-query payload as secret.
+-- Group debuff tracking prefers direct C_UnitAuras reads over fail-closed
+-- C_Secrets checks so a single API mismatch cannot blank the whole indicator.
+local function isSecretAuraValue(value)
+    local secretCheck = _G.issecretvalue
+    if type(secretCheck) ~= "function" then
+        return false
+    end
+
+    local okSecret, isSecret = pcall(secretCheck, value)
+    return okSecret and isSecret == true
+end
+
+-- Create one ordered aura bucket used by the shared group debuff cache.
+local function createGroupDebuffBucket()
+    return {
+        auras = {},
+        order = {},
+        indexByAuraID = {},
+        dispelTypeByAuraID = {},
+        dispelTypeCount = {},
+    }
+end
+
+-- Ensures groupDebuffStateByUnit[unitToken] exists and returns it.
+local function ensureGroupDebuffState(unitToken)
+    local state = groupDebuffStateByUnit[unitToken]
+    if type(state) ~= "table" then
+        state = {}
+        groupDebuffStateByUnit[unitToken] = state
+    end
+
+    state.harmful = state.harmful or createGroupDebuffBucket()
+    state.dispellable = state.dispellable or createGroupDebuffBucket()
+    if type(state.revision) ~= "number" then
+        state.revision = 0
+    end
+    if type(state.updatedAt) ~= "number" then
+        state.updatedAt = 0
+    end
+    if type(state.lastFullScanAt) ~= "number" then
+        state.lastFullScanAt = 0
+    end
+    if type(state.lastDeltaAt) ~= "number" then
+        state.lastDeltaAt = 0
+    end
+    if type(state.lastSource) ~= "string" then
+        state.lastSource = "unset"
+    end
+
+    return state
+end
+
+-- Clears one ordered aura bucket in-place without reallocating its tables.
+local function resetGroupDebuffBucket(bucket)
+    if type(bucket) ~= "table" then
+        return
+    end
+
+    wipeTable(bucket.auras)
+    wipeTable(bucket.indexByAuraID)
+    wipeTable(bucket.dispelTypeByAuraID)
+    wipeTable(bucket.dispelTypeCount)
+    if type(bucket.order) == "table" then
+        for index = #bucket.order, 1, -1 do
+            bucket.order[index] = nil
+        end
+    end
+    bucket._orderDirty = nil
+end
+
+-- Rebuild the dense aura order after removals.
+local function compactGroupDebuffBucket(bucket)
+    if type(bucket) ~= "table"
+        or bucket._orderDirty ~= true
+        or type(bucket.order) ~= "table"
+        or type(bucket.indexByAuraID) ~= "table"
+        or type(bucket.auras) ~= "table"
+    then
+        return
+    end
+
+    wipeTable(bucket.indexByAuraID)
+
+    local writeIndex = 1
+    for readIndex = 1, #bucket.order do
+        local auraInstanceID = bucket.order[readIndex]
+        if auraInstanceID and bucket.auras[auraInstanceID] and not bucket.indexByAuraID[auraInstanceID] then
+            bucket.order[writeIndex] = auraInstanceID
+            bucket.indexByAuraID[auraInstanceID] = writeIndex
+            writeIndex = writeIndex + 1
+        end
+    end
+    for clearIndex = writeIndex, #bucket.order do
+        bucket.order[clearIndex] = nil
+    end
+
+    bucket._orderDirty = nil
+end
+
+-- Apply a typed dispel-name change to a bucket without leaving stale type counts.
+local function setBucketDispelType(bucket, auraInstanceID, dispelType)
+    if type(bucket) ~= "table" or auraInstanceID == nil then
+        return
+    end
+
+    local oldType = bucket.dispelTypeByAuraID[auraInstanceID]
+    if oldType == dispelType then
+        return
+    end
+
+    if oldType then
+        local remaining = (tonumber(bucket.dispelTypeCount[oldType]) or 0) - 1
+        if remaining > 0 then
+            bucket.dispelTypeCount[oldType] = remaining
+        else
+            bucket.dispelTypeCount[oldType] = nil
+        end
+        bucket.dispelTypeByAuraID[auraInstanceID] = nil
+    end
+
+    if dispelType then
+        bucket.dispelTypeByAuraID[auraInstanceID] = dispelType
+        bucket.dispelTypeCount[dispelType] = (tonumber(bucket.dispelTypeCount[dispelType]) or 0) + 1
+    end
+end
+
+-- Insert or replace one aura inside an ordered bucket.
+local function storeAuraInGroupDebuffBucket(bucket, auraData)
+    if type(bucket) ~= "table" or type(auraData) ~= "table" then
+        return false
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(auraData.auraInstanceID)
+    if not auraInstanceID then
+        return false
+    end
+
+    local existingAura = bucket.auras[auraInstanceID]
+    bucket.auras[auraInstanceID] = auraData
+    if not bucket.indexByAuraID[auraInstanceID] then
+        bucket.order[#bucket.order + 1] = auraInstanceID
+        bucket.indexByAuraID[auraInstanceID] = #bucket.order
+    end
+
+    setBucketDispelType(bucket, auraInstanceID, normalizeDispelType(auraData.dispelName))
+    return existingAura ~= auraData
+end
+
+-- Remove one aura from an ordered bucket and flag the sparse order for compaction.
+local function removeAuraFromGroupDebuffBucket(bucket, auraInstanceID)
+    if type(bucket) ~= "table" then
+        return false
+    end
+
+    local normalizedAuraInstanceID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedAuraInstanceID then
+        return false
+    end
+
+    local hadAura = bucket.auras[normalizedAuraInstanceID] ~= nil
+    if hadAura then
+        bucket.auras[normalizedAuraInstanceID] = nil
+    end
+    if bucket.indexByAuraID[normalizedAuraInstanceID] ~= nil then
+        bucket.indexByAuraID[normalizedAuraInstanceID] = nil
+        bucket._orderDirty = true
+        hadAura = true
+    end
+
+    setBucketDispelType(bucket, normalizedAuraInstanceID, nil)
+    return hadAura
+end
+
+-- Return the highest-priority dispel type still present in a bucket.
+local function findPriorityDebuffTypeInBucket(bucket, allowedTypeSet)
+    if type(bucket) ~= "table" or type(bucket.dispelTypeCount) ~= "table" then
+        return nil
+    end
+
+    for index = 1, #DISPEL_TYPE_PRIORITY do
+        local debuffType = DISPEL_TYPE_PRIORITY[index]
+        if (type(allowedTypeSet) ~= "table" or allowedTypeSet[debuffType] == true)
+            and (tonumber(bucket.dispelTypeCount[debuffType]) or 0) > 0
+        then
+            return debuffType
+        end
+    end
+
+    return nil
+end
+
+-- Return the first live auraData payload still present in an ordered bucket.
+local function getFirstAuraDataInBucket(bucket)
+    if type(bucket) ~= "table" or type(bucket.order) ~= "table" or type(bucket.auras) ~= "table" then
+        return nil
+    end
+
+    compactGroupDebuffBucket(bucket)
+
+    for index = 1, #bucket.order do
+        local auraInstanceID = bucket.order[index]
+        local auraData = auraInstanceID and bucket.auras[auraInstanceID] or nil
+        if type(auraData) == "table" then
+            return auraData
+        end
+    end
+
+    return nil
+end
+
+-- Return the first dispellable debuff aura for unitToken.
+-- Prefer the dedicated dispellable bucket, but fall back to validating the
+-- harmful bucket against the dispel filter so the overlay still works when the
+-- dispellable filter path omits type metadata.
+local function getFirstDispellableAuraData(unitToken, state, allowedTypeSet)
+    if type(state) ~= "table" then
+        return nil
+    end
+
+    local dispellableAura = getFirstAuraDataInBucket(state.dispellable)
+    if dispellableAura then
+        return dispellableAura
+    end
+
+    local harmfulBucket = state.harmful
+    if type(harmfulBucket) ~= "table" or type(harmfulBucket.order) ~= "table" or type(harmfulBucket.auras) ~= "table" then
+        return nil
+    end
+
+    compactGroupDebuffBucket(harmfulBucket)
+
+    for index = 1, #harmfulBucket.order do
+        local auraInstanceID = harmfulBucket.order[index]
+        local auraData = auraInstanceID and harmfulBucket.auras[auraInstanceID] or nil
+        if type(auraData) == "table" then
+            if isGroupAuraFilteredIn(unitToken, auraInstanceID, GROUP_DISPELLABLE_FILTER, GROUP_DISPELLABLE_FALLBACK_FILTER, auraData) then
+                return auraData
+            end
+
+            local dispelType = normalizeDispelType(auraData.dispelName)
+            if dispelType and (type(allowedTypeSet) ~= "table" or allowedTypeSet[dispelType] == true) then
+                return auraData
+            end
+
+            if safeTruthy(auraData.canActivePlayerDispel) then
+                return auraData
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Resolve RGB components for a dispellable aura using Blizzard's color API when
+-- available, then fall back to the dispel type tables used elsewhere.
+local function resolveDispellableAuraColor(unitToken, auraData, fallbackDebuffType)
+    if type(unitToken) ~= "string" or unitToken == "" or type(auraData) ~= "table" then
+        if fallbackDebuffType and DebuffTypeColor and DebuffTypeColor[fallbackDebuffType] then
+            local fallbackColor = DebuffTypeColor[fallbackDebuffType]
+            return fallbackColor.r, fallbackColor.g, fallbackColor.b
+        end
+        return nil, nil, nil
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(auraData.auraInstanceID)
+    if auraInstanceID and C_UnitAuras and type(C_UnitAuras.GetAuraDispelTypeColor) == "function" then
+        local colorCurve = getGroupDispelColorCurve()
+        local okColor, colorValue
+        if colorCurve then
+            okColor, colorValue = pcall(C_UnitAuras.GetAuraDispelTypeColor, unitToken, auraInstanceID, colorCurve)
+        else
+            okColor, colorValue = pcall(C_UnitAuras.GetAuraDispelTypeColor, unitToken, auraInstanceID)
+        end
+        if okColor and colorValue then
+            if type(colorValue.GetRGBA) == "function" then
+                local okRGBA, r, g, b = pcall(colorValue.GetRGBA, colorValue)
+                if okRGBA then
+                    return r, g, b
+                end
+            elseif type(colorValue) == "table" and type(colorValue.r) == "number" then
+                return colorValue.r, colorValue.g, colorValue.b
+            end
+        end
+    end
+
+    local dispelType = normalizeDispelType(auraData.dispelName) or fallbackDebuffType
+    if dispelType and DebuffTypeColor and DebuffTypeColor[dispelType] then
+        local color = DebuffTypeColor[dispelType]
+        return color.r, color.g, color.b
+    end
+
+    return nil, nil, nil
+end
+
+-- Read one aura by slot using pcall so the cache degrades per-aura instead of
+-- fail-closing the whole unit when Blizzard adjusts secret-value guards.
+local function getGroupAuraDataBySlot(unitToken, slot)
+    if not (C_UnitAuras and type(C_UnitAuras.GetAuraDataBySlot) == "function") then
+        return nil
+    end
+    if isSecretAuraValue(slot) then
+        return nil
+    end
+
+    local okAura, auraData = pcall(C_UnitAuras.GetAuraDataBySlot, unitToken, slot)
+    if not okAura or type(auraData) ~= "table" or isSecretAuraValue(auraData) then
+        return nil
+    end
+
+    return auraData
+end
+
+-- Read one aura by auraInstanceID for the delta-update path.
+local function getGroupAuraDataByInstanceID(unitToken, auraInstanceID)
+    if not (C_UnitAuras and type(C_UnitAuras.GetAuraDataByAuraInstanceID) == "function") then
+        return nil
+    end
+
+    local normalizedAuraInstanceID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedAuraInstanceID then
+        return nil
+    end
+
+    local okAura, auraData = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unitToken, normalizedAuraInstanceID)
+    if not okAura or type(auraData) ~= "table" or isSecretAuraValue(auraData) then
+        return nil
+    end
+
+    return auraData
+end
+
+-- Query aura slots for one filter, following continuation tokens when needed.
+local function collectAuraSlots(unitToken, filter, fallbackFilter, maxCount)
+    if not (C_UnitAuras and type(C_UnitAuras.GetAuraSlots) == "function") then
+        return {}
+    end
+
+    local limit = Util:Clamp(tonumber(maxCount) or MAX_AURA_SCAN, 1, MAX_AURA_SCAN)
+
+    local function runQuery(activeFilter)
+        local slots = {}
+        local continuationToken = nil
+        local batchSize = limit
+
+        for _ = 1, GROUP_AURA_SLOT_SCAN_GUARD do
+            local okQuery, batch
+            if continuationToken ~= nil then
+                okQuery, batch = pcall(function()
+                    return { C_UnitAuras.GetAuraSlots(unitToken, activeFilter, batchSize, continuationToken) }
+                end)
+            else
+                okQuery, batch = pcall(function()
+                    return { C_UnitAuras.GetAuraSlots(unitToken, activeFilter, batchSize) }
+                end)
+            end
+            if not okQuery or type(batch) ~= "table" then
+                return nil
+            end
+
+            local nextToken = batch[1]
+            if isSecretAuraValue(nextToken) then
+                nextToken = nil
+            end
+
+            local addedThisBatch = 0
+            for batchIndex = 2, #batch do
+                local slot = batch[batchIndex]
+                if not isSecretAuraValue(slot) then
+                    slots[#slots + 1] = slot
+                    addedThisBatch = addedThisBatch + 1
+                    if #slots >= limit then
+                        nextToken = nil
+                        break
+                    end
+                end
+            end
+
+            if nextToken == nil or addedThisBatch == 0 or #slots >= limit then
+                break
+            end
+            continuationToken = nextToken
+        end
+
+        return slots
+    end
+
+    local slots = runQuery(filter)
+    if type(slots) == "table" and (#slots > 0 or fallbackFilter == nil or fallbackFilter == filter) then
+        return slots
+    end
+    if fallbackFilter and fallbackFilter ~= filter then
+        local fallbackSlots = runQuery(fallbackFilter)
+        if type(fallbackSlots) == "table" then
+            return fallbackSlots
+        end
+    end
+
+    return slots or {}
+end
+
+-- Return true when auraInstanceID currently matches the requested aura filter.
+local function isGroupAuraFilteredIn(unitToken, auraInstanceID, primaryFilter, fallbackFilter, auraData)
+    local normalizedAuraInstanceID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedAuraInstanceID then
+        return false
+    end
+
+    local function matchesFilter(filterValue)
+        if not filterValue then
+            return nil
+        end
+        if C_UnitAuras and type(C_UnitAuras.IsAuraFilteredOutByInstanceID) == "function" then
+            local okFilter, filteredOut = pcall(C_UnitAuras.IsAuraFilteredOutByInstanceID, unitToken, normalizedAuraInstanceID, filterValue)
+            if okFilter and not isSecretAuraValue(filteredOut) then
+                return safeTruthy(filteredOut) ~= true
+            end
+        end
+        return nil
+    end
+
+    local matched = matchesFilter(primaryFilter)
+    if matched == nil and fallbackFilter and fallbackFilter ~= primaryFilter then
+        matched = matchesFilter(fallbackFilter)
+    end
+    if matched ~= nil then
+        return matched == true
+    end
+
+    if type(auraData) ~= "table" then
+        auraData = getGroupAuraDataByInstanceID(unitToken, normalizedAuraInstanceID)
+    end
+    if type(auraData) ~= "table" then
+        return false
+    end
+
+    if primaryFilter == GROUP_DISPELLABLE_FILTER or primaryFilter == GROUP_DISPELLABLE_FALLBACK_FILTER then
+        return safeTruthy(auraData.canActivePlayerDispel)
+    end
+
+    if auraData.isHarmful ~= nil and not isSecretAuraValue(auraData.isHarmful) then
+        return safeTruthy(auraData.isHarmful)
+    end
+
+    return safeTruthy(auraData.isHelpful) ~= true
 end
 
 -- Extracts the normalised group unit token from any frame that exposes a unit
@@ -878,6 +1492,175 @@ local function hideUnusedTrackerElements(frame, usedByKey)
     end
 end
 
+local function getAuraAnchorGrowth(anchorPoint)
+    local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPRIGHT"
+    if string.find(resolvedAnchor, "RIGHT", 1, true) then
+        return string.gsub(resolvedAnchor, "RIGHT", "LEFT"), -GROUP_DEBUFF_BUTTON_GAP
+    end
+    if string.find(resolvedAnchor, "LEFT", 1, true) then
+        return string.gsub(resolvedAnchor, "LEFT", "RIGHT"), GROUP_DEBUFF_BUTTON_GAP
+    end
+    return resolvedAnchor, GROUP_DEBUFF_BUTTON_GAP
+end
+
+local function hideGroupDebuffButton(button)
+    if type(button) ~= "table" then
+        return
+    end
+    if button.Cooldown and type(button.Cooldown.SetCooldown) == "function" then
+        pcall(button.Cooldown.SetCooldown, button.Cooldown, 0, 0)
+        button.Cooldown:Hide()
+    end
+    if type(button.Hide) == "function" then
+        button:Hide()
+    end
+end
+
+local function hideGroupDebuffButtonPool(buttons)
+    if type(buttons) ~= "table" then
+        return
+    end
+    for index = 1, #buttons do
+        hideGroupDebuffButton(buttons[index])
+    end
+end
+
+local function ensureGroupDebuffButton(frame, index)
+    if type(frame) ~= "table" then
+        return nil
+    end
+
+    frame.GroupDebuffButtons = frame.GroupDebuffButtons or {}
+    local buttons = frame.GroupDebuffButtons
+    if buttons[index] then
+        return buttons[index]
+    end
+
+    local button = CreateFrame("Frame", nil, frame)
+    button:SetFrameStrata("MEDIUM")
+    button:SetFrameLevel(frame:GetFrameLevel() + 34)
+
+    button.Icon = button:CreateTexture(nil, "ARTWORK")
+    button.Icon:SetAllPoints()
+    button.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    button.Icon:SetTexture(DEFAULT_AURA_TEXTURE)
+
+    button.CountText = button:CreateFontString(nil, "OVERLAY")
+    button.CountText:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+    button.CountText:SetJustifyH("RIGHT")
+
+    button.Cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+    button.Cooldown:SetAllPoints()
+    if type(button.Cooldown.SetDrawBling) == "function" then
+        button.Cooldown:SetDrawBling(false)
+    end
+    if type(button.Cooldown.SetHideCountdownNumbers) == "function" then
+        button.Cooldown:SetHideCountdownNumbers(true)
+    end
+    button.Cooldown:Hide()
+    button:Hide()
+
+    buttons[index] = button
+    return button
+end
+
+local function getGroupDebuffConfig(self, frame, unitToken)
+    local ownerKey = inferOwnerForUnit(unitToken)
+    if ownerKey ~= "party" and ownerKey ~= "raid" then
+        if type(frame) == "table" and frame._mummuIsRaidFrame == true then
+            ownerKey = "raid"
+        else
+            ownerKey = "party"
+        end
+    end
+
+    local defaults = DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER[ownerKey] or DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER.party
+    local dataHandle = self:GetDataHandle()
+    local unitConfig = dataHandle and type(dataHandle.GetUnitConfig) == "function" and dataHandle:GetUnitConfig(ownerKey) or nil
+    local auraConfig = unitConfig and type(unitConfig.aura) == "table" and unitConfig.aura or nil
+    local debuffsConfig = auraConfig and type(auraConfig.debuffs) == "table" and auraConfig.debuffs or nil
+
+    return {
+        enabled = debuffsConfig == nil or debuffsConfig.enabled ~= false,
+        anchorPoint = (debuffsConfig and debuffsConfig.anchorPoint) or defaults.anchorPoint,
+        relativePoint = (debuffsConfig and debuffsConfig.relativePoint) or defaults.relativePoint,
+        x = tonumber(debuffsConfig and debuffsConfig.x) or defaults.x,
+        y = tonumber(debuffsConfig and debuffsConfig.y) or defaults.y,
+        size = tonumber(debuffsConfig and debuffsConfig.size) or defaults.size,
+        scale = tonumber(debuffsConfig and debuffsConfig.scale) or defaults.scale,
+        max = tonumber(debuffsConfig and debuffsConfig.max) or defaults.max,
+    }
+end
+
+local getAuraDataByIndex
+local isAuraIndexSecret
+
+-- Convert the cached harmful aura bucket into render entries for the debuff row.
+local function gatherGroupDebuffEntries(unitToken, maxIcons)
+    local entries = {}
+    local limit = Util:Clamp(tonumber(maxIcons) or 0, 0, GROUP_DEBUFF_MAX_BUTTONS)
+    if type(unitToken) ~= "string" or unitToken == "" or limit <= 0 then
+        return entries
+    end
+
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    local state = normalizedUnit and groupDebuffStateByUnit[normalizedUnit] or nil
+    local bucket = state and state.harmful or nil
+    if type(bucket) ~= "table" then
+        return entries
+    end
+
+    compactGroupDebuffBucket(bucket)
+
+    local order = bucket.order
+    local auras = bucket.auras
+    if type(order) ~= "table" or type(auras) ~= "table" then
+        return entries
+    end
+
+    for index = 1, #order do
+        local auraInstanceID = order[index]
+        local auraData = auraInstanceID and auras[auraInstanceID] or nil
+        if type(auraData) == "table" then
+            local applications = getSafeAuraNumericValue(auraData.applications, nil)
+            if applications == nil then
+                applications = getSafeAuraNumericValue(auraData.count, 0) or 0
+            end
+
+            entries[#entries + 1] = {
+                icon = isSecretAuraValue(auraData.icon) and nil or auraData.icon,
+                applications = applications,
+                expirationTime = getSafeAuraNumericValue(auraData.expirationTime, 0) or 0,
+                duration = getSafeAuraNumericValue(auraData.duration, 0) or 0,
+            }
+            if #entries >= limit then
+                break
+            end
+        end
+    end
+
+    return entries
+end
+
+local function getPreviewGroupDebuffEntries(maxIcons)
+    local entries = {}
+    local limit = Util:Clamp(tonumber(maxIcons) or 0, 0, GROUP_DEBUFF_MAX_BUTTONS)
+    if limit <= 0 then
+        return entries
+    end
+
+    local total = math.min(limit, 3)
+    for index = 1, total do
+        entries[#entries + 1] = {
+            icon = DEFAULT_AURA_TEXTURE,
+            applications = index == 1 and 2 or 0,
+            expirationTime = nil,
+            duration = nil,
+        }
+    end
+    return entries
+end
+
 local function setDefensiveIndicatorBorderColor(indicator, color)
     if type(indicator) ~= "table" or type(color) ~= "table" then
         return
@@ -1040,7 +1823,7 @@ end
 
 -- Fetches aura data by scan index; returns the auraData table or nil.
 -- Uses ns.AuraSafety when available so secret indexes are skipped safely.
-local function getAuraDataByIndex(unitToken, index, filter)
+getAuraDataByIndex = function(unitToken, index, filter)
     if AuraSafety and type(AuraSafety.GetAuraDataByIndexSafe) == "function" then
         return AuraSafety:GetAuraDataByIndexSafe(unitToken, index, filter)
     end
@@ -1112,7 +1895,7 @@ local function getUnitAuraBySpellID(unitToken, spellID)
 end
 
 -- Ask AuraSafety whether the indexed aura is hidden behind secret restrictions.
-local function isAuraIndexSecret(unitToken, index, filter)
+isAuraIndexSecret = function(unitToken, index, filter)
     if AuraSafety and type(AuraSafety.IsAuraIndexSecret) == "function" then
         return AuraSafety:IsAuraIndexSecret(unitToken, index, filter)
     end
@@ -1125,6 +1908,212 @@ local function isAuraInstanceSecret(unitToken, auraInstanceID)
         return AuraSafety:IsAuraInstanceSecret(unitToken, auraInstanceID)
     end
     return false
+end
+
+-- Reset the dedicated group debuff cache for one unit.
+clearGroupDebuffState = function(state)
+    if type(state) ~= "table" then
+        return false
+    end
+
+    resetGroupDebuffBucket(state.harmful)
+    resetGroupDebuffBucket(state.dispellable)
+    state.revision = (tonumber(state.revision) or 0) + 1
+    state.updatedAt = 0
+    state.lastFullScanAt = 0
+    state.lastDeltaAt = 0
+    state.lastSource = "cleared"
+    return true
+end
+
+-- Record metadata after a group debuff cache update.
+local function finalizeGroupDebuffStateUpdate(state, changed, sourceTag, wasFullScan)
+    if type(state) ~= "table" then
+        return
+    end
+
+    local now = getSafeNowSeconds()
+    state.updatedAt = now
+    state.lastSource = type(sourceTag) == "string" and sourceTag ~= "" and sourceTag or "unknown"
+    if wasFullScan == true then
+        state.lastFullScanAt = now
+    else
+        state.lastDeltaAt = now
+    end
+    if changed == true then
+        state.revision = (tonumber(state.revision) or 0) + 1
+    end
+end
+
+-- Update one aura across both harmful and dispellable group debuff buckets.
+local function applyAuraToGroupDebuffState(unitToken, state, auraData)
+    if type(state) ~= "table" or type(auraData) ~= "table" then
+        return false
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(auraData.auraInstanceID)
+    if not auraInstanceID then
+        return false
+    end
+
+    local changed = false
+    if isGroupAuraFilteredIn(unitToken, auraInstanceID, GROUP_HARMFUL_FILTER, GROUP_HARMFUL_FALLBACK_FILTER, auraData) then
+        changed = storeAuraInGroupDebuffBucket(state.harmful, auraData) or changed
+    else
+        changed = removeAuraFromGroupDebuffBucket(state.harmful, auraInstanceID) or changed
+    end
+
+    if isGroupAuraFilteredIn(unitToken, auraInstanceID, GROUP_DISPELLABLE_FILTER, GROUP_DISPELLABLE_FALLBACK_FILTER, auraData) then
+        changed = storeAuraInGroupDebuffBucket(state.dispellable, auraData) or changed
+    else
+        changed = removeAuraFromGroupDebuffBucket(state.dispellable, auraInstanceID) or changed
+    end
+
+    return changed
+end
+
+-- Rebuild both group debuff buckets from live slot scans.
+local function refreshGroupDebuffStateFromFullScan(unitToken, state, sourceTag)
+    if type(state) ~= "table" then
+        return false
+    end
+
+    resetGroupDebuffBucket(state.harmful)
+    resetGroupDebuffBucket(state.dispellable)
+
+    local harmfulSlots = collectAuraSlots(unitToken, GROUP_HARMFUL_FILTER, GROUP_HARMFUL_FALLBACK_FILTER, MAX_AURA_SCAN)
+    for index = 1, #harmfulSlots do
+        local auraData = getGroupAuraDataBySlot(unitToken, harmfulSlots[index])
+        if auraData then
+            storeAuraInGroupDebuffBucket(state.harmful, auraData)
+        end
+    end
+    compactGroupDebuffBucket(state.harmful)
+
+    local dispellableSlots = collectAuraSlots(unitToken, GROUP_DISPELLABLE_FILTER, GROUP_DISPELLABLE_FALLBACK_FILTER, MAX_AURA_SCAN)
+    for index = 1, #dispellableSlots do
+        local auraData = getGroupAuraDataBySlot(unitToken, dispellableSlots[index])
+        if auraData then
+            storeAuraInGroupDebuffBucket(state.dispellable, auraData)
+        end
+    end
+    compactGroupDebuffBucket(state.dispellable)
+
+    finalizeGroupDebuffStateUpdate(state, true, sourceTag or "full_scan", true)
+    return true
+end
+
+-- Apply UNIT_AURA delta payloads to the dedicated group debuff cache.
+local function refreshGroupDebuffStateFromDelta(unitToken, state, auraUpdateInfo, sourceTag)
+    if type(state) ~= "table" or type(auraUpdateInfo) ~= "table" then
+        return false
+    end
+
+    local changed = false
+
+    if type(auraUpdateInfo.removedAuraInstanceIDs) == "table" then
+        for index = 1, #auraUpdateInfo.removedAuraInstanceIDs do
+            local auraInstanceID = auraUpdateInfo.removedAuraInstanceIDs[index]
+            changed = removeAuraFromGroupDebuffBucket(state.harmful, auraInstanceID) or changed
+            changed = removeAuraFromGroupDebuffBucket(state.dispellable, auraInstanceID) or changed
+        end
+    end
+
+    local function applyAuraList(auraList)
+        if type(auraList) ~= "table" then
+            return
+        end
+        for index = 1, #auraList do
+            changed = applyAuraToGroupDebuffState(unitToken, state, auraList[index]) or changed
+        end
+    end
+
+    applyAuraList(auraUpdateInfo.addedAuras)
+    applyAuraList(auraUpdateInfo.updatedAuras)
+
+    if type(auraUpdateInfo.updatedAuraInstanceIDs) == "table" then
+        for index = 1, #auraUpdateInfo.updatedAuraInstanceIDs do
+            local auraInstanceID = auraUpdateInfo.updatedAuraInstanceIDs[index]
+            local auraData = getGroupAuraDataByInstanceID(unitToken, auraInstanceID)
+            if auraData then
+                changed = applyAuraToGroupDebuffState(unitToken, state, auraData) or changed
+            else
+                changed = removeAuraFromGroupDebuffBucket(state.harmful, auraInstanceID) or changed
+                changed = removeAuraFromGroupDebuffBucket(state.dispellable, auraInstanceID) or changed
+            end
+        end
+    end
+
+    compactGroupDebuffBucket(state.harmful)
+    compactGroupDebuffBucket(state.dispellable)
+    finalizeGroupDebuffStateUpdate(state, changed, sourceTag or "delta", false)
+    return true
+end
+
+-- Refresh the dedicated group debuff cache from live UNIT_AURA data.
+-- This path intentionally bypasses the Blizzard compact-frame hook because the
+-- hidden compact frames can miss combat aura transitions in party/raid content.
+function AuraHandle:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, forceFullScan, sourceTag)
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    if not normalizedUnit then
+        return false
+    end
+
+    local state = ensureGroupDebuffState(normalizedUnit)
+    if type(UnitExists) == "function" and UnitExists(normalizedUnit) ~= true then
+        return clearGroupDebuffState(state)
+    end
+
+    if forceFullScan == true
+        or type(auraUpdateInfo) ~= "table"
+        or auraUpdateInfo.isFullUpdate == true
+        or not (C_UnitAuras and type(C_UnitAuras.GetAuraDataByAuraInstanceID) == "function")
+    then
+        local refreshed = refreshGroupDebuffStateFromFullScan(normalizedUnit, state, sourceTag or "full_scan")
+        if refreshed and self._diagnosticsEnabled then
+            print(string.format(
+                "[mummuFrames:AuraHandle] debuff full scan unit=%s harmful=%d dispellable=%d source=%s",
+                tostring(normalizedUnit),
+                #(state.harmful and state.harmful.order or {}),
+                #(state.dispellable and state.dispellable.order or {}),
+                tostring(sourceTag or "full_scan")
+            ))
+        end
+        return refreshed
+    end
+
+    local refreshed = refreshGroupDebuffStateFromDelta(normalizedUnit, state, auraUpdateInfo, sourceTag or "delta")
+    if refreshed and self._diagnosticsEnabled then
+        print(string.format(
+            "[mummuFrames:AuraHandle] debuff delta unit=%s harmful=%d dispellable=%d source=%s",
+            tostring(normalizedUnit),
+            #(state.harmful and state.harmful.order or {}),
+            #(state.dispellable and state.dispellable.order or {}),
+            tostring(sourceTag or "delta")
+        ))
+    end
+    return refreshed
+end
+
+-- Ensure the live group debuff cache exists before rendering debuff visuals.
+function AuraHandle:EnsureFreshGroupDebuffCache(unitToken, maxAgeSeconds, sourceTag)
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    if not normalizedUnit then
+        return nil
+    end
+
+    local state = ensureGroupDebuffState(normalizedUnit)
+    local maxAge = tonumber(maxAgeSeconds) or DEBUFF_CACHE_STALE_WINDOW
+    if maxAge < 0 then
+        maxAge = DEBUFF_CACHE_STALE_WINDOW
+    end
+
+    if state.updatedAt <= 0 or (getSafeNowSeconds() - state.updatedAt) > maxAge then
+        self:RefreshDebuffCacheFromUnitAuras(normalizedUnit, nil, true, sourceTag or "ensure_fresh")
+        state = groupDebuffStateByUnit[normalizedUnit]
+    end
+
+    return state
 end
 
 -- Return whether a tracked aura belongs to the player, pet, or vehicle.
@@ -1328,6 +2317,19 @@ function AuraHandle:ScheduleBlizzardCacheBootstrap()
             return
         end
         selfRef:ScanAllBlizzardFrames(true, "bootstrap:" .. tostring(delayTag))
+        -- Debuff icons and dispel overlays use the live group cache instead of
+        -- the compact-frame hook, so warm both caches on the same bootstrap pass.
+        for index = 1, #GROUP_UNIT_TOKENS do
+            local unitToken = GROUP_UNIT_TOKENS[index]
+            if type(UnitExists) ~= "function" or UnitExists(unitToken) == true then
+                selfRef:RefreshDebuffCacheFromUnitAuras(unitToken, nil, true, "bootstrap:" .. tostring(delayTag))
+            else
+                local state = groupDebuffStateByUnit[unitToken]
+                if state then
+                    clearGroupDebuffState(state)
+                end
+            end
+        end
     end
 
     runScan("immediate")
@@ -1869,22 +2871,38 @@ function AuraHandle:NotifyBlizzardBuffCacheChanged(unitToken, source)
     end
     -- Hook path: unitToken originates from frame.unit and may be tainted.
     -- Skip the direct C_UnitAuras tracker scan here; the hook path only drives
-    -- cache-backed visuals such as dispel overlays and centre defensive buffs.
+    -- cache-backed visuals that intentionally mirror Blizzard state, such as
+    -- the centre defensive indicator. Group debuffs use UNIT_AURA instead.
     self:RefreshMappedUnit(normalizedUnit, source or "hook", true)
 end
 
 -- Returns the approved aura instance ID set for unitToken and auraType.
--- auraType: "DEBUFF" → debuffs, anything else → buffs.
+-- auraType: "DEBUFF" returns the live group debuff cache; any other value
+-- returns helpful auras mirrored from Blizzard's compact-frame state.
 function AuraHandle:GetApprovedAuraSet(unitToken, auraType)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return nil
     end
+    if auraType == "DEBUFF" then
+        local state = self:EnsureFreshGroupDebuffCache(normalizedUnit, DEBUFF_CACHE_STALE_WINDOW, "approved_debuffs")
+        local bucket = state and state.harmful or nil
+        if type(bucket) ~= "table" or type(bucket.auras) ~= "table" then
+            return nil
+        end
+
+        local auraSet = {}
+        for auraInstanceID in pairs(bucket.auras) do
+            auraSet[auraInstanceID] = true
+        end
+        return auraSet
+    end
+
     local cache = blizzardAuraCacheByUnit[normalizedUnit]
     if type(cache) ~= "table" then
         return nil
     end
-    return auraType == "DEBUFF" and cache.debuffs or cache.buffs
+    return cache.buffs
 end
 
 -- Returns an auraInstanceID→auraData map of all active non-secret buffs for
@@ -2137,40 +3155,6 @@ end
 -- Dispel overlay
 -- ---------------------------------------------------------------------------
 
-local function findPriorityDebuffTypeInAuraMap(auraTypeByAuraID, auraMembershipSet, allowedTypeSet)
-    if type(auraTypeByAuraID) ~= "table" then
-        return nil
-    end
-
-    for i = 1, #DISPEL_TYPE_PRIORITY do
-        local debuffType = DISPEL_TYPE_PRIORITY[i]
-        if type(allowedTypeSet) ~= "table" or allowedTypeSet[debuffType] == true then
-            for auraInstanceID, mappedType in pairs(auraTypeByAuraID) do
-                if mappedType == debuffType and (type(auraMembershipSet) ~= "table" or auraMembershipSet[auraInstanceID] == true) then
-                    return debuffType
-                end
-            end
-        end
-    end
-
-    return nil
-end
-
-local function findPriorityDebuffTypeInSet(debuffTypeSet, allowedTypeSet)
-    if type(debuffTypeSet) ~= "table" then
-        return nil
-    end
-
-    for i = 1, #DISPEL_TYPE_PRIORITY do
-        local debuffType = DISPEL_TYPE_PRIORITY[i]
-        if debuffTypeSet[debuffType] == true and (type(allowedTypeSet) ~= "table" or allowedTypeSet[debuffType] == true) then
-            return debuffType
-        end
-    end
-
-    return nil
-end
-
 -- Returns the debuff type string ("Magic", "Curse", "Poison", "Disease") for
 -- the highest-priority typed debuff found on unitToken, or nil.
 function AuraHandle:GetUnitDebuffType(unitToken)
@@ -2179,68 +3163,167 @@ function AuraHandle:GetUnitDebuffType(unitToken)
         return nil
     end
 
-    local cache = blizzardAuraCacheByUnit[normalizedUnit]
-    if type(cache) ~= "table" then
+    local state = self:EnsureFreshGroupDebuffCache(normalizedUnit, DEBUFF_CACHE_STALE_WINDOW, "get_debuff_type")
+    if type(state) ~= "table" then
         return nil
     end
 
-    local debuffType = findPriorityDebuffTypeInAuraMap(cache.debuffTypeByAuraID, cache.debuffs)
-    if debuffType then
-        return debuffType
-    end
-
-    return findPriorityDebuffTypeInSet(cache.debuffTypeSet)
+    return findPriorityDebuffTypeInBucket(state.harmful)
 end
 
 -- Returns the debuff type string ("Magic", "Curse", "Poison", "Disease") for
 -- the first player-dispellable debuff found on unitToken, or nil.
+-- The dedicated dispellable bucket is preferred, but Midnight can sometimes
+-- omit dispel metadata there; in that case we fall back to typed harmful auras
+-- that match the player's dispel set.
 function AuraHandle:GetUnitDispellableDebuffType(unitToken)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return nil
     end
 
-    local cache = blizzardAuraCacheByUnit[normalizedUnit]
-    if type(cache) ~= "table" then
+    local state = self:EnsureFreshGroupDebuffCache(normalizedUnit, DEBUFF_CACHE_STALE_WINDOW, "get_dispellable_type")
+    if type(state) ~= "table" then
         return nil
     end
 
     local playerDispelTypeSet = getPlayerDispelTypeSet()
-
-    -- Per-aura type map is the most specific source and avoids aura payload reads.
-    local debuffType = findPriorityDebuffTypeInAuraMap(
-        cache.playerDispellableTypeByAuraID,
-        cache.playerDispellable,
-        playerDispelTypeSet
-    )
+    local debuffType = findPriorityDebuffTypeInBucket(state.dispellable, playerDispelTypeSet)
     if debuffType then
         return debuffType
     end
 
-    -- Fall back to compact-frame type flags when per-aura mapping is unavailable.
-    return findPriorityDebuffTypeInSet(cache.playerDispellableTypeSet, playerDispelTypeSet)
+    debuffType = findPriorityDebuffTypeInBucket(state.harmful, playerDispelTypeSet)
+    if debuffType then
+        return debuffType
+    end
+
+    local auraData = getFirstDispellableAuraData(normalizedUnit, state, playerDispelTypeSet)
+    local auraDispelType = normalizeDispelType(auraData and auraData.dispelName)
+    if auraDispelType and playerDispelTypeSet[auraDispelType] == true then
+        return auraDispelType
+    end
+
+    -- Some Midnight payloads report a dispellable aura without exposing the
+    -- dispelName reliably. Preserve a visible overlay in that case even if the
+    -- exact type color must be resolved through GetAuraDispelTypeColor later.
+    if auraData and safeTruthy(auraData.canActivePlayerDispel) then
+        return "Magic"
+    end
+
+    return nil
 end
 
 -- Shows or hides the healthbar overlay on frame based on debuff state.
--- Party frames use any typed debuff; raid keeps the existing dispel-only path.
-function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken)
+-- Group frames only highlight debuffs the current player can dispel.
+function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
     if type(frame) ~= "table" or type(frame.DispelOverlay) ~= "table" then
         return
     end
 
-    local debuffType = nil
-    if frame._mummuIsPartyFrame == true then
-        debuffType = self:GetUnitDebuffType(unitToken)
-    else
-        debuffType = self:GetUnitDispellableDebuffType(unitToken)
-    end
+    local liveUnitToken = normalizeGroupUnitToken(rawUnitToken) or normalizeGroupUnitToken(unitToken)
+    local resolvedUnitToken = liveUnitToken or unitToken
+    local normalizedUnit = normalizeGroupUnitToken(resolvedUnitToken)
+    local state = normalizedUnit and self:EnsureFreshGroupDebuffCache(normalizedUnit, DEBUFF_CACHE_STALE_WINDOW, "render_dispel_overlay") or nil
+    local playerDispelTypeSet = getPlayerDispelTypeSet()
+    local auraData = normalizedUnit and getFirstDispellableAuraData(normalizedUnit, state, playerDispelTypeSet) or nil
+    local debuffType = self:GetUnitDispellableDebuffType(resolvedUnitToken)
+    local red, green, blue = resolveDispellableAuraColor(normalizedUnit or resolvedUnitToken, auraData, debuffType)
 
-    local color = debuffType and DebuffTypeColor and DebuffTypeColor[debuffType] or nil
-    if color then
-        frame.DispelOverlay:SetColorTexture(color.r, color.g, color.b, DISPEL_OVERLAY_ALPHA)
+    if red and green and blue then
+        frame.DispelOverlay:SetColorTexture(red, green, blue, DISPEL_OVERLAY_ALPHA)
         frame.DispelOverlay:Show()
     else
         frame.DispelOverlay:Hide()
+    end
+end
+
+-- Render the configurable debuff icon strip for party/raid frames.
+function AuraHandle:RefreshFrameDebuffIcons(frame, unitToken, previewMode)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    local config = getGroupDebuffConfig(self, frame, unitToken)
+    frame.GroupDebuffButtons = frame.GroupDebuffButtons or {}
+    if config.enabled ~= true then
+        hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
+        return
+    end
+
+    local entries = previewMode == true
+        and getPreviewGroupDebuffEntries(config.max)
+        or gatherGroupDebuffEntries(unitToken, config.max)
+    if #entries == 0 then
+        hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
+        return
+    end
+
+    local anchorPoint = config.anchorPoint or "TOPRIGHT"
+    local relativePoint = config.relativePoint or "BOTTOMRIGHT"
+    local offsetX = tonumber(config.x) or 0
+    local offsetY = tonumber(config.y) or 0
+    local iconSize = Util:Clamp((tonumber(config.size) or 0) * (tonumber(config.scale) or 1), 8, 48)
+
+    if Style:IsPixelPerfectEnabled() then
+        iconSize = Style:Snap(iconSize)
+        offsetX = Style:Snap(offsetX)
+        offsetY = Style:Snap(offsetY)
+    else
+        iconSize = math.floor(iconSize + 0.5)
+        offsetX = math.floor(offsetX + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    local previousPoint, gap = getAuraAnchorGrowth(anchorPoint)
+    local buttons = frame.GroupDebuffButtons
+    for index = 1, #entries do
+        local entry = entries[index]
+        local button = ensureGroupDebuffButton(frame, index)
+        local previousButton = buttons[index - 1]
+
+        button:SetSize(iconSize, iconSize)
+        button:ClearAllPoints()
+        if previousButton then
+            button:SetPoint(anchorPoint, previousButton, previousPoint, gap, 0)
+        else
+            button:SetPoint(anchorPoint, frame, relativePoint, offsetX, offsetY)
+        end
+
+        if not safeSetTexture(button.Icon, entry.icon) then
+            safeSetTexture(button.Icon, DEFAULT_AURA_TEXTURE)
+        end
+        Style:ApplyFont(button.CountText, math.max(6, math.floor((iconSize * 0.52) + 0.5)), "OUTLINE")
+        local applications = getSafeAuraNumericValue(entry.applications, 0) or 0
+        if applications > 1 then
+            button.CountText:SetText(tostring(math.floor(applications + 0.5)))
+            button.CountText:Show()
+        else
+            button.CountText:SetText("")
+            button.CountText:Hide()
+        end
+
+        local duration = getSafeAuraNumericValue(entry.duration, 0) or 0
+        local expirationTime = getSafeAuraNumericValue(entry.expirationTime, 0) or 0
+        if duration > 0 and expirationTime > 0 and button.Cooldown and type(button.Cooldown.SetCooldown) == "function" then
+            local startTime = expirationTime - duration
+            if startTime < 0 then
+                startTime = 0
+            end
+            button.Cooldown:SetCooldown(startTime, duration)
+            button.Cooldown:Show()
+        elseif button.Cooldown then
+            if type(button.Cooldown.SetCooldown) == "function" then
+                pcall(button.Cooldown.SetCooldown, button.Cooldown, 0, 0)
+            end
+            button.Cooldown:Hide()
+        end
+
+        button:Show()
+    end
+
+    for index = #entries + 1, #buttons do
+        hideGroupDebuffButton(buttons[index])
     end
 end
 
@@ -2251,6 +3334,7 @@ function AuraHandle:ClearFrameAuraIndicators(frame)
         return
     end
     hideUnusedTrackerElements(frame, {})
+    hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
     hideCenterDefensiveIndicator(frame)
     if frame.DispelOverlay and type(frame.DispelOverlay.Hide) == "function" then
         frame.DispelOverlay:Hide()
@@ -2266,11 +3350,20 @@ function AuraHandle:RefreshGroupFrameAuras(frame, unitToken, skipTrackedScan, ra
     if not shouldFrameRenderAuras(frame) then
         return
     end
+    local liveUnitToken = normalizeGroupUnitToken(rawUnitToken) or normalizeGroupUnitToken(unitToken)
+    if liveUnitToken and (skipTrackedScan ~= true or (type(rawUnitToken) == "string" and rawUnitToken ~= "")) then
+        self:EnsureFreshGroupDebuffCache(liveUnitToken, DEBUFF_CACHE_STALE_WINDOW, "render")
+    end
     if not skipTrackedScan then
         self:RefreshFrameTrackedAuras(frame, rawUnitToken or unitToken)
     end
+    if liveUnitToken then
+        self:RefreshFrameDebuffIcons(frame, liveUnitToken, false)
+    elseif skipTrackedScan ~= true then
+        self:RefreshFrameDebuffIcons(frame, unitToken, false)
+    end
     self:RefreshFrameCenterDefensiveIndicator(frame, unitToken)
-    self:RefreshFrameDispelOverlay(frame, unitToken)
+    self:RefreshFrameDispelOverlay(frame, liveUnitToken or unitToken, rawUnitToken)
 end
 
 -- ---------------------------------------------------------------------------
@@ -2384,13 +3477,18 @@ end
 -- UNIT_AURA is handled specially: tracker icons are refreshed directly here
 -- (the CompactUnitFrame_UpdateAuras hook is unreliable in combat), and
 -- the owning module is asked to rebuild its map on a miss.
-function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken)
+function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, auraUpdateInfo)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return
     end
 
     if eventName == "UNIT_AURA" then
+        -- Prime the dedicated group debuff cache directly from the clean event
+        -- payload. This keeps debuff icons and dispel overlays aligned with the
+        -- same UNIT_AURA deltas that Midnight exposes to modern addons.
+        self:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, nil, "unit_aura_dispatch")
+
         -- Drive the tracker refresh directly from UNIT_AURA.
         -- RefreshFrameTrackedAuras reads C_UnitAuras directly and does not
         -- depend on Blizzard's compact-frame display filter.
@@ -2515,12 +3613,12 @@ function AuraHandle:EnsureUnitAuraDispatchers()
             frame:RegisterEvent("UNIT_AURA")
         end
 
-        frame:SetScript("OnEvent", function(_, eventName, eventUnitToken)
+        frame:SetScript("OnEvent", function(_, eventName, eventUnitToken, auraUpdateInfo)
             -- Prefer the event's own unit token; fall back to the registered one.
             local dispatchUnit = (type(eventUnitToken) == "string" and eventUnitToken ~= "")
                 and eventUnitToken
                 or unitToken
-            selfRef:DispatchGroupUnitEvent(eventName, dispatchUnit)
+            selfRef:DispatchGroupUnitEvent(eventName, dispatchUnit, auraUpdateInfo)
         end)
 
         unitAuraDispatcherFrames[#unitAuraDispatcherFrames + 1] = frame
@@ -2685,7 +3783,12 @@ end
 -- when previewMode is true or the unit does not exist.
 -- Returns the dispellable debuff type string, or nil.
 function AuraHandle:RefreshGroupAuras(frame, unitToken, exists, previewMode)
-    if previewMode or exists ~= true then
+    if previewMode then
+        self:ClearFrameAuraIndicators(frame)
+        self:RefreshFrameDebuffIcons(frame, unitToken, true)
+        return nil
+    end
+    if exists ~= true then
         self:ClearFrameAuraIndicators(frame)
         return nil
     end
@@ -2697,15 +3800,15 @@ end
 -- Cache management
 -- ---------------------------------------------------------------------------
 
--- Returns true when the Blizzard frame for unitToken was captured within
--- the given time window (default 3 seconds).
+-- Legacy helper name kept for compatibility with older internal call sites.
+-- It now reports freshness for the dedicated group debuff cache.
 function AuraHandle:WasBlizzardUnitSeenRecently(unitToken, windowSeconds)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return false
     end
-    local cache     = blizzardAuraCacheByUnit[normalizedUnit]
-    local updatedAt = cache and tonumber(cache.updatedAt) or 0
+    local state = groupDebuffStateByUnit[normalizedUnit]
+    local updatedAt = state and tonumber(state.updatedAt) or 0
     if updatedAt <= 0 then
         return false
     end
@@ -2716,13 +3819,15 @@ function AuraHandle:WasBlizzardUnitSeenRecently(unitToken, windowSeconds)
     return (getSafeNowSeconds() - updatedAt) <= window
 end
 
--- Clears the Blizzard aura cache for unitToken, or for all units when
--- unitToken is nil/empty.
+-- Clears the Blizzard compact-frame aura cache and the live group debuff cache
+-- for unitToken, or for all units when unitToken is nil/empty.
 function AuraHandle:ClearBlizzardBuffCache(unitToken)
     if type(unitToken) == "string" and unitToken ~= "" then
         blizzardAuraCacheByUnit[unitToken] = nil
+        groupDebuffStateByUnit[unitToken] = nil
     else
         wipeTable(blizzardAuraCacheByUnit)
+        wipeTable(groupDebuffStateByUnit)
     end
 end
 

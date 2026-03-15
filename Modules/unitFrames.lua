@@ -183,6 +183,15 @@ local function hideAuraButtonPool(buttons)
     end
 end
 
+-- Safely set icon textures from aura payloads that may carry protected values.
+local function safeSetAuraTexture(textureObject, texturePath)
+    if not textureObject or type(textureObject.SetTexture) ~= "function" then
+        return false
+    end
+    local ok = pcall(textureObject.SetTexture, textureObject, texturePath)
+    return ok == true
+end
+
 -- Collect visible unit auras into a lightweight render list.
 local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
     local entries = {}
@@ -210,11 +219,16 @@ local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
         end
 
         if auraData then
+            local applications = getSafeNumericValue(auraData.applications, nil)
+            if applications == nil then
+                applications = getSafeNumericValue(auraData.count, 0) or 0
+            end
+
             entries[#entries + 1] = {
-                icon = auraData.icon or DEFAULT_AURA_TEXTURE,
-                applications = auraData.applications or auraData.count or 0,
-                expirationTime = auraData.expirationTime,
-                duration = auraData.duration,
+                icon = auraData.icon,
+                applications = applications,
+                expirationTime = getSafeNumericValue(auraData.expirationTime, 0) or 0,
+                duration = getSafeNumericValue(auraData.duration, 0) or 0,
             }
             if #entries >= limit then
                 break
@@ -1832,10 +1846,13 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
             button:SetPoint(anchorPoint, frame, relativePoint, offsetX, offsetY)
         end
 
-        button.Icon:SetTexture(entry.icon or DEFAULT_AURA_TEXTURE)
+        if not safeSetAuraTexture(button.Icon, entry.icon) then
+            safeSetAuraTexture(button.Icon, DEFAULT_AURA_TEXTURE)
+        end
         Style:ApplyFont(button.CountText, math.max(6, math.floor((iconSize * 0.52) + 0.5)), "OUTLINE")
-        if (entry.applications or 0) > 1 then
-            button.CountText:SetText(tostring(entry.applications))
+        local applications = getSafeNumericValue(entry.applications, 0) or 0
+        if applications > 1 then
+            button.CountText:SetText(tostring(math.floor(applications + 0.5)))
             button.CountText:Show()
         else
             button.CountText:SetText("")
@@ -1843,10 +1860,13 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
         end
 
         if button.Cooldown then
-            local duration = tonumber(entry.duration) or 0
-            local expirationTime = tonumber(entry.expirationTime) or 0
+            local duration = getSafeNumericValue(entry.duration, 0) or 0
+            local expirationTime = getSafeNumericValue(entry.expirationTime, 0) or 0
             if duration > 0 and expirationTime > 0 and type(button.Cooldown.SetCooldown) == "function" then
                 local startTime = expirationTime - duration
+                if startTime < 0 then
+                    startTime = 0
+                end
                 button.Cooldown:SetCooldown(startTime, duration)
                 button.Cooldown:Show()
             else

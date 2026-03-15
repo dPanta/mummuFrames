@@ -5,6 +5,14 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.0.0 - 2026-03-15
+- Refactored party and raid debuff tracking around a dedicated Midnight-safe `UNIT_AURA` cache built from `C_UnitAuras` slot scans and delta updates, instead of relying on hidden Blizzard compact-frame aura state.
+- Added configurable party and raid debuff icon rows, while keeping the regular unit-frame debuff strips dispel-agnostic.
+- Restored dispellable group-frame overlays for party and raid frames, including fallback handling for Midnight aura payloads that omit complete dispel metadata.
+- Hardened aura icon rendering against Retail secret-value taint by sanitizing icon textures, stack counts, and cooldown timing before they reach the UI.
+- Reworked aura tracking for Atonement and Prayer of Mending.
+- Cleaned up the new debuff pipeline comments and bumped addon metadata to `2.0.0`.
+
 ## 1.8.4 - 2026-03-14
 - Restored stable GUID-based party spell-target tracking and `UnitTokenFromGUID` reacquisition.
 - Hardened party spell-target source/target checks against Retail secret booleans and clarified the feature's curated Midnight scope.
@@ -57,24 +65,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 
 ## 1.6.3 - 2026-03-09
 - Bumped addon metadata to `1.6.3`.
-
-## 1.6.2 - 2026-03-09
-- Follow-up git release cleanup.
-
-## 1.6.1 - 2026-03-09
-- Git cleanup for release packaging and bundled assets.
-
-## 1.6.0 - 2026-03-09
-- Brightened the dark-mode health bar backing while keeping the darker primary power backing unchanged.
-- Raised the secondary power size limit to `60` and made detached secondary power rows auto-expand their width so larger icons can render correctly.
-- Added specialization-specific DK rune icons for the secondary power bar using the addon icon set for Blood, Frost, and Unholy.
-- Restricted monk and shaman secondary resources to the specs that actually use them, leaving Chi to Windwalker and Maelstrom Weapon to Enhancement.
-- Refreshed several secondary resource icon assets with higher-resolution `50x50` art for cleaner scaling.
-
-## 1.5.0 - 2026-03-09
-- Added a party layout setting with proper horizontal secure-header growth for live party frames.
-- Hardened party role sorting so headers re-sort on role assignment changes and preview/test ordering mirrors the live tank, healer, dps flow.
-- Added optional party role icons using Blizzard role art, including solo/spec fallback behavior and test-mode support.
-- Tuned party role icon placement and layering so the icon anchors at the health bar corner without shifting name text or falling behind selection borders.
-- Added a black 1-pixel border to detached player bar-style resource elements, covering primary power and tertiary power bars while excluding icon-based secondary resources.
-- Extended party defaults, locale strings, and configuration controls for the new layout and role-icon options.
