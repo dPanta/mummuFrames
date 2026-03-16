@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.0.3 - 2026-03-16
+- Shortened the Profiles page activate button text so it fits cleanly in the config UI.
+- Localized the remaining profile and configuration strings across non-English locale files.
+- Bumped addon metadata to `2.0.3`.
+
 ## 2.0.2 - 2026-03-15
 - Changed profile storage to be character-local, so profile lists and active selections no longer bleed across the whole account.
 - Added a one-time migration that copies legacy account-wide profiles into each existing character's local profile set while preserving that character's selected profile when possible.

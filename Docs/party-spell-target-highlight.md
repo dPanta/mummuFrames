@@ -33,7 +33,7 @@ The v1 curated list was seeded from current Midnight LittleWigs modules, using o
 
 ## Seeded spell table
 
-The first pass lives in [Modules/spellTargetTracker.lua](/mnt/gamecell/Blizzard_linux/World%20of%20Warcraft/_retail_/Interface/AddOns/mummuFrames/Modules/spellTargetTracker.lua) and currently includes:
+The first pass lives in [Modules/spellTargetTracker.lua] and currently includes:
 
 - Magisters Terrace: `Ethereal Shackles`, `Unstable Void Essence`, `Cosmic Sting`, `Neural Link`, `Runic Mark`
 - Maisara Caverns: `Flanking Spear`, `Infected Pinions`, `Freezing Trap`, `Barrage`, `Carrion Swoop`, `Spiritbreaker`, `Crush Souls`, `Drain Soul`, `Unmake`

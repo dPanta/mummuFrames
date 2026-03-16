@@ -64,8 +64,6 @@ local STOP_CAST_EVENTS = {
 }
 
 local TRACKED_SPELLS = {
-    -- Current Midnight LittleWigs modules with explicit cast spell IDs.
-    -- Source list documented in Docs/party-spell-target-highlight.md.
     [1214032] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 5.0 }, -- Magisters Terrace / Arcanotron Custos / Ethereal Shackles
     [1215087] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 5.0 }, -- Magisters Terrace / Degentrius / Unstable Void Essence
     [1284954] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 4.0 }, -- Magisters Terrace / Gemellus / Cosmic Sting
