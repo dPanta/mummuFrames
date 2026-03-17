@@ -7,6 +7,24 @@ local _, ns = ...
 
 -- Shared utility namespace.
 local Util = {}
+local GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID = 1713
+local GROUP_UNIT_INTERACT_RANGE_INDEX = 4
+local TRACKED_AURA_DEFAULT_SIZE = 14
+local TRACKED_AURA_DEFAULT_NAMES_BY_CLASS = {
+    DEATHKNIGHT = {},
+    DEMONHUNTER = {},
+    DRUID = { "Rejuvenation", "Germination", "Wild Growth", "Regrowth", "Lifebloom", "Cenarion Ward" },
+    EVOKER = { "Reversion", "Echo", "Temporal Anomaly", "Dream Breath" },
+    HUNTER = {},
+    MAGE = {},
+    MONK = { "Renewing Mist", "Enveloping Mist", "Life Cocoon" },
+    PALADIN = { "Beacon of Light", "Beacon of Faith", "Sacred Shield", "Aura Mastery" },
+    PRIEST = { "Renew", "Atonement", "Power Word: Shield", "Prayer of Mending" },
+    ROGUE = {},
+    SHAMAN = { "Riptide", "Unleash Life", "Earthen Wall Totem" },
+    WARLOCK = {},
+    WARRIOR = {},
+}
 
 -- Coerce numeric-like input to a number or return fallback.
 local function toNumberSafe(input, fallback)
@@ -201,45 +219,69 @@ function Util:GetUnitGUIDSafe(unitToken)
 end
 
 -- Return whether a party or raid unit should be considered out of range.
--- Trust UnitInRange's primary result when it resolves cleanly; some clients
--- report inconsistent secondary "checked range" flags for valid group units.
--- Unknown range states are still treated as in range to avoid false dimming.
-function Util:IsGroupUnitOutOfRange(unitToken, providedInRange)
+-- Prefer confirmed positive probes over dimming on ambiguous API returns.
+-- Some clients surface noisy UNIT_IN_RANGE_UPDATE payloads or transient
+-- UnitInRange false negatives for valid party members, so only explicit direct
+-- or 40-yard item misses should fade the frame.
+function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
-        return false
+        return true
     end
 
     if type(UnitExists) == "function" and not UnitExists(unitToken) then
-        return false
+        return nil
     end
 
     local normalizedProvidedInRange = normalizeBooleanLike(providedInRange)
-    if normalizedProvidedInRange ~= nil then
-        return normalizedProvidedInRange == false
+    if normalizedProvidedInRange == true then
+        return true
     end
 
-    if type(UnitInRange) ~= "function" then
-        return false
-    end
+    local normalizedDirectInRange = nil
+    local normalizedCanCheckRange = nil
+    if type(UnitInRange) == "function" then
+        local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
+        if okInRange then
+            normalizedDirectInRange = normalizeBooleanLike(inRange)
+            normalizedCanCheckRange = normalizeBooleanLike(checkedRange)
 
-    local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
-    if not okInRange then
-        return false
-    end
-
-    local normalizedInRange = normalizeBooleanLike(inRange)
-    if normalizedInRange ~= nil then
-        return normalizedInRange == false
-    end
-
-    if checkedRange ~= nil then
-        local canCheckRange = self:SafeBoolean(checkedRange, true)
-        if not canCheckRange then
-            return false
+            if normalizedDirectInRange == true then
+                return true
+            end
         end
     end
 
-    return false
+    if C_Item and type(C_Item.IsItemInRange) == "function" then
+        local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID, unitToken)
+        if okItemRange then
+            local normalizedItemRange = normalizeBooleanLike(inItemRange)
+            if normalizedItemRange ~= nil then
+                return normalizedItemRange
+            end
+        end
+    end
+
+    if type(CheckInteractDistance) == "function" then
+        local okInteractRange, inInteractRange = pcall(CheckInteractDistance, unitToken, GROUP_UNIT_INTERACT_RANGE_INDEX)
+        if okInteractRange then
+            local normalizedInteractRange = normalizeBooleanLike(inInteractRange)
+            if normalizedInteractRange == true then
+                return true
+            end
+        end
+    end
+
+    if normalizedCanCheckRange ~= false and normalizedDirectInRange ~= nil then
+        return normalizedDirectInRange
+    end
+
+    return nil
+end
+
+-- Return whether a party or raid unit should be considered out of range.
+-- Unknown range states are treated as in range to avoid false dimming.
+function Util:IsGroupUnitOutOfRange(unitToken, providedInRange)
+    return self:GetGroupUnitInRangeState(unitToken, providedInRange) == false
 end
 
 -- Format a number using Blizzard formatting, then fall back to compact suffixes.
@@ -274,6 +316,31 @@ function Util:GetCharacterKey()
     end
     realm = realm or GetRealmName() or "UnknownRealm"
     return string.format("%s-%s", name, realm)
+end
+
+-- Return the tracked aura icon size default shared across modules.
+function Util:GetTrackedAuraDefaultSize()
+    return TRACKED_AURA_DEFAULT_SIZE
+end
+
+-- Return a copied tracked aura whitelist for the current or provided class.
+function Util:GetTrackedAuraDefaultNames(classToken)
+    local resolvedClassToken = classToken
+    if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
+        local _, liveClassToken = UnitClass("player")
+        resolvedClassToken = liveClassToken
+    end
+
+    local defaults = TRACKED_AURA_DEFAULT_NAMES_BY_CLASS[resolvedClassToken]
+    local copy = {}
+    if type(defaults) ~= "table" then
+        return copy
+    end
+
+    for index = 1, #defaults do
+        copy[index] = defaults[index]
+    end
+    return copy
 end
 
 -- Run immediately when safe, or queue the callback until combat ends.

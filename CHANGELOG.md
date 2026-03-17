@@ -5,6 +5,12 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.1.1 - 2026-03-17
+- Fixed target and targettarget out-of-range fading for opposite-faction player targets in city or sanctuary cases where item probes do not resolve, by restoring a narrow out-of-combat interact fallback for that player-only edge case.
+- Rebuilt profile import/export around a single compressed `MMFP3` format, fixed the broken export path, and made active-profile imports refresh live frames and tracked aura state immediately.
+- Hardened party and raid out-of-range fading so noisy `UNIT_IN_RANGE_UPDATE` payloads or ambiguous group-range API returns no longer leave the whole group dimmed.
+- Bumped addon metadata to `2.1.1`.
+
 ## 2.1.0 - 2026-03-17
 - Fixed raid frame health and absorb handling under Midnight secret values.
 - Restored out-of-range fading for party, raid, target, targettarget, focus, and focustarget.
@@ -54,30 +60,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Fixed configuration refresh errors and tightened the Frames UI so advanced controls only appear where they matter.
 - Kept party target and spell-target warning borders readable while frames are dimmed for range or offline state.
 - Removed the dead generated font catalog path and kept bundled fonts local to the shared style module.
-
-## 1.8.0 - 2026-03-13
-- Added a Midnight-specific party spell-target tracker that highlights party member frames when curated hostile dungeon casts appear to be targeting them.
-- Wired the new tracker into party-frame visuals with a dedicated warning overlay, a lightweight highlight-only refresh path, and a config toggle.
-- Documented the Midnight Season 1 seed list and limited spell coverage to mechanics backed by current Midnight cast IDs.
-- Reworked the configuration window around top-level `Frames`, `Tracked Auras`, `Global`, and `Profiles` pages instead of flat per-unit tabs.
-- Added a grouped Frames hub with left-side unit navigation, consistent per-unit sections, a basic/advanced toggle, reset-to-defaults for individual frame types, and scope-aware refresh intents.
-- Polished the Frames page so advanced options only show on relevant panes, simpler units expose direct position controls, and the header toggle text stays inside the configuration window.
-- Synced all locale files with the newer configuration keys by seeding missing entries from `enUS`, preserving existing translations and using English fallbacks where translations are still pending.
-- Bumped addon metadata to `1.8.0`.
-
-## 1.7.0 - 2026-03-13
-- Added generic empowered-spell castbar support with charging-stage markers and event handling for player, target, and focus castbars.
-- Rewired live raid frames to use fixed `raid1`-`raid40` secure buttons with deterministic sorting/layout, instead of relying on secure-header child discovery.
-- Reworked party and raid out-of-range handling to update from `UNIT_IN_RANGE_UPDATE` instead of waiting for unrelated vitals events.
-- Added dedicated lightweight alpha refresh paths for party and raid frames so range changes do not force full unit redraws.
-- Centralized group range and protected-boolean handling, and removed the `CheckInteractDistance` fallback to avoid mismatched range dimming.
-- Fixed group range updates to register `UNIT_IN_RANGE_UPDATE` as a filtered unit event, which restores live out-of-range dimming on party and raid frames.
-- Added a large centered defensive icon for party and raid frames, driven from Blizzard's compact-frame defensive classification and refreshed through the shared aura pipeline.
-- Removed the dead legacy party/raid healer-editor config code and stale aura default data that no live UI path used.
-- Bumped addon metadata to `1.7.0`.
-
-## 1.6.6 - 2026-03-11
-- Fixed secure group-frame unit drift that could make party clicks target the wrong member and cause duplicate or missing group displays.
-- Added a Blizzard group leader icon to party and raid unit frames, anchored at the center-left edge to match the existing overlay styling.
-- Added party healthbar debuff overlay coloring by debuff type, including typed debuffs the current player cannot dispel.
-- Bumped addon metadata to `1.6.6`.

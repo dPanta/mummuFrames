@@ -546,6 +546,79 @@ local function resolvePowerColor(unitToken, exists)
     return 0.2, 0.45, 0.85
 end
 
+local function addObservedUnitRangeProbe(probeItemIDs, itemID)
+    if type(probeItemIDs) ~= "table" or type(itemID) ~= "number" then
+        return
+    end
+
+    for index = 1, #probeItemIDs do
+        if probeItemIDs[index] == itemID then
+            return
+        end
+    end
+
+    probeItemIDs[#probeItemIDs + 1] = itemID
+end
+
+local function getObservedUnitRangeProbeItemIDs(unitToken)
+    local probeItemIDs = {}
+    local prefersFriendlyProbe = false
+
+    if type(UnitCanAssist) == "function" then
+        local okCanAssist, canAssist = pcall(UnitCanAssist, "player", unitToken)
+        if okCanAssist and normalizeBooleanLike(canAssist) == true then
+            prefersFriendlyProbe = true
+        end
+    end
+
+    if not prefersFriendlyProbe and type(UnitIsFriend) == "function" then
+        local okIsFriend, isFriend = pcall(UnitIsFriend, "player", unitToken)
+        if okIsFriend and normalizeBooleanLike(isFriend) == true then
+            prefersFriendlyProbe = true
+        end
+    end
+
+    if prefersFriendlyProbe then
+        addObservedUnitRangeProbe(probeItemIDs, OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID)
+        addObservedUnitRangeProbe(probeItemIDs, OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID)
+    else
+        addObservedUnitRangeProbe(probeItemIDs, OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID)
+        addObservedUnitRangeProbe(probeItemIDs, OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID)
+    end
+
+    return probeItemIDs
+end
+
+local function canUseObservedUnitInteractRangeFallback(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+
+    if type(InCombatLockdown) == "function" and InCombatLockdown() then
+        return false
+    end
+
+    if type(UnitIsPlayer) ~= "function" or UnitIsPlayer(unitToken) ~= true then
+        return false
+    end
+
+    if type(UnitCanAttack) == "function" then
+        local okCanAttack, canAttack = pcall(UnitCanAttack, "player", unitToken)
+        if okCanAttack and normalizeBooleanLike(canAttack) == true then
+            return false
+        end
+    end
+
+    if type(UnitCanAssist) == "function" then
+        local okCanAssist, canAssist = pcall(UnitCanAssist, "player", unitToken)
+        if okCanAssist and normalizeBooleanLike(canAssist) == true then
+            return false
+        end
+    end
+
+    return true
+end
+
 -- Resolve target/focus-family range without relying on group-only UnitInRange semantics.
 local function getObservedUnitInRange(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" then
@@ -575,27 +648,28 @@ local function getObservedUnitInRange(unitToken, providedInRange)
         end
     end
 
-    local rangeCheckerItemID = nil
-    if type(UnitCanAttack) == "function" then
-        local okCanAttack, canAttack = pcall(UnitCanAttack, "player", unitToken)
-        if okCanAttack and normalizeBooleanLike(canAttack) == true then
-            rangeCheckerItemID = OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID
+    if C_Item and type(C_Item.IsItemInRange) == "function" then
+        local probeItemIDs = getObservedUnitRangeProbeItemIDs(unitToken)
+        for index = 1, #probeItemIDs do
+            local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, probeItemIDs[index], unitToken)
+            if okItemRange then
+                local normalizedItemRange = normalizeBooleanLike(inItemRange)
+                if normalizedItemRange ~= nil then
+                    return normalizedItemRange
+                end
+            end
         end
     end
 
-    if not rangeCheckerItemID and type(UnitCanAssist) == "function" then
-        local okCanAssist, canAssist = pcall(UnitCanAssist, "player", unitToken)
-        if okCanAssist and normalizeBooleanLike(canAssist) == true then
-            rangeCheckerItemID = OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID
-        end
-    end
-
-    if rangeCheckerItemID and C_Item and type(C_Item.IsItemInRange) == "function" then
-        local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, rangeCheckerItemID, unitToken)
-        if okItemRange then
-            local normalizedItemRange = normalizeBooleanLike(inItemRange)
-            if normalizedItemRange ~= nil then
-                return normalizedItemRange
+    -- Sanctuary/city enemy players can resolve as neither attackable nor
+    -- assistable, which makes item probes return no useful range state. Keep
+    -- the old interact bucket as a narrow last resort outside combat only.
+    if type(CheckInteractDistance) == "function" and canUseObservedUnitInteractRangeFallback(unitToken) then
+        local okInteractRange, inInteractRange = pcall(CheckInteractDistance, unitToken, 4)
+        if okInteractRange then
+            local normalizedInteractRange = normalizeBooleanLike(inInteractRange)
+            if normalizedInteractRange ~= nil then
+                return normalizedInteractRange
             end
         end
     end

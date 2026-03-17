@@ -504,13 +504,51 @@ local function createMultilineTextArea(name, parent, width, height, anchor)
     scrollFrame:EnableMouseWheel(true)
 
     local editBox = CreateFrame("EditBox", name .. "EditBox", scrollFrame)
+    editBox:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 0, 0)
     editBox:SetMultiLine(true)
     editBox:SetAutoFocus(false)
     editBox:SetWidth(math.max(120, width - 40))
     editBox:SetFontObject(GameFontHighlightSmall or GameFontNormalSmall or SystemFont_Shadow_Small)
+    editBox:SetJustifyH("LEFT")
     editBox:SetTextInsets(2, 2, 2, 2)
-    editBox:SetScript("OnTextChanged", function()
+
+    local function refreshLayout(preserveScrollPosition)
+        local currentScroll = preserveScrollPosition and (scrollFrame:GetVerticalScroll() or 0) or 0
+        local visibleWidth = math.max(120, (scrollFrame:GetWidth() or (width - 34)) - 4)
+        editBox:SetWidth(visibleWidth)
+
+        local _, lineHeight = editBox:GetFont()
+        local resolvedLineHeight = tonumber(lineHeight) or 12
+        local lineCount = type(editBox.GetNumLines) == "function" and editBox:GetNumLines() or 1
+        if type(lineCount) ~= "number" or lineCount < 1 then
+            lineCount = 1
+        end
+
+        local minimumHeight = math.max(1, (scrollFrame:GetHeight() or (height - 12)) - 4)
+        local contentHeight = math.max(minimumHeight, math.ceil(lineCount * resolvedLineHeight) + 8)
+        editBox:SetHeight(contentHeight)
+
         scrollFrame:UpdateScrollChildRect()
+
+        local maxRange = scrollFrame:GetVerticalScrollRange() or 0
+        if currentScroll > maxRange then
+            currentScroll = maxRange
+        end
+        if currentScroll < 0 then
+            currentScroll = 0
+        end
+        scrollFrame:SetVerticalScroll(currentScroll)
+    end
+
+    local function scrollToTop()
+        scrollFrame:SetVerticalScroll(0)
+        if type(editBox.SetCursorPosition) == "function" then
+            pcall(editBox.SetCursorPosition, editBox, 0)
+        end
+    end
+
+    editBox:SetScript("OnTextChanged", function()
+        refreshLayout(true)
     end)
     editBox:SetScript("OnCursorChanged", function(_, _, yPos, _, cursorHeight)
         local offset = yPos + (cursorHeight or 0)
@@ -537,11 +575,19 @@ local function createMultilineTextArea(name, parent, width, height, anchor)
         end
         selfFrame:SetVerticalScroll(target)
     end)
+    scrollFrame:SetScript("OnSizeChanged", function()
+        refreshLayout(true)
+    end)
+    container:SetScript("OnShow", function()
+        refreshLayout(true)
+    end)
 
     return {
         container = container,
         scrollFrame = scrollFrame,
         editBox = editBox,
+        RefreshLayout = refreshLayout,
+        ScrollToTop = scrollToTop,
     }
 end
 
@@ -2705,9 +2751,14 @@ function Configuration:BuildProfilesPage(page)
         end
 
         if exportEdit then
+            exportEdit:ClearFocus()
             exportEdit:SetText(code)
-            exportEdit:HighlightText()
-            exportEdit:SetFocus()
+            if exportArea and type(exportArea.RefreshLayout) == "function" then
+                exportArea:RefreshLayout()
+            end
+            if exportArea and type(exportArea.ScrollToTop) == "function" then
+                exportArea:ScrollToTop()
+            end
         end
         self:SetProfilesStatus(
             string.format(L.CONFIG_PROFILES_EXPORTED or "Export code generated for profile: %s", selectedName),
@@ -2719,7 +2770,16 @@ function Configuration:BuildProfilesPage(page)
 
     selectExportButton:SetScript("OnClick", function()
         if exportEdit then
+            if exportArea and type(exportArea.RefreshLayout) == "function" then
+                exportArea:RefreshLayout()
+            end
+            if exportArea and type(exportArea.ScrollToTop) == "function" then
+                exportArea:ScrollToTop()
+            end
             exportEdit:SetFocus()
+            if type(exportEdit.SetCursorPosition) == "function" then
+                pcall(exportEdit.SetCursorPosition, exportEdit, 0)
+            end
             exportEdit:HighlightText()
         end
     end)
@@ -2740,7 +2800,18 @@ function Configuration:BuildProfilesPage(page)
         end
 
         self._profilesSelectedName = importedName
+        local importedIntoActiveProfile = importedName == dataHandle:GetActiveProfileName()
+        if importedIntoActiveProfile and ns.AuraHandle and type(ns.AuraHandle.InitializeAurasDefaults) == "function" then
+            ns.AuraHandle:InitializeAurasDefaults()
+        end
+        if importedIntoActiveProfile then
+            self:UpdateMinimapButtonPosition()
+        end
         self:RefreshConfigWidgets()
+        if importedIntoActiveProfile then
+            self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras", true)
+            self:RequestUnitFrameRefresh(REFRESH_INTENT_LAYOUT, "global", true)
+        end
         self:SetProfilesStatus(
             string.format(L.CONFIG_PROFILES_IMPORTED or "Imported profile: %s", importedName),
             0.3,

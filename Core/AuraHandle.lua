@@ -48,7 +48,7 @@ local MAP_REBUILD_THROTTLE          = 0.20
 -- Maximum number of player-cast buff icons shown per frame.
 local MAX_TRACKER_AURAS    = 4
 -- Default tracker icon size in pixels.
-local DEFAULT_TRACKER_SIZE = 14
+local DEFAULT_TRACKER_SIZE = (Util and type(Util.GetTrackedAuraDefaultSize) == "function" and Util:GetTrackedAuraDefaultSize()) or 14
 local GROUP_DEBUFF_BUTTON_GAP = 2
 local GROUP_DEBUFF_MAX_BUTTONS = 8
 local CENTER_DEFENSIVE_MIN_SIZE = 16
@@ -110,23 +110,6 @@ local DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER = {
         scale = 1,
         max = 3,
     },
-}
-
--- Per-class default spell-name whitelists. Empty table = no name filter (show all player-cast buffs).
-local CLASS_DEFAULT_AURA_NAMES = {
-    DEATHKNIGHT = {},
-    DEMONHUNTER = {},
-    DRUID    = { "Rejuvenation", "Germination", "Wild Growth", "Regrowth", "Lifebloom", "Cenarion Ward" },
-    EVOKER   = { "Reversion", "Echo", "Temporal Anomaly", "Dream Breath" },
-    HUNTER   = {},
-    MAGE     = {},
-    MONK     = { "Renewing Mist", "Enveloping Mist", "Life Cocoon" },
-    PALADIN  = { "Beacon of Light", "Beacon of Faith", "Sacred Shield", "Aura Mastery" },
-    PRIEST   = { "Renew", "Atonement", "Power Word: Shield", "Prayer of Mending" },
-    ROGUE    = {},
-    SHAMAN   = { "Riptide", "Unleash Life", "Earthen Wall Totem" },
-    WARLOCK  = {},
-    WARRIOR  = {},
 }
 
 
@@ -3743,12 +3726,10 @@ end
 -- Returns the default spell-name list for the current player class.
 -- Always returns a new copy so callers may mutate it freely.
 function AuraHandle:GetClassDefaultAuraNames()
-    local _, classToken = UnitClass("player")
-    local defaults = classToken and CLASS_DEFAULT_AURA_NAMES[classToken]
-    if not defaults then return {} end
-    local copy = {}
-    for i, v in ipairs(defaults) do copy[i] = v end
-    return copy
+    if Util and type(Util.GetTrackedAuraDefaultNames) == "function" then
+        return Util:GetTrackedAuraDefaultNames()
+    end
+    return {}
 end
 
 -- Replaces allowedSpells with the class defaults and rebuilds the icon cache.
