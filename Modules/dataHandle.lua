@@ -16,7 +16,11 @@ local LibDeflate = nil
 local DataHandle = ns.Object:Extend()
 local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 local PROFILE_EXPORT_PREFIX = "MMFP3:"
+local BUNDLED_DEFAULT_PROFILE_IMPORT = "MMFP3:TNvBpTnsq4FrG23T9hR7rkibHiSRU7KqwSXEtI15yhTEtH0pWV9Bg)c4esO0wO3D64liN1ZoZSZ88m(XMeAs0kDPt)PIQP6IK4KitPEAHjljmjQ2TPWGRTk)otXeJDMj1H3ywvPlk)RMKXuws0uTn2CNBT1mr7wKeDwPdmvNAU(dzzxwwF9Y1lxUEKvV0uF9fMSC91v(h7MRBD0E2ufSPlMuSUooFPX2TNtUBL1uxFREZXXXJsIY02)6IQmtFcnQqpVoj6YphF(zJpjXLeTmVmFPEfEcwKdgonjsxohosJKCknGfqLukNeeqsMDKqIBbTlSi)RFvBZ(CzURnRXq4m1UMWbEznCNA0TZQsxx7025gxtDQ6wJ9YY4QvOvRQYlbx(XtghFYvOdSUCTDZe0i06njJjjr3183fM85lCjJ9HZLXPtxaDGPB1mUnpdQtJPsFmpBI0PDBIcoO2KwvMDi3p0N1Tno1E9oZF3Qqtfa3N1uOD5FXmz7J1q8YIQBp1OlClq8aUsQU2bWJDth0WZG8fnzyQnmUFe2AiS1TRc91jg5XCwrWCEWVGyn6iFpbLs9uCfnWxqKylw0Kakc9yPIjPCHqg41MoJHtzFw3heozxO(klaOEb14(mE6U9n9AREhw201ZMvpCnShvT2MAaZlkayS(UgGbeSJe9rBNUr4LXXxEX5Nmc8tDQUaZxeTNUOY2zs8Lt6UF7XPjFYmpe(Dn(QZ(0PX9HBq(U3i3z8JHUlz7Z9bX01GF1w3MDkedk10NWEWEuKPy2VN7wuT29jB16v9yURQkm9Wj83tk0BG(d(Rv608Y5nhHDaispQNqrKbmgNiiceF4Jhxa6Weko3JhWuccHO6GopLveU3g6GA6GvH6aRREi(rAFdnztJVARPmsBfTh0IhVkBUbgQ7YHAs0xW5oGpXQHPOiUzA1PGXfnByRS0DiAoCv7yUFTd7uVpSBNHDEBnSZRByNNNKkbeTiG4da8hh2nYlawvgi8cKsgPfMlFMrESxXrEQ3h5nyKxJwHFveNG3uIJK8FoIdG9hqCWF1Psiqrc4mQpYB2I4qG19vE(CpH4X7CqIJ)RiXj4DIZaIZV0h5W4VPmh)dWCc)hJ5e(nzoITyoIV1JC6tG9XseQxpwsxN6DwsllXQZZWG2j59pbLGpveD79(JKXYVVX31vw3VLBHx)VrsPUoDRdWCun(56nGW8H6nXxzoQxKAFBlG9ytE0rkpHptY8ukoTxfoVZHr9I3rCYdat)2SjCtNvBbOiFFcYjDLt(lThCGok2A4p0syp8soVlu(F5cL5DYHBGIucJ5hO8isjV7wI3sLYH)ikLd))WhhO9933M6e(sOoqxKZy0aqFh0nbzBp2GpeFk8LQciy)0jqdPqPy8apgNIZWAEsO6jn(W(ZjNSVikElvgGGBPhtjzso1JYANZQEwIx4RICbUSN4fqvcFoWVc4GE6T7l)mYfGZgWKHQptiK(SU6VCF1)Nw15TVjZ7Ai6PEyLy35nWXfk3zr4xpcVh6OqJgam3Ft1S7V58omW2RosN3uHtII0Pwt293a4jtrwZN)6dqyU)MlamLXUPrnYhCvLMLMsxJULjwCcqRJUWuMHYaCDpWVTSmfebmT5Y0QIQgSGgQjh7d(YIxGZNXp83XWS1OPys76)pAeLJG9(tVOH3v5EoNX6DMVxJZihlypR)aGSXwQloStPDE0t15r(Z5qx3xVd9hCn(FDOAz0Gv2Y2K)o"
 local maintainProfile = nil
+local bundledDefaultProfile = nil
+local bundledDefaultProfileFontPath = nil
+local bundledDefaultProfileResolved = false
 -- Units whose frames display a name label by default.
 local NAME_TEXT_UNITS = {
     player = true,
@@ -252,13 +256,6 @@ local function deepCopy(value, seen)
     return copy
 end
 
--- Return default profile collection for a character.
-local function newDefaultProfiles()
-    return {
-        Default = deepCopy(DEFAULT_PROFILE),
-    }
-end
-
 -- Return sorted table keys.
 local function getSortedKeys(tbl)
     local keys = {}
@@ -300,6 +297,31 @@ local function copyTableContents(target, source)
     for key, value in pairs(source) do
         target[deepCopy(key)] = deepCopy(value)
     end
+end
+
+-- Return whether two values match recursively.
+local function deepEqual(left, right)
+    if type(left) ~= type(right) then
+        return false
+    end
+
+    if type(left) ~= "table" then
+        return left == right
+    end
+
+    for key, value in pairs(left) do
+        if not deepEqual(value, right[key]) then
+            return false
+        end
+    end
+
+    for key in pairs(right) do
+        if left[key] == nil then
+            return false
+        end
+    end
+
+    return true
 end
 
 -- Return serializer/compression libraries for profile transfer.
@@ -424,6 +446,112 @@ local function normalizeProfileName(name)
     return trimmed
 end
 
+-- Decode and sanitize one exported profile string.
+local function decodeProfileTransferCode(code)
+    local serializer, deflate = getTransferLibraries()
+    if not serializer or not deflate then
+        return nil, nil, "missing_dependency"
+    end
+
+    if type(code) ~= "string" then
+        return nil, nil, "invalid_code"
+    end
+
+    local trimmedCode = string.match(code, "^%s*(.-)%s*$")
+    if not trimmedCode or trimmedCode == "" then
+        return nil, nil, "invalid_code"
+    end
+
+    local encodedPayload = string.match(trimmedCode, "^" .. PROFILE_EXPORT_PREFIX .. "(.+)$")
+    if not encodedPayload then
+        return nil, nil, "unsupported_format"
+    end
+
+    local decodedPayload = deflate:DecodeForPrint(encodedPayload)
+    if type(decodedPayload) ~= "string" or decodedPayload == "" then
+        return nil, nil, "decode_failed"
+    end
+
+    local payload = deflate:DecompressDeflate(decodedPayload)
+    if type(payload) ~= "string" or payload == "" then
+        return nil, nil, "decompress_failed"
+    end
+
+    local deserializeResults = { serializer:Deserialize(payload) }
+    if deserializeResults[1] ~= true then
+        return nil, nil, "deserialize_failed"
+    end
+    if #deserializeResults ~= 3 then
+        return nil, nil, "invalid_payload"
+    end
+
+    local sourceProfileName = deserializeResults[2]
+    local importedPayload = deserializeResults[3]
+    if type(sourceProfileName) ~= "string" or type(importedPayload) ~= "table" then
+        return nil, nil, "invalid_payload"
+    end
+
+    local importedProfile = sanitizeImportedProfile(importedPayload, DEFAULT_PROFILE, "")
+    if not hasTableEntries(importedProfile) then
+        return nil, nil, "invalid_payload"
+    end
+
+    return normalizeProfileName(sourceProfileName), importedProfile, nil
+end
+
+-- Return the addon's bundled default profile template for default/reset state.
+local function getDefaultProfileTemplate(defaultFontPath)
+    local resolvedFontPath = defaultFontPath or DEFAULT_FONT_PATH
+    if bundledDefaultProfileResolved and bundledDefaultProfileFontPath == resolvedFontPath then
+        return bundledDefaultProfile or DEFAULT_PROFILE
+    end
+
+    bundledDefaultProfileResolved = true
+    bundledDefaultProfileFontPath = resolvedFontPath
+    bundledDefaultProfile = nil
+
+    local _, importedProfile = decodeProfileTransferCode(BUNDLED_DEFAULT_PROFILE_IMPORT)
+    if type(importedProfile) == "table" then
+        bundledDefaultProfile = buildProfileSnapshot(importedProfile, resolvedFontPath)
+    end
+
+    return bundledDefaultProfile or DEFAULT_PROFILE
+end
+
+-- Return the bundled default unit configuration for one unit token.
+local function getDefaultUnitTemplate(unitToken, defaultFontPath)
+    local defaults = getDefaultProfileTemplate(defaultFontPath)
+    local units = type(defaults.units) == "table" and defaults.units or DEFAULT_PROFILE.units
+    local defaultUnit = units[unitToken]
+    if type(defaultUnit) ~= "table" then
+        defaultUnit = units.player or DEFAULT_PROFILE.units.player
+    end
+    return defaultUnit
+end
+
+-- Upgrade untouched stored Default profiles to the bundled seed.
+local function shouldReplaceStoredDefaultProfile(profile, defaultFontPath)
+    local seededDefaults = getDefaultProfileTemplate(defaultFontPath)
+    if seededDefaults == DEFAULT_PROFILE or type(profile) ~= "table" then
+        return false
+    end
+
+    local currentSnapshot = buildProfileSnapshot(profile, defaultFontPath)
+    local legacySnapshot = buildProfileSnapshot(DEFAULT_PROFILE, defaultFontPath)
+    if type(currentSnapshot) ~= "table" or type(legacySnapshot) ~= "table" then
+        return false
+    end
+
+    return deepEqual(currentSnapshot, legacySnapshot)
+end
+
+-- Return default profile collection for a character.
+local function newDefaultProfiles(defaultFontPath)
+    return {
+        Default = deepCopy(getDefaultProfileTemplate(defaultFontPath)),
+    }
+end
+
 -- Return a cache key scoped to one character/profile pair.
 local function getProfileCacheKey(charKey, profileName)
     return string.format("%s::%s", tostring(charKey or "UnknownCharacter"), tostring(profileName or "Default"))
@@ -501,7 +629,7 @@ local function seedLegacyProfiles(globalSettings)
 end
 
 -- Ensure one character entry has a usable local profile collection.
-local function ensureCharacterSettings(charSettings, sourceProfiles)
+local function ensureCharacterSettings(charSettings, sourceProfiles, defaultFontPath)
     if type(charSettings) ~= "table" then
         charSettings = {}
     end
@@ -510,12 +638,14 @@ local function ensureCharacterSettings(charSettings, sourceProfiles)
         if type(sourceProfiles) == "table" then
             charSettings.profiles = deepCopy(sourceProfiles)
         else
-            charSettings.profiles = newDefaultProfiles()
+            charSettings.profiles = newDefaultProfiles(defaultFontPath)
         end
     end
 
     if type(charSettings.profiles.Default) ~= "table" then
-        charSettings.profiles.Default = deepCopy(DEFAULT_PROFILE)
+        charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
+    elseif shouldReplaceStoredDefaultProfile(charSettings.profiles.Default, defaultFontPath) then
+        charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
     end
 
     local activeProfile = normalizeProfileName(charSettings.activeProfile) or "Default"
@@ -573,7 +703,7 @@ function DataHandle:OnInitialize(addonRef)
         mummuFramesDB.char = charStorage
 
         for charKey, charSettings in pairs(charStorage) do
-            charStorage[charKey] = ensureCharacterSettings(charSettings, legacyProfiles)
+            charStorage[charKey] = ensureCharacterSettings(charSettings, legacyProfiles, self._defaultFontPath or DEFAULT_FONT_PATH)
         end
 
         globalSettings.characterProfilesMigrationApplied = true
@@ -594,7 +724,7 @@ function DataHandle:GetCharacterSettings()
     end
     local charKey = Util:GetCharacterKey()
     self.db.char = self.db.char or {}
-    self.db.char[charKey] = ensureCharacterSettings(self.db.char[charKey])
+    self.db.char[charKey] = ensureCharacterSettings(self.db.char[charKey], nil, self._defaultFontPath or DEFAULT_FONT_PATH)
     return self.db.char[charKey]
 end
 
@@ -680,10 +810,10 @@ function DataHandle:CreateProfile(name, sourceProfileName)
     local sourceName = normalizeProfileName(sourceProfileName) or self:GetActiveProfileName()
     local sourceProfile = profiles[sourceName]
     if type(sourceProfile) ~= "table" then
-        sourceProfile = DEFAULT_PROFILE
+        sourceProfile = getDefaultProfileTemplate(self._defaultFontPath or DEFAULT_FONT_PATH)
     end
 
-    profiles[normalizedName] = buildProfileSnapshot(sourceProfile, self._defaultFontPath or DEFAULT_FONT_PATH) or deepCopy(DEFAULT_PROFILE)
+    profiles[normalizedName] = buildProfileSnapshot(sourceProfile, self._defaultFontPath or DEFAULT_FONT_PATH) or deepCopy(getDefaultProfileTemplate(self._defaultFontPath or DEFAULT_FONT_PATH))
     local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), normalizedName)
     self._profileDefaultsApplied[cacheKey] = true
     self._unitDefaultsAppliedByProfile[cacheKey] = nil
@@ -822,55 +952,11 @@ end
 
 -- Import profile from code.
 function DataHandle:ImportProfileCode(code, targetProfileName, overwriteExisting)
-    local serializer, deflate = getTransferLibraries()
-    if not serializer or not deflate then
-        return nil, "missing_dependency"
+    local normalizedSourceName, importedProfile, decodeError = decodeProfileTransferCode(code)
+    if type(importedProfile) ~= "table" then
+        return nil, decodeError or "invalid_payload"
     end
 
-    if type(code) ~= "string" then
-        return nil, "invalid_code"
-    end
-
-    local trimmedCode = string.match(code, "^%s*(.-)%s*$")
-    if not trimmedCode or trimmedCode == "" then
-        return nil, "invalid_code"
-    end
-
-    local encodedPayload = string.match(trimmedCode, "^" .. PROFILE_EXPORT_PREFIX .. "(.+)$")
-    if not encodedPayload then
-        return nil, "unsupported_format"
-    end
-
-    local decodedPayload = deflate:DecodeForPrint(encodedPayload)
-    if type(decodedPayload) ~= "string" or decodedPayload == "" then
-        return nil, "decode_failed"
-    end
-
-    local payload = deflate:DecompressDeflate(decodedPayload)
-    if type(payload) ~= "string" or payload == "" then
-        return nil, "decompress_failed"
-    end
-
-    local deserializeResults = { serializer:Deserialize(payload) }
-    if deserializeResults[1] ~= true then
-        return nil, "deserialize_failed"
-    end
-    if #deserializeResults ~= 3 then
-        return nil, "invalid_payload"
-    end
-
-    local sourceProfileName = deserializeResults[2]
-    local importedPayload = deserializeResults[3]
-    if type(sourceProfileName) ~= "string" or type(importedPayload) ~= "table" then
-        return nil, "invalid_payload"
-    end
-
-    local importedProfile = sanitizeImportedProfile(importedPayload, DEFAULT_PROFILE, "")
-    if not hasTableEntries(importedProfile) then
-        return nil, "invalid_payload"
-    end
-
-    local normalizedSourceName = normalizeProfileName(sourceProfileName)
     local targetName = normalizeProfileName(targetProfileName) or normalizedSourceName or "Imported"
     local charSettings = self:GetCharacterSettings()
     local profiles = charSettings and charSettings.profiles or nil
@@ -924,12 +1010,7 @@ function DataHandle:GetUnitConfig(unitToken)
     end
 
     if not unitDefaultsApplied[unitToken] then
-        local defaultUnit = DEFAULT_PROFILE.units[unitToken]
-        if type(defaultUnit) == "table" then
-            mergeDefaults(profile.units[unitToken], defaultUnit)
-        else
-            mergeDefaults(profile.units[unitToken], DEFAULT_PROFILE.units.player)
-        end
+        mergeDefaults(profile.units[unitToken], getDefaultUnitTemplate(unitToken, self._defaultFontPath or DEFAULT_FONT_PATH))
         unitDefaultsApplied[unitToken] = true
     end
 
@@ -987,13 +1068,7 @@ function DataHandle:ResetUnitConfig(unitToken)
     end
 
     profile.units = profile.units or {}
-
-    local defaultUnit = DEFAULT_PROFILE.units[unitToken]
-    if type(defaultUnit) ~= "table" then
-        defaultUnit = DEFAULT_PROFILE.units.player
-    end
-
-    profile.units[unitToken] = deepCopy(defaultUnit)
+    profile.units[unitToken] = deepCopy(getDefaultUnitTemplate(unitToken, self._defaultFontPath or DEFAULT_FONT_PATH))
 
     local charSettings = self:GetCharacterSettings()
     local profileName = charSettings and (charSettings.activeProfile or "Default") or "Default"

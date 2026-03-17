@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.1.2 - 2026-03-18
+- Reworked the addon's factory default state around a bundled `MMFP3` profile seed so new `Default` profiles, fallback profile creation, and per-frame resets all inherit the same imported layout.
+- Centralized `MMFP3` decode and sanitization so bundled default seeding and normal profile imports share the same validation path.
+- Bumped addon metadata to `2.1.2`.
+
 ## 2.1.1 - 2026-03-17
 - Fixed target and targettarget out-of-range fading for opposite-faction player targets in city or sanctuary cases where item probes do not resolve, by restoring a narrow out-of-combat interact fallback for that player-only edge case.
 - Rebuilt profile import/export around a single compressed `MMFP3` format, fixed the broken export path, and made active-profile imports refresh live frames and tracked aura state immediately.
@@ -54,9 +59,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 
 ## 1.8.2 - 2026-03-13
 - Bumped addon metadata to `1.8.2`.
-
-## 1.8.1 - 2026-03-13
-- Hardened the Midnight party spell-target tracker against protected-event and secret-value issues.
-- Fixed configuration refresh errors and tightened the Frames UI so advanced controls only appear where they matter.
-- Kept party target and spell-target warning borders readable while frames are dimmed for range or offline state.
-- Removed the dead generated font catalog path and kept bundled fonts local to the shared style module.
