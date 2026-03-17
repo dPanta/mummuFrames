@@ -3499,7 +3499,7 @@ end
 -- UNIT_AURA is handled specially: tracker icons are refreshed directly here
 -- (the CompactUnitFrame_UpdateAuras hook is unreliable in combat), and
 -- the owning module is asked to rebuild its map on a miss.
-function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, auraUpdateInfo)
+function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
         return
@@ -3509,7 +3509,7 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, auraUpdateInfo)
         -- Prime the dedicated group debuff cache directly from the clean event
         -- payload. This keeps debuff icons and dispel overlays aligned with the
         -- same UNIT_AURA deltas that Midnight exposes to modern addons.
-        self:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, nil, "unit_aura_dispatch")
+        self:RefreshDebuffCacheFromUnitAuras(unitToken, eventPayload, nil, "unit_aura_dispatch")
 
         -- Drive the tracker refresh directly from UNIT_AURA.
         -- RefreshFrameTrackedAuras reads C_UnitAuras directly and does not
@@ -3557,13 +3557,17 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, auraUpdateInfo)
     if eventName == "UNIT_IN_RANGE_UPDATE" then
         -- Range churn only affects alpha, so prefer the dedicated light-weight
         -- path instead of re-running a full vitals refresh.
+        local normalizedInRange = nil
+        if Util and type(Util.NormalizeBooleanLike) == "function" then
+            normalizedInRange = Util:NormalizeBooleanLike(eventPayload)
+        end
         if type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
-            module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit)
+            module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit, normalizedInRange)
             return
         end
 
         if type(module.RefreshDisplayedUnitRangeState) == "function" then
-            module:RefreshDisplayedUnitRangeState(resolvedUnit)
+            module:RefreshDisplayedUnitRangeState(resolvedUnit, normalizedInRange)
             return
         end
     end
@@ -3606,8 +3610,8 @@ function AuraHandle:EnsureGroupEventDispatcher()
         end
     end
 
-    frame:SetScript("OnEvent", function(_, eventName, unitToken)
-        selfRef:DispatchGroupUnitEvent(eventName, unitToken)
+    frame:SetScript("OnEvent", function(_, eventName, unitToken, eventPayload)
+        selfRef:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
     end)
 
     groupDispatcherFrame = frame

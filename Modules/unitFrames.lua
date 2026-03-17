@@ -127,6 +127,10 @@ local CASTBAR_EMPOWER_MARKER_COLOR = { 1.00, 1.00, 1.00, 0.38 }
 local CASTBAR_EMPOWER_MARKER_ACTIVE_COLOR = { 1.00, 1.00, 1.00, 0.92 }
 local CASTBAR_EMPOWER_MAX_MARKERS = 6
 local TARGET_OUT_OF_RANGE_ALPHA = 0.55
+local TARGET_RANGE_POLL_INTERVAL = 0.2
+-- 40-yard item range probes used when UnitInRange cannot validate non-group units.
+local OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID = 1713
+local OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID = 4945
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
@@ -145,6 +149,12 @@ local SPELL_AURA_SCAN_MAX = 255
 local MIRROR_TIMER_TYPE_BREATH = "BREATH"
 local PLAYER_BREATH_UPDATE_INTERVAL = 0.1
 local BREATH_POWER_COLOR = { 0.00, 0.50, 1.00 }
+local RANGE_ALPHA_UNITS = {
+    target = true,
+    targettarget = true,
+    focus = true,
+    focustarget = true,
+}
 local hideTertiaryPowerBar
 local collectActiveGuardianStackStates
 local getSafeNumericValue
@@ -536,14 +546,19 @@ local function resolvePowerColor(unitToken, exists)
     return 0.2, 0.45, 0.85
 end
 
--- Return whether unit should be treated as out of range.
-local function isUnitOutOfRange(unitToken)
+-- Resolve target/focus-family range without relying on group-only UnitInRange semantics.
+local function getObservedUnitInRange(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return nil
     end
 
     if type(UnitExists) == "function" and not UnitExists(unitToken) then
-        return false
+        return nil
+    end
+
+    local normalizedProvidedInRange = normalizeBooleanLike(providedInRange)
+    if normalizedProvidedInRange ~= nil then
+        return normalizedProvidedInRange
     end
 
     if type(UnitInRange) == "function" then
@@ -552,28 +567,110 @@ local function isUnitOutOfRange(unitToken)
             local canCheckRange = normalizeBooleanLike(checkedRange)
             local normalizedInRange = normalizeBooleanLike(inRange)
             if canCheckRange ~= false and normalizedInRange ~= nil then
-                return normalizedInRange == false
+                return normalizedInRange
+            end
+            if normalizedInRange == true then
+                return true
             end
         end
     end
-    -- Do not fall back to CheckInteractDistance here. It can trigger protected
-    -- action blocks during secure target changes, and its interact buckets do
-    -- not match UnitInRange semantics anyway.
+
+    local rangeCheckerItemID = nil
+    if type(UnitCanAttack) == "function" then
+        local okCanAttack, canAttack = pcall(UnitCanAttack, "player", unitToken)
+        if okCanAttack and normalizeBooleanLike(canAttack) == true then
+            rangeCheckerItemID = OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID
+        end
+    end
+
+    if not rangeCheckerItemID and type(UnitCanAssist) == "function" then
+        local okCanAssist, canAssist = pcall(UnitCanAssist, "player", unitToken)
+        if okCanAssist and normalizeBooleanLike(canAssist) == true then
+            rangeCheckerItemID = OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID
+        end
+    end
+
+    if rangeCheckerItemID and C_Item and type(C_Item.IsItemInRange) == "function" then
+        local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, rangeCheckerItemID, unitToken)
+        if okItemRange then
+            local normalizedItemRange = normalizeBooleanLike(inItemRange)
+            if normalizedItemRange ~= nil then
+                return normalizedItemRange
+            end
+        end
+    end
+
+    return nil
+end
+
+local function isUnitOutOfRange(unitToken, providedInRange)
+    local inRange = getObservedUnitInRange(unitToken, providedInRange)
+    if inRange ~= nil then
+        return inRange == false
+    end
     return false
 end
 
--- Refresh target frame alpha from current range state.
-function UnitFrames:RefreshTargetRangeAlpha(frame, exists, previewMode)
-    if not frame or frame.unitToken ~= "target" then
+-- Refresh target/focus-family frame alpha from current range state.
+function UnitFrames:RefreshTargetRangeAlpha(frame, exists, previewMode, providedInRange)
+    if not frame or RANGE_ALPHA_UNITS[frame.unitToken] ~= true then
         return
     end
 
     local isOutOfRange = false
     if exists and not previewMode then
-        isOutOfRange = isUnitOutOfRange("target")
+        isOutOfRange = isUnitOutOfRange(frame.unitToken, providedInRange)
     end
 
     frame:SetAlpha(isOutOfRange and TARGET_OUT_OF_RANGE_ALPHA or 1)
+end
+
+-- Refresh every target/focus-style frame that uses range alpha.
+function UnitFrames:RefreshObservedRangeAlphas()
+    if not self.dataHandle then
+        return
+    end
+
+    local profile = self.dataHandle:GetProfile()
+    local previewMode = (profile and profile.testMode == true) or self.editModeActive
+    for i = 1, #FRAME_ORDER do
+        local unitToken = FRAME_ORDER[i]
+        if RANGE_ALPHA_UNITS[unitToken] == true then
+            local frame = self.frames and self.frames[unitToken] or nil
+            if frame then
+                self:RefreshTargetRangeAlpha(frame, UnitExists(unitToken), previewMode)
+            end
+        end
+    end
+end
+
+-- Attach the lightweight range poll used by target/focus-style frames.
+function UnitFrames:EnsureObservedRangeOnUpdate(frame)
+    if not frame or RANGE_ALPHA_UNITS[frame.unitToken] ~= true or frame._mummuObservedRangeOnUpdateHooked == true then
+        return
+    end
+
+    frame._mummuObservedRangeOnUpdateHooked = true
+    frame._mummuObservedRangeElapsed = 0
+    frame:HookScript("OnUpdate", function(observedFrame, elapsed)
+        if not observedFrame:IsShown() then
+            return
+        end
+
+        observedFrame._mummuObservedRangeElapsed = (observedFrame._mummuObservedRangeElapsed or 0) + (elapsed or 0)
+        if observedFrame._mummuObservedRangeElapsed < TARGET_RANGE_POLL_INTERVAL then
+            return
+        end
+        observedFrame._mummuObservedRangeElapsed = 0
+
+        if not self or not self.dataHandle then
+            return
+        end
+
+        local profile = self.dataHandle:GetProfile()
+        local previewMode = (profile and profile.testMode == true) or self.editModeActive
+        self:RefreshTargetRangeAlpha(observedFrame, UnitExists(observedFrame.unitToken), previewMode)
+    end)
 end
 
 -- Set status bar value safe.
@@ -1592,14 +1689,10 @@ end
 
 -- Handle player movement updates.
 function UnitFrames:OnPlayerMovement()
-    local frame = self.frames and self.frames.target or nil
-    if not frame or not self.dataHandle then
+    if not self.dataHandle then
         return
     end
-
-    local profile = self.dataHandle:GetProfile()
-    local previewMode = (profile and profile.testMode == true) or self.editModeActive
-    self:RefreshTargetRangeAlpha(frame, UnitExists("target"), previewMode)
+    self:RefreshObservedRangeAlphas()
 end
 
 -- Refresh player breath ticker state.
@@ -1971,45 +2064,29 @@ end
 -- Create target frame.
 function UnitFrames:CreateTargetFrame()
     local frame = self:CreateUnitFrame("target")
-    if frame and frame._mummuTargetRangeOnUpdateHooked ~= true then
-        frame._mummuTargetRangeOnUpdateHooked = true
-        frame._mummuTargetRangeElapsed = 0
-        frame:HookScript("OnUpdate", function(targetFrame, elapsed)
-            if not targetFrame:IsShown() then
-                return
-            end
-
-            targetFrame._mummuTargetRangeElapsed = (targetFrame._mummuTargetRangeElapsed or 0) + (elapsed or 0)
-            if targetFrame._mummuTargetRangeElapsed < 0.2 then
-                return
-            end
-            targetFrame._mummuTargetRangeElapsed = 0
-
-            if not self or not self.dataHandle then
-                return
-            end
-
-            local profile = self.dataHandle:GetProfile()
-            local previewMode = (profile and profile.testMode == true) or self.editModeActive
-            self:RefreshTargetRangeAlpha(targetFrame, UnitExists("target"), previewMode)
-        end)
-    end
+    self:EnsureObservedRangeOnUpdate(frame)
     return frame
 end
 
 -- Create target target frame.
 function UnitFrames:CreateTargetTargetFrame()
-    return self:CreateUnitFrame("targettarget")
+    local frame = self:CreateUnitFrame("targettarget")
+    self:EnsureObservedRangeOnUpdate(frame)
+    return frame
 end
 
 -- Create focus frame.
 function UnitFrames:CreateFocusFrame()
-    return self:CreateUnitFrame("focus")
+    local frame = self:CreateUnitFrame("focus")
+    self:EnsureObservedRangeOnUpdate(frame)
+    return frame
 end
 
 -- Create focus target frame.
 function UnitFrames:CreateFocusTargetFrame()
-    return self:CreateUnitFrame("focustarget")
+    local frame = self:CreateUnitFrame("focustarget")
+    self:EnsureObservedRangeOnUpdate(frame)
+    return frame
 end
 
 -- Return blizzard unit frame.
@@ -3750,7 +3827,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         local okHealthText, formattedHealthText = pcall(string.format, "%.0f%%", healthPercent)
         frame.HealthText:SetText(okHealthText and formattedHealthText or "0%")
 
-        if unitToken == "target" then
+        if RANGE_ALPHA_UNITS[unitToken] == true then
             self:RefreshTargetRangeAlpha(frame, exists, previewMode)
         end
     end

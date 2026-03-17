@@ -136,21 +136,41 @@ local function computePercent(value, maxValue)
     return (value / maxValue) * 100
 end
 
+-- Return whether a value is one of WoW's protected secret-number payloads.
+local function isSecretNumericValue(value)
+    if type(value) ~= "number" or type(issecretvalue) ~= "function" then
+        return false
+    end
+
+    local okSecret, isSecret = pcall(issecretvalue, value)
+    return okSecret and isSecret == true
+end
+
 -- Apply a clamped value/range pair to a status bar safely.
 local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     if not statusBar then
         return
     end
 
-    local resolvedMax = getSafeNumericValue(maxValue, 1) or 1
-    if resolvedMax <= 0 then
-        resolvedMax = 1
+    local maxIsSecret = isSecretNumericValue(maxValue)
+    local currentIsSecret = isSecretNumericValue(currentValue)
+
+    local resolvedMax = maxValue
+    if not maxIsSecret then
+        resolvedMax = getSafeNumericValue(maxValue, 1) or 1
+        if resolvedMax <= 0 then
+            resolvedMax = 1
+        end
     end
-    local resolvedCurrent = getSafeNumericValue(currentValue, 0) or 0
-    if resolvedCurrent < 0 then
-        resolvedCurrent = 0
-    elseif resolvedCurrent > resolvedMax then
-        resolvedCurrent = resolvedMax
+
+    local resolvedCurrent = currentValue
+    if not currentIsSecret then
+        resolvedCurrent = getSafeNumericValue(currentValue, 0) or 0
+        if resolvedCurrent < 0 then
+            resolvedCurrent = 0
+        elseif not maxIsSecret and resolvedCurrent > resolvedMax then
+            resolvedCurrent = resolvedMax
+        end
     end
 
     local okRange = pcall(statusBar.SetMinMaxValues, statusBar, 0, resolvedMax)
@@ -281,7 +301,7 @@ local function isInRaidCategory(category)
     return false
 end
 
-local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode)
+local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode, inRangeState)
     if previewMode or not exists then
         return 1
     end
@@ -290,14 +310,14 @@ local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previ
         return OFFLINE_FRAME_ALPHA
     end
 
-    if Util:IsGroupUnitOutOfRange(unitToken) then
+    if Util:IsGroupUnitOutOfRange(unitToken, inRangeState) then
         return OUT_OF_RANGE_ALPHA
     end
 
     return 1
 end
 
-local function refreshRaidMemberRangeState(frame, unitToken, previewMode)
+local function refreshRaidMemberRangeState(frame, unitToken, previewMode, inRangeState)
     if not frame then
         return false
     end
@@ -308,7 +328,7 @@ local function refreshRaidMemberRangeState(frame, unitToken, previewMode)
         isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
     end
 
-    frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode))
+    frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode, inRangeState))
     return true
 end
 
@@ -1040,7 +1060,9 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         end
         health = UnitHealth(unitToken) or 0
         maxHealth = UnitHealthMax(unitToken) or 1
-        absorb = type(UnitGetTotalAbsorbs) == "function" and (UnitGetTotalAbsorbs(unitToken) or 0) or 0
+        if type(UnitGetTotalAbsorbs) == "function" then
+            absorb = getSafeNumericValue(UnitGetTotalAbsorbs(unitToken), 0) or 0
+        end
     end
 
     if refreshVitals then
@@ -1072,9 +1094,10 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         end
         setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
 
-        local shouldShowAbsorb = previewMode and absorb > 0 or (exists and isConnected and absorb > 0)
+        local absorbForBar = getSafeNumericValue(absorb, 0) or 0
+        local shouldShowAbsorb = (previewMode or (exists and isConnected)) and absorbForBar > 0
         if shouldShowAbsorb then
-            setStatusBarValueSafe(frame.AbsorbOverlayBar, absorb, maxHealth)
+            setStatusBarValueSafe(frame.AbsorbOverlayBar, absorbForBar, maxHealth)
             frame.AbsorbOverlayFrame:Show()
             frame.AbsorbOverlayBar:Show()
         else
@@ -1355,7 +1378,7 @@ function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions
 end
 
 -- Refresh only the connection/range alpha for the currently displayed raid frame.
-function RaidFrames:RefreshDisplayedUnitRangeState(unitToken)
+function RaidFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
@@ -1397,11 +1420,11 @@ function RaidFrames:RefreshDisplayedUnitRangeState(unitToken)
         return false
     end
 
-    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit)
+    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState)
 end
 
 -- Refresh only the connection/range alpha for a known mapped raid frame.
-function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
+function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
@@ -1424,7 +1447,7 @@ function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
     end
 
     local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
-    return refreshRaidMemberRangeState(frame, displayedUnit, false)
+    return refreshRaidMemberRangeState(frame, displayedUnit, false, inRangeState)
 end
 
 -- Refresh alpha-only range state for every currently displayed live raid frame.

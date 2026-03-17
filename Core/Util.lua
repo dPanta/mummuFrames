@@ -201,16 +201,21 @@ function Util:GetUnitGUIDSafe(unitToken)
 end
 
 -- Return whether a party or raid unit should be considered out of range.
--- Unknown range states are treated as in range to avoid false dimming, and we
--- intentionally avoid CheckInteractDistance because its interact buckets do not
--- match UnitInRange's group-frame semantics.
-function Util:IsGroupUnitOutOfRange(unitToken)
+-- Trust UnitInRange's primary result when it resolves cleanly; some clients
+-- report inconsistent secondary "checked range" flags for valid group units.
+-- Unknown range states are still treated as in range to avoid false dimming.
+function Util:IsGroupUnitOutOfRange(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
         return false
     end
 
     if type(UnitExists) == "function" and not UnitExists(unitToken) then
         return false
+    end
+
+    local normalizedProvidedInRange = normalizeBooleanLike(providedInRange)
+    if normalizedProvidedInRange ~= nil then
+        return normalizedProvidedInRange == false
     end
 
     if type(UnitInRange) ~= "function" then
@@ -222,6 +227,11 @@ function Util:IsGroupUnitOutOfRange(unitToken)
         return false
     end
 
+    local normalizedInRange = normalizeBooleanLike(inRange)
+    if normalizedInRange ~= nil then
+        return normalizedInRange == false
+    end
+
     if checkedRange ~= nil then
         local canCheckRange = self:SafeBoolean(checkedRange, true)
         if not canCheckRange then
@@ -229,7 +239,7 @@ function Util:IsGroupUnitOutOfRange(unitToken)
         end
     end
 
-    return not self:SafeBoolean(inRange, true)
+    return false
 end
 
 -- Format a number using Blizzard formatting, then fall back to compact suffixes.

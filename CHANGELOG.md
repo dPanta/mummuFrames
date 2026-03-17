@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.1.0 - 2026-03-17
+- Fixed raid frame health and absorb handling under Midnight secret values.
+- Restored out-of-range fading for party, raid, target, targettarget, focus, and focustarget.
+- Bumped addon metadata to `2.1.0`.
+
 ## 2.0.3 - 2026-03-16
 - Shortened the Profiles page activate button text so it fits cleanly in the config UI.
 - Localized the remaining profile and configuration strings across non-English locale files.

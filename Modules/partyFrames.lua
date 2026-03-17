@@ -360,7 +360,7 @@ local function hasIncomingSummonPending(unitToken)
     return false
 end
 
-local function resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode)
+local function resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode, inRangeState)
     if previewMode or testMode or not exists then
         return 1
     end
@@ -369,14 +369,14 @@ local function resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, prev
         return OFFLINE_FRAME_ALPHA
     end
 
-    if Util:IsGroupUnitOutOfRange(unitToken) then
+    if Util:IsGroupUnitOutOfRange(unitToken, inRangeState) then
         return OUT_OF_RANGE_ALPHA
     end
 
     return 1
 end
 
-local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testMode)
+local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testMode, inRangeState)
     if not frame then
         return false
     end
@@ -387,7 +387,7 @@ local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testM
         isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
     end
 
-    frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode))
+    frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode, inRangeState))
     return true
 end
 
@@ -1359,7 +1359,7 @@ function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOption
 end
 
 -- Refresh only the connection/range alpha for the currently displayed party frame.
-function PartyFrames:RefreshDisplayedUnitRangeState(unitToken)
+function PartyFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
@@ -1401,11 +1401,11 @@ function PartyFrames:RefreshDisplayedUnitRangeState(unitToken)
         return false
     end
 
-    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit)
+    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState)
 end
 
 -- Refresh only the connection/range alpha for a known mapped party frame.
-function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
+function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
@@ -1428,7 +1428,7 @@ function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken)
     end
 
     local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
-    return refreshPartyMemberRangeState(frame, displayedUnit, false, false)
+    return refreshPartyMemberRangeState(frame, displayedUnit, false, false, inRangeState)
 end
 
 -- Refresh only the curated spell-target warning highlight for the displayed party frame.
