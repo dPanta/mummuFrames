@@ -1959,52 +1959,6 @@ local function getAuraDataByInstanceID(unitToken, auraInstanceID)
     return nil
 end
 
--- Find one aura by spell name using whichever aura API the client exposes.
-local function getAuraDataBySpellName(unitToken, spellName, filter)
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return nil
-    end
-    if type(spellName) ~= "string" or spellName == "" then
-        return nil
-    end
-
-    if C_UnitAuras and type(C_UnitAuras.GetAuraDataBySpellName) == "function" then
-        local ok, auraData = pcall(C_UnitAuras.GetAuraDataBySpellName, unitToken, spellName, filter)
-        if ok and type(auraData) == "table" then
-            return auraData
-        end
-    end
-
-    if AuraUtil and type(AuraUtil.FindAuraByName) == "function" then
-        local ok, auraData = pcall(AuraUtil.FindAuraByName, spellName, unitToken, filter)
-        if ok and type(auraData) == "table" then
-            return auraData
-        end
-    end
-
-    return nil
-end
-
--- Query a unit aura directly by spell ID when the API is available.
-local function getUnitAuraBySpellID(unitToken, spellID)
-    local normalizedSpellID = normalizeSpellID(spellID)
-    if not normalizedSpellID then
-        return nil
-    end
-    if type(unitToken) ~= "string" or unitToken == "" then
-        return nil
-    end
-    if not (C_UnitAuras and type(C_UnitAuras.GetUnitAuraBySpellID) == "function") then
-        return nil
-    end
-
-    local ok, auraData = pcall(C_UnitAuras.GetUnitAuraBySpellID, unitToken, normalizedSpellID)
-    if ok and type(auraData) == "table" then
-        return auraData
-    end
-    return nil
-end
-
 -- Ask AuraSafety whether the indexed aura is hidden behind secret restrictions.
 isAuraIndexSecret = function(unitToken, index, filter)
     if AuraSafety and type(AuraSafety.IsAuraIndexSecret) == "function" then
@@ -2262,93 +2216,192 @@ local function isAuraSelfCastOnUnit(unitToken, auraData)
     return isSameUnit == true
 end
 
--- Scan a unit for the first tracked aura matching any spell ID in the list.
-local function findTrackedAuraBySpellIDs(unitToken, filter, trackedSpellIDs, requirePlayerOwner)
-    if type(trackedSpellIDs) ~= "table" or #trackedSpellIDs == 0 then
-        return nil
+local function shouldTrustDirectTrackedSpellMatch(trackedSpellInfo)
+    return type(trackedSpellInfo) == "table" and trackedSpellInfo.preferDirectSpellIDMatch == true
+end
+
+local function alwaysMatchTrackedAuraRequest()
+    return true
+end
+
+local function appendTrackedAuraRequestIndex(indexesByKey, key, requestIndex)
+    if key == nil then
+        return
     end
 
-    local trackedSpellIDSet = {}
-    for spellIndex = 1, #trackedSpellIDs do
-        local trackedSpellID = trackedSpellIDs[spellIndex]
-        if trackedSpellID then
-            trackedSpellIDSet[trackedSpellID] = true
+    local requestIndexes = indexesByKey[key]
+    if type(requestIndexes) ~= "table" then
+        requestIndexes = {}
+        indexesByKey[key] = requestIndexes
+    end
+    requestIndexes[#requestIndexes + 1] = requestIndex
+end
+
+local function buildTrackedAuraRequests(allowedSpells)
+    local requests = {}
+    local requestIndexesByName = {}
+    local requestIndexesBySpellID = {}
+
+    if type(allowedSpells) ~= "table" then
+        return requests, requestIndexesByName, requestIndexesBySpellID
+    end
+
+    for spellIndex = 1, #allowedSpells do
+        local spellName = allowedSpells[spellIndex]
+        if type(spellName) == "string" and spellName ~= "" then
+            local trackedSpellInfo = _trackerSpellInfoCache[spellName]
+            local requestIndex = #requests + 1
+            local request = {
+                spellName = spellName,
+                trackedSpellInfo = trackedSpellInfo,
+                resolvedName = trackedSpellInfo and trackedSpellInfo.name or spellName,
+                preferDirectSpellIDMatch = shouldTrustDirectTrackedSpellMatch(trackedSpellInfo),
+                matchedAura = nil,
+            }
+            requests[requestIndex] = request
+
+            appendTrackedAuraRequestIndex(requestIndexesByName, spellName, requestIndex)
+            if request.resolvedName ~= spellName then
+                appendTrackedAuraRequestIndex(requestIndexesByName, request.resolvedName, requestIndex)
+            end
+
+            local trackedSpellIDs = trackedSpellInfo and trackedSpellInfo.spellIDs or nil
+            if type(trackedSpellIDs) == "table" then
+                local seenSpellIDs = {}
+                for trackedIndex = 1, #trackedSpellIDs do
+                    local trackedSpellID = normalizeSpellID(trackedSpellIDs[trackedIndex])
+                    if trackedSpellID and seenSpellIDs[trackedSpellID] ~= true then
+                        seenSpellIDs[trackedSpellID] = true
+                        appendTrackedAuraRequestIndex(requestIndexesBySpellID, trackedSpellID, requestIndex)
+                    end
+                end
+            end
         end
     end
 
+    return requests, requestIndexesByName, requestIndexesBySpellID
+end
+
+local function assignTrackedAuraRequests(requests, requestIndexes, auraData, canMatchRequest)
+    if type(requestIndexes) ~= "table" then
+        return 0
+    end
+
+    local matchedCount = 0
+    for index = 1, #requestIndexes do
+        local request = requests[requestIndexes[index]]
+        if request and not request.matchedAura and canMatchRequest(request) then
+            request.matchedAura = auraData
+            matchedCount = matchedCount + 1
+        end
+    end
+
+    return matchedCount
+end
+
+local function collectTrackedAuraMatchesForFilter(unitToken, filter, requests, requestIndexesByName, requestIndexesBySpellID, resolveNamePredicate, resolveSpellPredicate)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+
+    local totalRequests = #requests
+    if totalRequests == 0 then
+        return
+    end
+
+    local matchedCount = 0
+    for requestIndex = 1, totalRequests do
+        if requests[requestIndex] and requests[requestIndex].matchedAura then
+            matchedCount = matchedCount + 1
+        end
+    end
     for index = 1, MAX_AURA_SCAN do
+        if matchedCount >= totalRequests then
+            break
+        end
+
         if not isAuraIndexSecret(unitToken, index, filter) then
             local auraData = getAuraDataByIndex(unitToken, index, filter)
             if not auraData then
                 break
             end
 
-            if requirePlayerOwner ~= true or isTrackerAuraOwnedByPlayer(auraData) then
-                local auraSpellID = normalizeSpellID(auraData.spellId)
-                if auraSpellID and trackedSpellIDSet[auraSpellID] == true then
-                    return auraData
-                end
+            local auraName = type(auraData.name) == "string" and auraData.name or nil
+            if auraName then
+                matchedCount = matchedCount + assignTrackedAuraRequests(
+                    requests,
+                    requestIndexesByName[auraName],
+                    auraData,
+                    resolveNamePredicate(auraData)
+                )
+            end
+
+            local auraSpellID = normalizeSpellID(auraData.spellId)
+            if auraSpellID then
+                matchedCount = matchedCount + assignTrackedAuraRequests(
+                    requests,
+                    requestIndexesBySpellID[auraSpellID],
+                    auraData,
+                    resolveSpellPredicate(auraData)
+                )
             end
         end
     end
-
-    return nil
 end
 
-local function shouldTrustDirectTrackedSpellMatch(trackedSpellInfo)
-    return type(trackedSpellInfo) == "table" and trackedSpellInfo.preferDirectSpellIDMatch == true
-end
-
--- Resolve the best tracked aura match for a spell name or its known spell IDs.
-local function findTrackedAura(unitToken, spellName, trackedSpellInfo)
-    local trackedSpellIDs = trackedSpellInfo and trackedSpellInfo.spellIDs or nil
-
-    local directPlayerNameAura = getAuraDataBySpellName(unitToken, spellName, TRACKER_PLAYER_HELPFUL_FILTER)
-    if directPlayerNameAura then
-        return directPlayerNameAura
+-- Resolve tracked group-buff matches without relying on direct spell-name or
+-- spell-ID aura APIs, which can be restricted while aura access is secret.
+local function collectTrackedAuraMatches(unitToken, allowedSpells)
+    local requests, requestIndexesByName, requestIndexesBySpellID = buildTrackedAuraRequests(allowedSpells)
+    if #requests == 0 then
+        return requests
     end
 
-    local playerFilteredScanMatch = findTrackedAuraBySpellIDs(
+    collectTrackedAuraMatchesForFilter(
         unitToken,
         TRACKER_PLAYER_HELPFUL_FILTER,
-        trackedSpellIDs,
-        false
+        requests,
+        requestIndexesByName,
+        requestIndexesBySpellID,
+        function()
+            return alwaysMatchTrackedAuraRequest
+        end,
+        function()
+            return alwaysMatchTrackedAuraRequest
+        end
     )
-    if playerFilteredScanMatch then
-        return playerFilteredScanMatch
-    end
 
-    if type(trackedSpellIDs) == "table" then
-        for spellIndex = 1, #trackedSpellIDs do
-            local directSpellIDAura = getUnitAuraBySpellID(unitToken, trackedSpellIDs[spellIndex])
-            if directSpellIDAura then
-                if isTrackerAuraOwnedByPlayer(directSpellIDAura) then
-                    return directSpellIDAura
+    collectTrackedAuraMatchesForFilter(
+        unitToken,
+        TRACKER_HELPFUL_FILTER,
+        requests,
+        requestIndexesByName,
+        requestIndexesBySpellID,
+        function(auraData)
+            local ownedByPlayer = isTrackerAuraOwnedByPlayer(auraData)
+            return function()
+                return ownedByPlayer
+            end
+        end,
+        function(auraData)
+            local ownedByPlayer = isTrackerAuraOwnedByPlayer(auraData)
+            local selfCastOnUnit = nil
+            return function(request)
+                if ownedByPlayer then
+                    return true
                 end
-
-                local selfCastOnUnit = isAuraSelfCastOnUnit(unitToken, directSpellIDAura)
-                if selfCastOnUnit == true then
-                    return directSpellIDAura
+                if request.preferDirectSpellIDMatch then
+                    return true
                 end
-
-                -- Midnight can still answer direct spellID lookups for curated
-                -- healer-buff families even when ownership metadata is missing.
-                -- Treat the explicit override-family lookup as authoritative so
-                -- spells like Renewing Mist, Atonement, and Prayer of Mending
-                -- behave consistently without touching the debuff pipeline.
-                if shouldTrustDirectTrackedSpellMatch(trackedSpellInfo) then
-                    return directSpellIDAura
+                if selfCastOnUnit == nil then
+                    selfCastOnUnit = isAuraSelfCastOnUnit(unitToken, auraData)
                 end
+                return selfCastOnUnit == true
             end
         end
-    end
+    )
 
-    local broadNameAura = getAuraDataBySpellName(unitToken, spellName, TRACKER_HELPFUL_FILTER)
-    if broadNameAura and isTrackerAuraOwnedByPlayer(broadNameAura) then
-        return broadNameAura
-    end
-
-    return findTrackedAuraBySpellIDs(unitToken, TRACKER_HELPFUL_FILTER, trackedSpellIDs, true)
+    return requests
 end
 
 -- ---------------------------------------------------------------------------
@@ -3187,13 +3240,15 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     local count     = 0
 
     if hasFilter then
-        for i = 1, #allowedSpells do
+        local trackedRequests = collectTrackedAuraMatches(unitToken, allowedSpells)
+        for i = 1, #trackedRequests do
             if count >= MAX_TRACKER_AURAS then
                 break
             end
-            local spellName = allowedSpells[i]
-            local cachedInfo = _trackerSpellInfoCache[spellName]
-            local found = findTrackedAura(unitToken, spellName, cachedInfo)
+            local request = trackedRequests[i]
+            local spellName = request and request.spellName or nil
+            local cachedInfo = request and request.trackedSpellInfo or nil
+            local found = request and request.matchedAura or nil
             if found then
                 count = count + 1
                 local element = ensureTrackerElement(frame, count)

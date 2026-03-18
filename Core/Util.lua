@@ -251,17 +251,8 @@ function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
         end
     end
 
-    -- Prefer the legacy global helper here. The C_Item variant can hit
-    -- protected-call taint on live unit range refreshes.
-    if type(IsItemInRange) == "function" then
-        local okItemRange, inItemRange = pcall(IsItemInRange, GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID, unitToken)
-        if okItemRange then
-            local normalizedItemRange = normalizeBooleanLike(inItemRange)
-            if normalizedItemRange ~= nil then
-                return normalizedItemRange
-            end
-        end
-    end
+    -- Midnight retail can still flag item range probes on party/raid units as a
+    -- protected action in combat, so group frames avoid IsItemInRange here.
 
     if type(CheckInteractDistance) == "function" then
         local okInteractRange, inInteractRange = pcall(CheckInteractDistance, unitToken, GROUP_UNIT_INTERACT_RANGE_INDEX)

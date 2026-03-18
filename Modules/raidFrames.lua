@@ -43,7 +43,7 @@ local MEMBER_REFRESH_VITALS_ONLY = {
 local MEMBER_REFRESH_AURAS_ONLY = {
     auras = true,
 }
-local RANGE_POLL_INTERVAL = 0.2
+local RANGE_POLL_INTERVAL = 0.5
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 

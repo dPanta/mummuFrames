@@ -5,6 +5,12 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.2.4 - 2026-03-18
+- Slowed the spell-target tracker ticker and the party/raid range fallback tickers to reduce constant combat polling.
+- Reworked tracked group-aura matching to use Midnight-safe one-pass aura scans instead of repeated direct spell-name and spell-ID queries.
+- Removed the party/raid item-range fallback that could trigger `ADDON_ACTION_BLOCKED` during live group range refreshes.
+- Bumped addon metadata to `2.2.4`.
+
 ## 2.2.3 - 2026-03-18
 - Switched the party-frame summon indicator to Blizzard's default pending-summon icon and stopped resizing it.
 - Bumped addon metadata to `2.2.3`.
@@ -52,11 +58,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Fixed a Lua scoping bug in the group debuff overlay helper that could call `isGroupAuraFilteredIn` before it was defined.
 - Removed the target-frame `CheckInteractDistance` fallback that could trigger `ADDON_ACTION_BLOCKED` during secure target changes.
 - Bumped addon metadata to `2.0.1`.
-
-## 2.0.0 - 2026-03-15
-- Refactored party and raid debuff tracking around a dedicated Midnight-safe `UNIT_AURA` cache built from `C_UnitAuras` slot scans and delta updates, instead of relying on hidden Blizzard compact-frame aura state.
-- Added configurable party and raid debuff icon rows, while keeping the regular unit-frame debuff strips dispel-agnostic.
-- Restored dispellable group-frame overlays for party and raid frames, including fallback handling for Midnight aura payloads that omit complete dispel metadata.
-- Hardened aura icon rendering against Retail secret-value taint by sanitizing icon textures, stack counts, and cooldown timing before they reach the UI.
-- Reworked aura tracking for Atonement and Prayer of Mending.
-- Cleaned up the new debuff pipeline comments and bumped addon metadata to `2.0.0`.

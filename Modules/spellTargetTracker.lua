@@ -351,7 +351,7 @@ function SpellTargetTracker:EnsureScanTicker()
         return
     end
 
-    self.scanTicker = C_Timer.NewTicker(0.05, function()
+    self.scanTicker = C_Timer.NewTicker(0.2, function()
         self:OnScanTick()
     end)
 end

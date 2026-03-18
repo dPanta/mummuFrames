@@ -57,7 +57,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_SPELL_TARGET_ONLY = {
     spellTarget = true,
 }
-local RANGE_POLL_INTERVAL = 0.2
+local RANGE_POLL_INTERVAL = 0.5
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
