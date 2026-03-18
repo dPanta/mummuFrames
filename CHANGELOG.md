@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.2.1 - 2026-03-18
+- Filtered shared group-unit event dispatch so party and raid frames do less unnecessary live refresh work.
+- Fixed raid-frame absorb overlays so shields render from the current health edge and clamp to missing health.
+- Bumped addon metadata to `2.2.1`.
+
 ## 2.2.0 - 2026-03-18
 - Moved bundled default-profile migration work out of hot runtime getters to reduce combat stutter.
 - Fixed combat `ADDON_ACTION_BLOCKED` taint from target and range probes by replacing the unsafe item-range call path.
@@ -56,8 +61,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Restored stable GUID-based party spell-target tracking and `UnitTokenFromGUID` reacquisition.
 - Hardened party spell-target source/target checks against Retail secret booleans and clarified the feature's curated Midnight scope.
 - Bumped addon metadata to `1.8.4`.
-
-## 1.8.3 - 2026-03-13
-- Fixed target, party, and raid out-of-range dimming.
-- Hardened range checks against Retail secret booleans and added a lightweight live refresh fallback.
-- Bumped addon metadata to `1.8.3`.

@@ -2,7 +2,7 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 2.2.0
+## Version: 2.2.1
 ## IconTexture: Interface\AddOns\mummuFrames\Icons\mummuF.png
 ## SavedVariables: mummuFramesDB
 ## OptionalDeps: LibSharedMedia-3.0, SharedMedia

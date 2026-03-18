@@ -183,6 +183,69 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     end
 end
 
+local function hideRaidAbsorbOverlay(frame)
+    if not frame then
+        return
+    end
+    if frame.AbsorbOverlayBar then
+        frame.AbsorbOverlayBar:SetMinMaxValues(0, 1)
+        frame.AbsorbOverlayBar:SetValue(0)
+        frame.AbsorbOverlayBar:Hide()
+    end
+    if frame.AbsorbOverlayFrame then
+        frame.AbsorbOverlayFrame:Hide()
+    end
+end
+
+local function refreshRaidAbsorbOverlay(frame, healthValue, maxHealthValue, absorbValue)
+    if not frame or not frame.HealthBar or not frame.AbsorbOverlayFrame or not frame.AbsorbOverlayBar then
+        return hideRaidAbsorbOverlay(frame)
+    end
+
+    local maxHealth = getSafeNumericValue(maxHealthValue, 0) or 0
+    if maxHealth <= 0 then
+        return hideRaidAbsorbOverlay(frame)
+    end
+
+    local health = Util:Clamp(getSafeNumericValue(healthValue, 0) or 0, 0, maxHealth)
+    local absorb = math.max(0, getSafeNumericValue(absorbValue, 0) or 0)
+    local missingHealth = math.max(0, maxHealth - health)
+    local visibleAbsorb = math.min(absorb, missingHealth)
+    if visibleAbsorb <= 0 then
+        return hideRaidAbsorbOverlay(frame)
+    end
+
+    local healthBarWidth = tonumber(frame.HealthBar:GetWidth()) or 0
+    if healthBarWidth <= 0 then
+        return hideRaidAbsorbOverlay(frame)
+    end
+
+    local healthOffset = healthBarWidth * (health / maxHealth)
+    local absorbWidth = healthBarWidth * (visibleAbsorb / maxHealth)
+    if Style:IsPixelPerfectEnabled() then
+        local pixelSize = Style:GetPixelSize() or 1
+        healthOffset = Style:Snap(healthOffset)
+        absorbWidth = math.max(pixelSize, Style:Snap(absorbWidth))
+    else
+        healthOffset = math.floor(healthOffset + 0.5)
+        absorbWidth = math.max(1, math.floor(absorbWidth + 0.5))
+    end
+    absorbWidth = math.min(absorbWidth, math.max(0, healthBarWidth - healthOffset))
+    if absorbWidth <= 0 then
+        return hideRaidAbsorbOverlay(frame)
+    end
+
+    frame.AbsorbOverlayFrame:ClearAllPoints()
+    frame.AbsorbOverlayFrame:SetPoint("TOPLEFT", frame.HealthBar, "TOPLEFT", healthOffset, 0)
+    frame.AbsorbOverlayFrame:SetPoint("BOTTOMLEFT", frame.HealthBar, "BOTTOMLEFT", healthOffset, 0)
+    frame.AbsorbOverlayFrame:SetWidth(absorbWidth)
+
+    frame.AbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.AbsorbOverlayBar:SetValue(1)
+    frame.AbsorbOverlayFrame:Show()
+    frame.AbsorbOverlayBar:Show()
+end
+
 -- Return a unit GUID without propagating UnitGUID failures.
 local function getUnitGUIDSafe(unitToken)
     if Util and type(Util.GetUnitGUIDSafe) == "function" then
@@ -960,6 +1023,8 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame.AbsorbOverlayBar:SetAllPoints(frame.AbsorbOverlayFrame)
     frame.AbsorbOverlayBar:SetFrameStrata(frame.AbsorbOverlayFrame:GetFrameStrata())
     frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.AbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.AbsorbOverlayBar:SetValue(0)
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
@@ -1038,6 +1103,8 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig, runtimeState)
 
     frame.DispelOverlay:SetAllPoints(frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.AbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.AbsorbOverlayBar:SetValue(0)
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     return finishPerfCounters(self, "ApplyMemberStyle", perfStartedAt, true)
@@ -1195,12 +1262,9 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         local absorbForBar = getSafeNumericValue(absorb, 0) or 0
         local shouldShowAbsorb = (previewMode or (exists and isConnected)) and absorbForBar > 0
         if shouldShowAbsorb then
-            setStatusBarValueSafe(frame.AbsorbOverlayBar, absorbForBar, maxHealth)
-            frame.AbsorbOverlayFrame:Show()
-            frame.AbsorbOverlayBar:Show()
+            refreshRaidAbsorbOverlay(frame, health, maxHealth, absorbForBar)
         else
-            frame.AbsorbOverlayBar:Hide()
-            frame.AbsorbOverlayFrame:Hide()
+            hideRaidAbsorbOverlay(frame)
         end
         if frame.LeaderIcon then
             if showLeaderIcon and type(frame.LeaderIcon.SetAtlas) == "function" then

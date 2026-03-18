@@ -131,6 +131,28 @@ local GROUP_EVENT_NAMES = {
     "INCOMING_SUMMON_CHANGED",
 }
 
+local UNIT_FILTERED_GROUP_EVENT_NAMES = {
+    UNIT_HEALTH = true,
+    UNIT_MAXHEALTH = true,
+    UNIT_POWER_UPDATE = true,
+    UNIT_MAXPOWER = true,
+    UNIT_DISPLAYPOWER = true,
+    UNIT_NAME_UPDATE = true,
+    UNIT_CONNECTION = true,
+    UNIT_IN_RANGE_UPDATE = true,
+    UNIT_FLAGS = true,
+    UNIT_ABSORB_AMOUNT_CHANGED = true,
+    UNIT_HEAL_ABSORB_AMOUNT_CHANGED = true,
+    INCOMING_SUMMON_CHANGED = true,
+}
+
+local RAID_IGNORED_VITALS_EVENT_NAMES = {
+    UNIT_POWER_UPDATE = true,
+    UNIT_MAXPOWER = true,
+    UNIT_DISPLAYPOWER = true,
+    INCOMING_SUMMON_CHANGED = true,
+}
+
 -- All group unit tokens: player + party1-4 + raid1-40.
 local GROUP_UNIT_TOKENS = {
     "player",
@@ -141,6 +163,33 @@ local GROUP_UNIT_TOKENS = {
 }
 for raidIndex = 1, 40 do
     GROUP_UNIT_TOKENS[#GROUP_UNIT_TOKENS + 1] = "raid" .. tostring(raidIndex)
+end
+
+local function tryRegisterFilteredGroupEvent(frame, eventName, unpackGroupUnits)
+    if
+        type(frame) ~= "table"
+        or type(eventName) ~= "string"
+        or UNIT_FILTERED_GROUP_EVENT_NAMES[eventName] ~= true
+        or type(frame.RegisterUnitEvent) ~= "function"
+        or type(unpackGroupUnits) ~= "function"
+    then
+        return false
+    end
+
+    local okRegistered = pcall(frame.RegisterUnitEvent, frame, eventName, unpackGroupUnits(GROUP_UNIT_TOKENS))
+    return okRegistered == true
+end
+
+local function shouldSkipGroupVitalsRefresh(ownerKey, eventName)
+    if eventName == "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" then
+        return true
+    end
+
+    if ownerKey == "raid" and RAID_IGNORED_VITALS_EVENT_NAMES[eventName] == true then
+        return true
+    end
+
+    return false
 end
 
 -- Refresh descriptor passed to frame modules for non-aura unit events: only
@@ -3574,12 +3623,13 @@ function AuraHandle:ResolveGroupDispatchTarget(normalizedUnit, eventName)
     end
 
     local effectiveUnit = resolvedUnit or normalizedUnit
-    local module = getModuleForOwner(addon, ownerKey or inferOwnerForUnit(effectiveUnit))
+    local effectiveOwnerKey = ownerKey or inferOwnerForUnit(effectiveUnit)
+    local module = getModuleForOwner(addon, effectiveOwnerKey)
     if not module then
-        return nil, nil, nil
+        return nil, nil, nil, nil
     end
 
-    return frame, effectiveUnit, module
+    return frame, effectiveUnit, module, effectiveOwnerKey
 end
 
 -- Routes a unit event to the appropriate mummu module for the unit's owner.
@@ -3637,7 +3687,7 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
-    local frame, resolvedUnit, module = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
+    local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
     if not frame or not module then
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
@@ -3658,6 +3708,10 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
             module:RefreshDisplayedUnitRangeState(resolvedUnit, normalizedInRange)
             return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
+    end
+
+    if shouldSkipGroupVitalsRefresh(ownerKey, eventName) then
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     -- Non-UNIT_AURA events: forward a vitals-only refresh to the owning module.
@@ -3685,15 +3739,8 @@ function AuraHandle:EnsureGroupEventDispatcher()
     for i = 1, #GROUP_EVENT_NAMES do
         local eventName = GROUP_EVENT_NAMES[i]
         if eventName ~= "UNIT_AURA" then
-            if eventName == "UNIT_IN_RANGE_UPDATE"
-                and type(frame.RegisterUnitEvent) == "function"
-                and type(unpackGroupUnits) == "function"
-            then
-                -- Range updates are only reliable when filtered to explicit
-                -- group unit tokens; plain RegisterEvent does not consistently
-                -- surface usable group range transitions.
-                frame:RegisterUnitEvent(eventName, unpackGroupUnits(GROUP_UNIT_TOKENS))
-            else
+            local registeredWithUnitFilter = tryRegisterFilteredGroupEvent(frame, eventName, unpackGroupUnits)
+            if not registeredWithUnitFilter then
                 frame:RegisterEvent(eventName)
             end
         end
