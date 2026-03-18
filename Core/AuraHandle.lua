@@ -165,18 +165,34 @@ for raidIndex = 1, 40 do
     GROUP_UNIT_TOKENS[#GROUP_UNIT_TOKENS + 1] = "raid" .. tostring(raidIndex)
 end
 
-local function tryRegisterFilteredGroupEvent(frame, eventName, unpackGroupUnits)
+-- RegisterUnitEvent only tracks a small number of units per frame reliably,
+-- so group members are split into Blizzard-safe chunks instead of one large
+-- player/party/raid registration.
+local GROUP_EVENT_UNIT_CHUNKS = {
+    { "player" },
+    { "party1", "party2", "party3", "party4" },
+}
+for raidIndex = 1, 40, 4 do
+    local unitChunk = {}
+    for offset = 0, 3 do
+        unitChunk[#unitChunk + 1] = "raid" .. tostring(raidIndex + offset)
+    end
+    GROUP_EVENT_UNIT_CHUNKS[#GROUP_EVENT_UNIT_CHUNKS + 1] = unitChunk
+end
+
+local function tryRegisterFilteredGroupEvent(frame, eventName, unitTokens, unpackGroupUnits)
     if
         type(frame) ~= "table"
         or type(eventName) ~= "string"
         or UNIT_FILTERED_GROUP_EVENT_NAMES[eventName] ~= true
+        or type(unitTokens) ~= "table"
         or type(frame.RegisterUnitEvent) ~= "function"
         or type(unpackGroupUnits) ~= "function"
     then
         return false
     end
 
-    local okRegistered = pcall(frame.RegisterUnitEvent, frame, eventName, unpackGroupUnits(GROUP_UNIT_TOKENS))
+    local okRegistered = pcall(frame.RegisterUnitEvent, frame, eventName, unpackGroupUnits(unitTokens))
     return okRegistered == true
 end
 
@@ -271,7 +287,7 @@ local cacheBootstrapToken = 0
 
 -- Persistent WoW frames created at construction time.
 local cacheBootstrapFrame      = nil
-local groupDispatcherFrame     = nil
+local groupDispatcherFrames    = {}
 local unitAuraDispatcherFrames = {}
 local clearGroupDebuffState
 
@@ -3783,29 +3799,56 @@ end
 
 -- Creates the group-level event dispatcher frame for non-UNIT_AURA events.
 function AuraHandle:EnsureGroupEventDispatcher()
-    if groupDispatcherFrame or type(CreateFrame) ~= "function" then
+    if type(CreateFrame) ~= "function" then
+        return
+    end
+    if type(groupDispatcherFrames) == "table" and #groupDispatcherFrames > 0 then
         return
     end
 
-    local selfRef = self
-    local frame   = CreateFrame("Frame", "mummuFramesAuraGroupDispatcher")
+    local selfRef           = self
     local unpackGroupUnits = (table and table.unpack) or unpack
+    local fallbackFrame    = nil
+    local fallbackEvents   = {}
 
-    for i = 1, #GROUP_EVENT_NAMES do
-        local eventName = GROUP_EVENT_NAMES[i]
-        if eventName ~= "UNIT_AURA" then
-            local registeredWithUnitFilter = tryRegisterFilteredGroupEvent(frame, eventName, unpackGroupUnits)
-            if not registeredWithUnitFilter then
-                frame:RegisterEvent(eventName)
+    local function attachDispatcherScript(frame)
+        frame:SetScript("OnEvent", function(_, eventName, unitToken, eventPayload)
+            selfRef:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
+        end)
+    end
+
+    for chunkIndex = 1, #GROUP_EVENT_UNIT_CHUNKS do
+        local unitChunk = GROUP_EVENT_UNIT_CHUNKS[chunkIndex]
+        local frame     = CreateFrame("Frame")
+        local registeredAnyEvent = false
+
+        for eventIndex = 1, #GROUP_EVENT_NAMES do
+            local eventName = GROUP_EVENT_NAMES[eventIndex]
+            if eventName ~= "UNIT_AURA" then
+                local registeredWithUnitFilter = tryRegisterFilteredGroupEvent(frame, eventName, unitChunk, unpackGroupUnits)
+                if registeredWithUnitFilter then
+                    registeredAnyEvent = true
+                elseif fallbackEvents[eventName] ~= true then
+                    if type(fallbackFrame) ~= "table" then
+                        fallbackFrame = CreateFrame("Frame", "mummuFramesAuraGroupDispatcher")
+                        attachDispatcherScript(fallbackFrame)
+                    end
+                    fallbackFrame:RegisterEvent(eventName)
+                    fallbackEvents[eventName] = true
+                end
             end
+        end
+
+        if registeredAnyEvent then
+            attachDispatcherScript(frame)
+            groupDispatcherFrames[#groupDispatcherFrames + 1] = frame
         end
     end
 
-    frame:SetScript("OnEvent", function(_, eventName, unitToken, eventPayload)
-        selfRef:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
-    end)
+    if type(fallbackFrame) == "table" then
+        groupDispatcherFrames[#groupDispatcherFrames + 1] = fallbackFrame
+    end
 
-    groupDispatcherFrame = frame
     self:EnsureUnitAuraDispatchers()
 end
 

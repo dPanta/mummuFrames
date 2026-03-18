@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.2.5 - 2026-03-18
+- Fixed shared group-event health dispatch so party and raid frames refresh live healthbars correctly again during combat.
+- Bumped addon metadata to `2.2.5`.
+
 ## 2.2.4 - 2026-03-18
 - Slowed the spell-target tracker ticker and the party/raid range fallback tickers to reduce constant combat polling.
 - Reworked tracked group-aura matching to use Midnight-safe one-pass aura scans instead of repeated direct spell-name and spell-ID queries.
@@ -51,10 +55,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Added a one-time migration that copies legacy account-wide profiles into each existing character's local profile set while preserving that character's selected profile when possible.
 - Updated the Profiles page copy to explain the new per-character behavior and position export/import as the way to move layouts between characters.
 - Bumped addon metadata to `2.0.2`.
-
-## 2.0.1 - 2026-03-15
-- Fixed tracked priest buffs so `Atonement` and `Prayer of Mending` use the same explicit spellID-driven fallback path as `Renewing Mist`, including broader `Prayer of Mending` aura alias coverage.
-- Hardened tracked-buff matching against Midnight ownership metadata gaps by trusting direct override-family spellID hits without touching the dedicated debuff cache.
-- Fixed a Lua scoping bug in the group debuff overlay helper that could call `isGroupAuraFilteredIn` before it was defined.
-- Removed the target-frame `CheckInteractDistance` fallback that could trigger `ADDON_ACTION_BLOCKED` during secure target changes.
-- Bumped addon metadata to `2.0.1`.
