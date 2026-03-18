@@ -63,7 +63,7 @@ local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
 local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
-local SUMMON_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\summon.png"
+local SUMMON_PENDING_ICON_ATLAS = "RaidFrame-Icon-SummonPending"
 local ROLE_ICON_ATLAS_BY_ROLE = {
     TANK = "UI-LFG-RoleIcon-Tank",
     HEALER = "UI-LFG-RoleIcon-Healer",
@@ -807,7 +807,9 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.SummonOverlay:SetFrameStrata(frame:GetFrameStrata())
     frame.SummonOverlay:SetFrameLevel(frame:GetFrameLevel() + 39)
     frame.SummonIcon = frame.SummonOverlay:CreateTexture(nil, "OVERLAY")
-    frame.SummonIcon:SetTexture(SUMMON_ICON_TEXTURE)
+    if type(frame.SummonIcon.SetAtlas) == "function" then
+        frame.SummonIcon:SetAtlas(SUMMON_PENDING_ICON_ATLAS, true)
+    end
     frame.SummonIcon:SetPoint("CENTER", frame, "CENTER", 0, 0)
     frame.SummonIcon:SetAlpha(0.95)
     frame.SummonIcon:Hide()
@@ -1875,13 +1877,6 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRole
             disconnectedIconSize = Style:Snap(disconnectedIconSize)
         end
         frame.DisconnectedIcon:SetSize(disconnectedIconSize, disconnectedIconSize)
-    end
-    if frame.SummonIcon then
-        local summonIconSize = math.max(12, math.floor((height * 0.6) + 0.5))
-        if pixelPerfect then
-            summonIconSize = Style:Snap(summonIconSize)
-        end
-        frame.SummonIcon:SetSize(summonIconSize, summonIconSize)
     end
     return true
 end

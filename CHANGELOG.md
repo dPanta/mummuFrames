@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.2.3 - 2026-03-18
+- Switched the party-frame summon indicator to Blizzard's default pending-summon icon and stopped resizing it.
+- Bumped addon metadata to `2.2.3`.
+
 ## 2.2.1 - 2026-03-18
 - Filtered shared group-unit event dispatch so party and raid frames do less unnecessary live refresh work.
 - Fixed raid-frame absorb overlays so shields render from the current health edge and clamp to missing health.
@@ -56,8 +60,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Hardened aura icon rendering against Retail secret-value taint by sanitizing icon textures, stack counts, and cooldown timing before they reach the UI.
 - Reworked aura tracking for Atonement and Prayer of Mending.
 - Cleaned up the new debuff pipeline comments and bumped addon metadata to `2.0.0`.
-
-## 1.8.4 - 2026-03-14
-- Restored stable GUID-based party spell-target tracking and `UnitTokenFromGUID` reacquisition.
-- Hardened party spell-target source/target checks against Retail secret booleans and clarified the feature's curated Midnight scope.
-- Bumped addon metadata to `1.8.4`.
