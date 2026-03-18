@@ -40,7 +40,6 @@ local PartyFrames = ns.Object:Extend()
 -- Texture and visual constants
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local MAX_PARTY_TEST_FRAMES = 5  -- Maximum frames in test/solo preview mode
-local DISPEL_OVERLAY_ALPHA = 0.2
 
 -- Test mode unit lists for frame preview
 local TEST_UNITS_WITH_PLAYER = { "player", "party1", "party2", "party3", "party4" }
@@ -496,6 +495,8 @@ function PartyFrames:Constructor()
     self._displayedUnitByGUID = {}
     self._combatRemapRetryAt = 0
     self._lastLiveUnitsToShow = nil
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 end
 
 -- Initialize party frames module. Called by addon before OnEnable.
@@ -921,15 +922,109 @@ function PartyFrames:SetBlizzardPartyFramesHidden(shouldHide)
 end
 
 -- Apply Blizzard party frame visibility by config.
-function PartyFrames:ApplyBlizzardPartyFrameVisibility()
-    if not self.dataHandle then
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
         return
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local addonEnabled = profile and profile.enabled ~= false
-    local shouldHide = addonEnabled and partyConfig and partyConfig.hideBlizzardFrame == true
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
+
+local function buildPartyRuntimeState(self, profileOverride, partyConfigOverride)
+    if not self or not self.dataHandle then
+        return nil
+    end
+
+    local profile = profileOverride or self.dataHandle:GetProfile()
+    local partyConfig = partyConfigOverride or self.dataHandle:GetUnitConfig("party") or {}
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+
+    return {
+        profile = profile,
+        partyConfig = partyConfig,
+        testMode = testMode,
+        previewMode = previewMode,
+        addonEnabled = profile and profile.enabled ~= false,
+    }
+end
+
+function PartyFrames:ApplyBlizzardPartyFrameVisibility(runtimeState)
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return
+    end
+
+    local shouldHide = state.addonEnabled and state.partyConfig and state.partyConfig.hideBlizzardFrame == true
     self:SetBlizzardPartyFramesHidden(shouldHide)
 end
 
@@ -1078,7 +1173,8 @@ end
 -- In real mode, the header owns unit attribution; we just read its current state.
 -- In preview/test mode, we read self.testFrames instead.
 -- allowHidden=true retains the previous map entry for any unit that existed before (combat safety).
-function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
+function PartyFrames:RebuildDisplayedUnitMap(allowHidden, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     local frameByDisplayedUnit = {}
     local displayedUnitByGUID = {}
     local includeHidden = allowHidden == true
@@ -1087,8 +1183,8 @@ function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
 
     -- Determine the candidate frame pool.
     local candidateFrames
-    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
-    local isPreview = (profile and profile.testMode == true) or self.editModeActive
+    local state = runtimeState or buildPartyRuntimeState(self)
+    local isPreview = state and state.previewMode == true
     if isPreview and type(self.testFrames) == "table" then
         candidateFrames = self.testFrames
     elseif type(self.frames) == "table" and #self.frames > 0 then
@@ -1110,7 +1206,7 @@ function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
     if not candidateFrames then
         self._frameByDisplayedUnit = frameByDisplayedUnit
         self._displayedUnitByGUID = displayedUnitByGUID
-        return 0
+        return finishPerfCounters(self, "RebuildDisplayedUnitMap", perfStartedAt, 0)
     end
 
     for i = 1, #candidateFrames do
@@ -1175,7 +1271,7 @@ function PartyFrames:RebuildDisplayedUnitMap(allowHidden)
         self.spellTargetTracker:RefreshAllHighlights()
     end
 
-    return mappedCount
+    return finishPerfCounters(self, "RebuildDisplayedUnitMap", perfStartedAt, mappedCount)
 end
 
 -- Schedule repeated map rebuilds (safety net) to heal secure-header/roster transition drift.
@@ -1266,31 +1362,31 @@ end
 
 -- Refresh one currently-displayed party unit frame (full refresh).
 -- Never forces secure frame visibility in combat; only updates existing visuals.
-function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
+function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
-        return false
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit and InCombatLockdown() then
-        self:RebuildDisplayedUnitMap(true)
+        self:RebuildDisplayedUnitMap(true, state)
         displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     end
     if not displayedUnit and InCombatLockdown() then
@@ -1300,90 +1396,90 @@ function PartyFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
         end
     end
     if not displayedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     self:RefreshMember(
         frame,
         getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit,
-        partyConfig,
+        state.partyConfig,
         false,
         false,
         false,
         refreshOptions or MEMBER_REFRESH_FULL
     )
-    return true
+    return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, true)
 end
 
 -- Refresh one already-resolved party frame directly (hook-path parity with Danders addon).
 -- Never forces secure frame visibility in combat; only updates existing visuals.
-function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions)
+function PartyFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
-        return false
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
     end
 
     local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
     self:RefreshMember(
         frame,
         displayedUnit,
-        partyConfig,
+        state.partyConfig,
         false,
         false,
         false,
         refreshOptions or MEMBER_REFRESH_AURAS_ONLY
     )
 
-    return true
+    return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, true)
 end
 
 -- Refresh only the connection/range alpha for the currently displayed party frame.
-function PartyFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
+function PartyFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
-        return false
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit and InCombatLockdown() then
-        self:RebuildDisplayedUnitMap(true)
+        self:RebuildDisplayedUnitMap(true, state)
         displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     end
     if not displayedUnit and InCombatLockdown() then
@@ -1393,46 +1489,56 @@ function PartyFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
         end
     end
     if not displayedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
     local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
-    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState)
+    return finishPerfCounters(
+        self,
+        "RefreshDisplayedUnitRangeState",
+        perfStartedAt,
+        self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState, state)
+    )
 end
 
 -- Refresh only the connection/range alpha for a known mapped party frame.
-function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState)
+function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
-        return false
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
 
     local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
-    return refreshPartyMemberRangeState(frame, displayedUnit, false, false, inRangeState)
+    return finishPerfCounters(
+        self,
+        "RefreshDisplayedMappedFrameRangeState",
+        perfStartedAt,
+        refreshPartyMemberRangeState(frame, displayedUnit, false, false, inRangeState)
+    )
 end
 
 -- Refresh only the curated spell-target warning highlight for the displayed party frame.
-function PartyFrames:RefreshDisplayedUnitSpellTargetState(unitToken)
+function PartyFrames:RefreshDisplayedUnitSpellTargetState(unitToken, runtimeState)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
     end
@@ -1440,16 +1546,12 @@ function PartyFrames:RefreshDisplayedUnitSpellTargetState(unitToken)
         return false
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state or state.previewMode then
         return false
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
+    if not state.addonEnabled or state.partyConfig.enabled == false then
         return false
     end
 
@@ -1463,42 +1565,39 @@ function PartyFrames:RefreshDisplayedUnitSpellTargetState(unitToken)
         return false
     end
 
-    return self:RefreshDisplayedMappedFrameSpellTargetState(frame, displayedUnit)
+    return self:RefreshDisplayedMappedFrameSpellTargetState(frame, displayedUnit, state)
 end
 
 -- Refresh only the curated spell-target warning highlight for a known mapped party frame.
-function PartyFrames:RefreshDisplayedMappedFrameSpellTargetState(frame, unitToken)
+function PartyFrames:RefreshDisplayedMappedFrameSpellTargetState(frame, unitToken, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameSpellTargetState", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameSpellTargetState", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    if previewMode then
-        return false
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state or state.previewMode then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameSpellTargetState", perfStartedAt, false)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
-    if not addonEnabled or partyConfig.enabled == false then
-        return false
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameSpellTargetState", perfStartedAt, false)
     end
 
     local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or unitToken
     self:RefreshMember(
         frame,
         displayedUnit,
-        partyConfig,
+        state.partyConfig,
         false,
         false,
         false,
         MEMBER_REFRESH_SPELL_TARGET_ONLY
     )
-    return true
+    return finishPerfCounters(self, "RefreshDisplayedMappedFrameSpellTargetState", perfStartedAt, true)
 end
 
 -- Resolve a unit token to its currently-displayed party unit token.
@@ -1570,27 +1669,27 @@ function PartyFrames:ResolveDisplayedUnitToken(unitToken)
 end
 
 -- Refresh only vitals on currently shown party frames.
-function PartyFrames:RefreshAllVitalsOnly()
+function PartyFrames:RefreshAllVitalsOnly(runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
-        return
+        return finishPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    local addonEnabled = profile and profile.enabled ~= false
-    if previewMode then
-        self:RefreshAll(false)
-        return
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
     end
-    if not addonEnabled or partyConfig.enabled == false then
-        return
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
+    end
+    if not state.addonEnabled or state.partyConfig.enabled == false then
+        return finishPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
     end
 
     local frameByDisplayedUnit = self._frameByDisplayedUnit
     if type(frameByDisplayedUnit) ~= "table" then
-        return
+        return finishPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
     end
 
     for displayedUnit, frame in pairs(frameByDisplayedUnit) do
@@ -1598,7 +1697,7 @@ function PartyFrames:RefreshAllVitalsOnly()
             self:RefreshMember(
                 frame,
                 getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit,
-                partyConfig,
+                state.partyConfig,
                 false,
                 false,
                 false,
@@ -1606,26 +1705,27 @@ function PartyFrames:RefreshAllVitalsOnly()
             )
         end
     end
+    recordPerfCounters(self, "RefreshAllVitalsOnly", perfStartedAt)
 end
 
 -- Refresh alpha-only range state for every currently displayed live party frame.
-function PartyFrames:RefreshAllDisplayedRangeStates()
+function PartyFrames:RefreshAllDisplayedRangeStates(runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
-        return
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    local addonEnabled = profile and profile.enabled ~= false
-    if previewMode or not addonEnabled or partyConfig.enabled == false or getLivePartyUnitCount() == 0 then
-        return
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
+    end
+    if state.previewMode or not state.addonEnabled or state.partyConfig.enabled == false or getLivePartyUnitCount() == 0 then
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
     local frameByDisplayedUnit = self._frameByDisplayedUnit
     if type(frameByDisplayedUnit) ~= "table" then
-        return
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
     for displayedUnit, frame in pairs(frameByDisplayedUnit) do
@@ -1633,6 +1733,7 @@ function PartyFrames:RefreshAllDisplayedRangeStates()
             refreshPartyMemberRangeState(frame, getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit, false, false)
         end
     end
+    recordPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
 end
 
 -- Stop the periodic test mode ticker (updates fake data for preview).
@@ -1924,8 +2025,9 @@ end
 -- update role and status icons, and refresh aura visuals.
 -- Supports preview mode (fake data), test mode (periodic animation), and real mode.
 function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, testMode, forceStyle, refreshOptions)
+    local perfStartedAt = startPerfCounters(self)
     if not frame then
-        return
+        return finishPerfCounters(self, "RefreshMember", perfStartedAt)
     end
 
     refreshOptions = refreshOptions or MEMBER_REFRESH_FULL
@@ -1952,7 +2054,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             -- Style never applied (e.g. new frame created in combat lockdown).
             -- FontStrings have no font yet; skip refresh to avoid "Font not set" errors.
             -- pendingLayoutRefresh is set by ApplyMemberStyle so this will be retried post-combat.
-            return
+            return finishPerfCounters(self, "RefreshMember", perfStartedAt)
         end
     end
 
@@ -1977,7 +2079,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     self:ApplySpellTargetHighlight(frame, unitToken, partyConfig, previewMode, testMode, exists)
 
     if not refreshVitals and not refreshAuras and not refreshSpellTarget then
-        return
+        return finishPerfCounters(self, "RefreshMember", perfStartedAt)
     end
 
     local name = TEST_NAME_BY_UNIT[unitToken] or unitToken
@@ -2213,12 +2315,8 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
 
     if refreshAuras and ns.AuraHandle and type(ns.AuraHandle.RefreshGroupAuras) == "function" then
         ns.AuraHandle:RefreshGroupAuras(frame, unitToken, exists == true, previewMode or testMode)
-        if frame.DispelOverlay and frame.DispelOverlay:IsShown() then
-            frame.DispelOverlay:SetVertexColor(1, 1, 1, 1)
-            frame.DispelOverlay:SetAlpha(DISPEL_OVERLAY_ALPHA)
-        end
     end
-
+    recordPerfCounters(self, "RefreshMember", perfStartedAt)
 end
 
 -- ============================================================================
@@ -2238,26 +2336,31 @@ end
 -- Preview / test mode:
 --   The header is hidden; test frames are shown with static/animated fake data.
 --   User can position and style without a real party present.
-function PartyFrames:RefreshAll(forceLayout)
+function PartyFrames:RefreshAll(forceLayout, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle then
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     self:CreatePartyFrames()
     if not self.container or not self.header then
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local partyConfig = self.dataHandle:GetUnitConfig("party")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    local addonEnabled = profile and profile.enabled ~= false
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
+    end
+    local profile = state.profile
+    local partyConfig = state.partyConfig
+    local testMode = state.testMode
+    local previewMode = state.previewMode
+    local addonEnabled = state.addonEnabled
     local inCombat = InCombatLockdown()
     local shouldApplyLayout = (forceLayout == true) or (self.layoutInitialized ~= true)
 
     -- Layer 3: delegate Blizzard frame visibility to AuraHandle (alpha/scale only).
-    self:ApplyBlizzardPartyFrameVisibility()
+    self:ApplyBlizzardPartyFrameVisibility(state)
 
     -- Addon disabled: hide everything.
     if not previewMode and (not addonEnabled or partyConfig.enabled == false) then
@@ -2274,7 +2377,7 @@ function PartyFrames:RefreshAll(forceLayout)
             end
             self.container:Hide()
         end
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     -- Read layout config.
@@ -2388,7 +2491,7 @@ function PartyFrames:RefreshAll(forceLayout)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     -- -----------------------------------------------------------------------
@@ -2556,6 +2659,25 @@ function PartyFrames:RefreshAll(forceLayout)
     else
         self.pendingLayoutRefresh = true
     end
+    recordPerfCounters(self, "RefreshAll", perfStartedAt)
+end
+
+-- Enable or disable lightweight runtime profiling counters for party hot paths.
+function PartyFrames:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function PartyFrames:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function PartyFrames:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 -- ============================================================================

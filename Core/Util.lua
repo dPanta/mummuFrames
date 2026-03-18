@@ -251,8 +251,10 @@ function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
         end
     end
 
-    if C_Item and type(C_Item.IsItemInRange) == "function" then
-        local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID, unitToken)
+    -- Prefer the legacy global helper here. The C_Item variant can hit
+    -- protected-call taint on live unit range refreshes.
+    if type(IsItemInRange) == "function" then
+        local okItemRange, inItemRange = pcall(IsItemInRange, GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID, unitToken)
         if okItemRange then
             local normalizedItemRange = normalizeBooleanLike(inItemRange)
             if normalizedItemRange ~= nil then

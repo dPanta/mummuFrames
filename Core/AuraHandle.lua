@@ -30,7 +30,7 @@ local AuraSafety = ns.AuraSafety
 
 local MAX_AURA_SCAN        = 80
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
-local DISPEL_OVERLAY_ALPHA = 0.24
+local DISPEL_OVERLAY_ALPHA = 0.32
 local GROUP_AURA_SLOT_BATCH_SIZE = 16
 local GROUP_AURA_SLOT_SCAN_GUARD = 8
 
@@ -254,6 +254,83 @@ local function getSafeNowSeconds()
         return now
     end
     return 0
+end
+
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
+        return
+    end
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
 end
 
 -- Coerces a value to a positive integer spell ID.
@@ -2039,14 +2116,15 @@ end
 -- This path intentionally bypasses the Blizzard compact-frame hook because the
 -- hidden compact frames can miss combat aura transitions in party/raid content.
 function AuraHandle:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, forceFullScan, sourceTag)
+    local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshDebuffCacheFromUnitAuras", perfStartedAt, false)
     end
 
     local state = ensureGroupDebuffState(normalizedUnit)
     if type(UnitExists) == "function" and UnitExists(normalizedUnit) ~= true then
-        return clearGroupDebuffState(state)
+        return finishPerfCounters(self, "RefreshDebuffCacheFromUnitAuras", perfStartedAt, clearGroupDebuffState(state))
     end
 
     if forceFullScan == true
@@ -2064,7 +2142,7 @@ function AuraHandle:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, f
                 tostring(sourceTag or "full_scan")
             ))
         end
-        return refreshed
+        return finishPerfCounters(self, "RefreshDebuffCacheFromUnitAuras", perfStartedAt, refreshed)
     end
 
     local refreshed = refreshGroupDebuffStateFromDelta(normalizedUnit, state, auraUpdateInfo, sourceTag or "delta")
@@ -2077,14 +2155,15 @@ function AuraHandle:RefreshDebuffCacheFromUnitAuras(unitToken, auraUpdateInfo, f
             tostring(sourceTag or "delta")
         ))
     end
-    return refreshed
+    return finishPerfCounters(self, "RefreshDebuffCacheFromUnitAuras", perfStartedAt, refreshed)
 end
 
 -- Ensure the live group debuff cache exists before rendering debuff visuals.
 function AuraHandle:EnsureFreshGroupDebuffCache(unitToken, maxAgeSeconds, sourceTag)
+    local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
-        return nil
+        return finishPerfCounters(self, "EnsureFreshGroupDebuffCache", perfStartedAt, nil)
     end
 
     local state = ensureGroupDebuffState(normalizedUnit)
@@ -2098,7 +2177,7 @@ function AuraHandle:EnsureFreshGroupDebuffCache(unitToken, maxAgeSeconds, source
         state = groupDebuffStateByUnit[normalizedUnit]
     end
 
-    return state
+    return finishPerfCounters(self, "EnsureFreshGroupDebuffCache", perfStartedAt, state)
 end
 
 -- Return whether a tracked aura belongs to the player, pet, or vehicle.
@@ -2232,6 +2311,8 @@ function AuraHandle:Constructor()
     self.dataHandle = nil
 
     self._diagnosticsEnabled = false
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 
     self:SetupBlizzardHooks()
     self:EnsureBootstrapFrame()
@@ -2265,6 +2346,24 @@ function AuraHandle:GetDataHandle()
         end
     end
     return nil
+end
+
+-- Enable or disable lightweight runtime profiling counters for aura hot paths.
+function AuraHandle:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function AuraHandle:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function AuraHandle:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 -- ---------------------------------------------------------------------------
@@ -3236,6 +3335,8 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
     local red, green, blue = resolveDispellableAuraColor(normalizedUnit or resolvedUnitToken, auraData, debuffType)
 
     if red and green and blue then
+        -- Keep opacity centralized here so layout refreshes do not multiply the
+        -- tint alpha a second time in frame modules.
         frame.DispelOverlay:SetColorTexture(red, green, blue, DISPEL_OVERLAY_ALPHA)
         frame.DispelOverlay:Show()
     else
@@ -3352,8 +3453,9 @@ end
 -- rawUnitToken: if provided, passed to RefreshFrameTrackedAuras for untainted
 -- C_UnitAuras API calls; falls back to unitToken when absent.
 function AuraHandle:RefreshGroupFrameAuras(frame, unitToken, skipTrackedScan, rawUnitToken)
+    local perfStartedAt = startPerfCounters(self)
     if not shouldFrameRenderAuras(frame) then
-        return
+        return finishPerfCounters(self, "RefreshGroupFrameAuras", perfStartedAt)
     end
     local liveUnitToken = normalizeGroupUnitToken(rawUnitToken) or normalizeGroupUnitToken(unitToken)
     if liveUnitToken and (skipTrackedScan ~= true or (type(rawUnitToken) == "string" and rawUnitToken ~= "")) then
@@ -3369,6 +3471,7 @@ function AuraHandle:RefreshGroupFrameAuras(frame, unitToken, skipTrackedScan, ra
     end
     self:RefreshFrameCenterDefensiveIndicator(frame, unitToken)
     self:RefreshFrameDispelOverlay(frame, liveUnitToken or unitToken, rawUnitToken)
+    recordPerfCounters(self, "RefreshGroupFrameAuras", perfStartedAt)
 end
 
 -- ---------------------------------------------------------------------------
@@ -3403,9 +3506,10 @@ end
 -- It is passed to RefreshFrameTrackedAuras so that C_UnitAuras.GetAuraDataByIndex
 -- receives an untainted argument and returns untainted aura data.
 function AuraHandle:RefreshMappedUnit(unitToken, source, skipTrackedScan, rawUnitToken)
+    local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshMappedUnit", perfStartedAt, false)
     end
 
     local frame, resolvedUnit = self:ResolveSharedMappedFrame(normalizedUnit)
@@ -3425,7 +3529,7 @@ function AuraHandle:RefreshMappedUnit(unitToken, source, skipTrackedScan, rawUni
                 tostring(source or "unknown")
             ))
         end
-        return false
+        return finishPerfCounters(self, "RefreshMappedUnit", perfStartedAt, false)
     end
 
     self:RefreshGroupFrameAuras(frame, resolvedUnit or normalizedUnit, skipTrackedScan, rawUnitToken)
@@ -3438,7 +3542,7 @@ function AuraHandle:RefreshMappedUnit(unitToken, source, skipTrackedScan, rawUni
         ))
     end
 
-    return true
+    return finishPerfCounters(self, "RefreshMappedUnit", perfStartedAt, true)
 end
 
 -- ---------------------------------------------------------------------------
@@ -3483,9 +3587,10 @@ end
 -- (the CompactUnitFrame_UpdateAuras hook is unreliable in combat), and
 -- the owning module is asked to rebuild its map on a miss.
 function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
+    local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
-        return
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     if eventName == "UNIT_AURA" then
@@ -3501,19 +3606,19 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
         -- C_UnitAuras.GetAuraDataByIndex receives an untainted argument.
         local refreshed = self:RefreshMappedUnit(normalizedUnit, "unit_aura_dispatch", nil, unitToken)
         if refreshed then
-            return
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
 
         -- Combat roster transitions can leave the shared map temporarily stale.
         -- Ask the owning module to rebuild its mapping and retry.
         local addon = self:GetAddon()
         if not addon then
-            return
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
 
         local module = getModuleForOwner(addon, inferOwnerForUnit(normalizedUnit))
         if not module then
-            return
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
 
         local allowHidden = InCombatLockdown()
@@ -3529,12 +3634,12 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
                 self:RebuildSharedUnitFrameMap(allowHidden, "unit_aura_dispatch_ensure")
             end
         end
-        return
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     local frame, resolvedUnit, module = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
     if not frame or not module then
-        return
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     if eventName == "UNIT_IN_RANGE_UPDATE" then
@@ -3546,24 +3651,25 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
         end
         if type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
             module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit, normalizedInRange)
-            return
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
 
         if type(module.RefreshDisplayedUnitRangeState) == "function" then
             module:RefreshDisplayedUnitRangeState(resolvedUnit, normalizedInRange)
-            return
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
     end
 
     -- Non-UNIT_AURA events: forward a vitals-only refresh to the owning module.
     if type(module.RefreshDisplayedMappedFrame) == "function" then
         module:RefreshDisplayedMappedFrame(frame, resolvedUnit, VITALS_ONLY_REFRESH)
-        return
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     if type(module.RefreshDisplayedUnit) == "function" then
         module:RefreshDisplayedUnit(resolvedUnit, VITALS_ONLY_REFRESH)
     end
+    recordPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
 end
 
 -- Creates the group-level event dispatcher frame for non-UNIT_AURA events.

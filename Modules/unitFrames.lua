@@ -648,10 +648,12 @@ local function getObservedUnitInRange(unitToken, providedInRange)
         end
     end
 
-    if C_Item and type(C_Item.IsItemInRange) == "function" then
+    -- The global helper is the combat-safe item range probe. The C_Item variant
+    -- can trip protected-call taint on secure target/focus refreshes.
+    if type(IsItemInRange) == "function" then
         local probeItemIDs = getObservedUnitRangeProbeItemIDs(unitToken)
         for index = 1, #probeItemIDs do
-            local okItemRange, inItemRange = pcall(C_Item.IsItemInRange, probeItemIDs[index], unitToken)
+            local okItemRange, inItemRange = pcall(IsItemInRange, probeItemIDs[index], unitToken)
             if okItemRange then
                 local normalizedItemRange = normalizeBooleanLike(inItemRange)
                 if normalizedItemRange ~= nil then

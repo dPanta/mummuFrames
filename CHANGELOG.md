@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.2.0 - 2026-03-18
+- Moved bundled default-profile migration work out of hot runtime getters to reduce combat stutter.
+- Fixed combat `ADDON_ACTION_BLOCKED` taint from target and range probes by replacing the unsafe item-range call path.
+- Bumped addon metadata to `2.2.0`.
+
 ## 2.1.2 - 2026-03-18
 - Reworked the addon's factory default state around a bundled `MMFP3` profile seed so new `Default` profiles, fallback profile creation, and per-frame resets all inherit the same imported layout.
 - Centralized `MMFP3` decode and sanitization so bundled default seeding and normal profile imports share the same validation path.
@@ -56,6 +61,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Fixed target, party, and raid out-of-range dimming.
 - Hardened range checks against Retail secret booleans and added a lightweight live refresh fallback.
 - Bumped addon metadata to `1.8.3`.
-
-## 1.8.2 - 2026-03-13
-- Bumped addon metadata to `1.8.2`.

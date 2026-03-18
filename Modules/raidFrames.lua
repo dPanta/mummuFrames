@@ -18,7 +18,6 @@ local RaidFrames = ns.Object:Extend()
 local MAX_RAID_GROUPS = 8
 local MAX_RAID_GROUP_SIZE = 5
 local MAX_RAID_TEST_FRAMES = 40
-local DISPEL_OVERLAY_ALPHA = 0.2
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
@@ -569,6 +568,8 @@ function RaidFrames:Constructor()
     self.layoutInitialized = false
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 end
 
 -- Store addon references needed by the module.
@@ -724,14 +725,108 @@ function RaidFrames:SetBlizzardRaidFramesHidden(shouldHide)
 end
 
 -- Apply the current config setting for Blizzard raid-frame visibility.
-function RaidFrames:ApplyBlizzardRaidFrameVisibility()
-    if not self.dataHandle then
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
         return
     end
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local addonEnabled = profile and profile.enabled ~= false
-    local shouldHide = addonEnabled and raidConfig and raidConfig.hideBlizzardFrame == true
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
+
+local function buildRaidRuntimeState(self, profileOverride, raidConfigOverride)
+    if not self or not self.dataHandle then
+        return nil
+    end
+
+    local profile = profileOverride or self.dataHandle:GetProfile()
+    local raidConfig = raidConfigOverride or self.dataHandle:GetUnitConfig("raid") or {}
+    local testMode = profile and profile.testMode == true
+    local previewMode = testMode or self.editModeActive
+
+    return {
+        profile = profile,
+        raidConfig = raidConfig,
+        testMode = testMode,
+        previewMode = previewMode,
+        addonEnabled = profile and profile.enabled ~= false,
+    }
+end
+
+function RaidFrames:ApplyBlizzardRaidFrameVisibility(runtimeState)
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return
+    end
+    local shouldHide = state.addonEnabled and state.raidConfig and state.raidConfig.hideBlizzardFrame == true
     self:SetBlizzardRaidFramesHidden(shouldHide)
 end
 
@@ -877,16 +972,18 @@ function RaidFrames:BuildFrameVisuals(frame)
 end
 
 -- Apply sizing, fonts, and overlay layout to one raid frame.
-function RaidFrames:ApplyMemberStyle(frame, raidConfig)
+function RaidFrames:ApplyMemberStyle(frame, raidConfig, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not frame or not raidConfig then
-        return false
+        return finishPerfCounters(self, "ApplyMemberStyle", perfStartedAt, false)
     end
     if InCombatLockdown() then
         self.pendingLayoutRefresh = true
-        return false
+        return finishPerfCounters(self, "ApplyMemberStyle", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
+    local state = runtimeState or buildRaidRuntimeState(self)
+    local profile = state and state.profile or nil
     local styleConfig = profile and profile.style or nil
     local width = Util:Clamp(tonumber(raidConfig.width) or 92, 40, 240)
     local height = Util:Clamp(tonumber(raidConfig.height) or 28, 14, 80)
@@ -943,7 +1040,7 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
-    return true
+    return finishPerfCounters(self, "ApplyMemberStyle", perfStartedAt, true)
 end
 
 -- Return the spacing between subgroup containers for the chosen layout.
@@ -1021,9 +1118,10 @@ function RaidFrames:HideAll()
 end
 
 -- Refresh one raid frame's vitals, alpha state, and aura overlays.
-function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, forceStyle, refreshOptions)
+function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, forceStyle, refreshOptions, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not frame then
-        return
+        return finishPerfCounters(self, "RefreshMember", perfStartedAt)
     end
 
     refreshOptions = refreshOptions or MEMBER_REFRESH_FULL
@@ -1031,11 +1129,11 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
     local refreshAuras = refreshOptions.auras == true
     local needsStyle = forceStyle == true or frame._mummuStyleApplied ~= true
     if needsStyle then
-        local applied = self:ApplyMemberStyle(frame, raidConfig)
+        local applied = self:ApplyMemberStyle(frame, raidConfig, runtimeState)
         if applied then
             frame._mummuStyleApplied = true
         elseif frame._mummuStyleApplied ~= true then
-            return
+            return finishPerfCounters(self, "RefreshMember", perfStartedAt)
         end
     end
 
@@ -1151,23 +1249,21 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
 
     if refreshAuras and ns.AuraHandle and type(ns.AuraHandle.RefreshGroupAuras) == "function" then
         ns.AuraHandle:RefreshGroupAuras(frame, unitToken, exists == true, previewMode)
-        if frame.DispelOverlay and frame.DispelOverlay:IsShown() then
-            frame.DispelOverlay:SetVertexColor(1, 1, 1, 1)
-            frame.DispelOverlay:SetAlpha(DISPEL_OVERLAY_ALPHA)
-        end
     end
+    recordPerfCounters(self, "RefreshMember", perfStartedAt)
 end
 
 -- Rebuild displayedUnit and GUID maps from active raid frames.
-function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
+function RaidFrames:RebuildDisplayedUnitMap(allowHidden, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     local frameByDisplayedUnit = {}
     local displayedUnitByGUID = {}
     local includeHidden = allowHidden == true
     local previousFrameByDisplayedUnit =
         type(self._frameByDisplayedUnit) == "table" and self._frameByDisplayedUnit or {}
 
-    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
-    local isPreview = (profile and profile.testMode == true) or self.editModeActive
+    local state = runtimeState or buildRaidRuntimeState(self)
+    local isPreview = state and state.previewMode == true
     local candidateFrames = isPreview and self.testFrames or self.liveFrames
 
     for frameIndex = 1, #candidateFrames do
@@ -1220,7 +1316,7 @@ function RaidFrames:RebuildDisplayedUnitMap(allowHidden)
     for _ in pairs(frameByDisplayedUnit) do
         mappedCount = mappedCount + 1
     end
-    return mappedCount
+    return finishPerfCounters(self, "RebuildDisplayedUnitMap", perfStartedAt, mappedCount)
 end
 
 -- Find the secure child that already owns the requested raid unit token.
@@ -1295,31 +1391,32 @@ function RaidFrames:ResolveDisplayedUnitToken(unitToken)
 end
 
 -- Refresh the currently displayed raid frame for the given unit token.
-function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
+function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local previewMode = self.editModeActive or (profile and profile.testMode == true)
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
     local inAnyRaid = hasLiveRaidUnits()
-    if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
-        return false
+    if not state.addonEnabled or state.raidConfig.enabled == false or not inAnyRaid then
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit and InCombatLockdown() then
-        self:RebuildDisplayedUnitMap(true)
+        self:RebuildDisplayedUnitMap(true, state)
         displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     end
     if not displayedUnit and InCombatLockdown() then
@@ -1329,80 +1426,85 @@ function RaidFrames:RefreshDisplayedUnit(unitToken, refreshOptions)
         end
     end
     if not displayedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, false)
     end
 
     self:RefreshMember(
         frame,
         frame.displayedUnit or displayedUnit,
-        raidConfig,
+        state.raidConfig,
         false,
         false,
-        refreshOptions or MEMBER_REFRESH_FULL
+        refreshOptions or MEMBER_REFRESH_FULL,
+        state
     )
-    return true
+    return finishPerfCounters(self, "RefreshDisplayedUnit", perfStartedAt, true)
 end
 
 -- Refresh a known mapped frame directly without re-resolving it.
-function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions)
+function RaidFrames:RefreshDisplayedMappedFrame(frame, unitToken, refreshOptions, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local previewMode = self.editModeActive or (profile and profile.testMode == true)
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, true)
     end
 
     local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
     self:RefreshMember(
         frame,
         displayedUnit,
-        raidConfig,
+        state.raidConfig,
         false,
         false,
-        refreshOptions or MEMBER_REFRESH_AURAS_ONLY
+        refreshOptions or MEMBER_REFRESH_AURAS_ONLY,
+        state
     )
-    return true
+    return finishPerfCounters(self, "RefreshDisplayedMappedFrame", perfStartedAt, true)
 end
 
 -- Refresh only the connection/range alpha for the currently displayed raid frame.
-function RaidFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
+function RaidFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local previewMode = self.editModeActive or (profile and profile.testMode == true)
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
     local inAnyRaid = hasLiveRaidUnits()
-    if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
-        return false
+    if not state.addonEnabled or state.raidConfig.enabled == false or not inAnyRaid then
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
     local displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     if not displayedUnit and InCombatLockdown() then
-        self:RebuildDisplayedUnitMap(true)
+        self:RebuildDisplayedUnitMap(true, state)
         displayedUnit = self:ResolveDisplayedUnitToken(unitToken)
     end
     if not displayedUnit and InCombatLockdown() then
@@ -1412,61 +1514,73 @@ function RaidFrames:RefreshDisplayedUnitRangeState(unitToken, inRangeState)
         end
     end
     if not displayedUnit then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
     local frame = self._frameByDisplayedUnit and self._frameByDisplayedUnit[displayedUnit] or nil
     if not frame then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedUnitRangeState", perfStartedAt, false)
     end
 
-    return self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState)
+    return finishPerfCounters(
+        self,
+        "RefreshDisplayedUnitRangeState",
+        perfStartedAt,
+        self:RefreshDisplayedMappedFrameRangeState(frame, displayedUnit, inRangeState, state)
+    )
 end
 
 -- Refresh only the connection/range alpha for a known mapped raid frame.
-function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState)
+function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRangeState, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if type(frame) ~= "table" or type(unitToken) ~= "string" or unitToken == "" then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
     if not self.dataHandle or not self.container then
-        return false
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local previewMode = self.editModeActive or (profile and profile.testMode == true)
-    if previewMode then
-        self:RefreshAll(false)
-        return true
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
+    end
+    if state.previewMode then
+        self:RefreshAll(false, state)
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, true)
     end
 
-    local addonEnabled = profile and profile.enabled ~= false
     local inAnyRaid = hasLiveRaidUnits()
-    if not addonEnabled or raidConfig.enabled == false or not inAnyRaid then
-        return false
+    if not state.addonEnabled or state.raidConfig.enabled == false or not inAnyRaid then
+        return finishPerfCounters(self, "RefreshDisplayedMappedFrameRangeState", perfStartedAt, false)
     end
 
     local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or unitToken
-    return refreshRaidMemberRangeState(frame, displayedUnit, false, inRangeState)
+    return finishPerfCounters(
+        self,
+        "RefreshDisplayedMappedFrameRangeState",
+        perfStartedAt,
+        refreshRaidMemberRangeState(frame, displayedUnit, false, inRangeState)
+    )
 end
 
 -- Refresh alpha-only range state for every currently displayed live raid frame.
-function RaidFrames:RefreshAllDisplayedRangeStates()
+function RaidFrames:RefreshAllDisplayedRangeStates(runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
-        return
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local previewMode = self.editModeActive or (profile and profile.testMode == true)
-    local addonEnabled = profile and profile.enabled ~= false
-    if previewMode or not addonEnabled or raidConfig.enabled == false or not hasLiveRaidUnits() then
-        return
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
+    end
+    if state.previewMode or not state.addonEnabled or state.raidConfig.enabled == false or not hasLiveRaidUnits() then
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
     local frameByDisplayedUnit = self._frameByDisplayedUnit
     if type(frameByDisplayedUnit) ~= "table" then
-        return
+        return finishPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
     end
 
     for displayedUnit, frame in pairs(frameByDisplayedUnit) do
@@ -1474,6 +1588,7 @@ function RaidFrames:RefreshAllDisplayedRangeStates()
             refreshRaidMemberRangeState(frame, getCurrentRaidFrameDisplayedUnit(frame) or displayedUnit, false)
         end
     end
+    recordPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
 end
 
 -- Stop the periodic live range fallback ticker.
@@ -1497,25 +1612,30 @@ function RaidFrames:EnsureRangeTicker()
 end
 
 -- Refresh every raid frame in live mode or preview mode.
-function RaidFrames:RefreshAll(forceLayout)
+function RaidFrames:RefreshAll(forceLayout, runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle then
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     self:CreateRaidFrames()
     if not self.container then
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
-    local profile = self.dataHandle:GetProfile()
-    local raidConfig = self.dataHandle:GetUnitConfig("raid")
-    local testMode = profile and profile.testMode == true
-    local previewMode = testMode or self.editModeActive
-    local addonEnabled = profile and profile.enabled ~= false
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
+    end
+    local profile = state.profile
+    local raidConfig = state.raidConfig
+    local testMode = state.testMode
+    local previewMode = state.previewMode
+    local addonEnabled = state.addonEnabled
     local inCombat = InCombatLockdown()
     local shouldApplyLayout = (forceLayout == true) or (self.layoutInitialized ~= true)
 
-    self:ApplyBlizzardRaidFrameVisibility()
+    self:ApplyBlizzardRaidFrameVisibility(state)
 
     if not previewMode and (not addonEnabled or raidConfig.enabled == false) then
         self.frames = {}
@@ -1527,7 +1647,7 @@ function RaidFrames:RefreshAll(forceLayout)
         else
             self:HideAll()
         end
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     local width = Util:Clamp(tonumber(raidConfig.width) or 92, 40, 240)
@@ -1563,7 +1683,7 @@ function RaidFrames:RefreshAll(forceLayout)
     if previewMode then
         if inCombat then
             self.pendingLayoutRefresh = true
-            return
+            return finishPerfCounters(self, "RefreshAll", perfStartedAt)
         end
 
         for index = 1, #self.liveFrames do
@@ -1676,7 +1796,7 @@ function RaidFrames:RefreshAll(forceLayout)
                     end
                     frame:SetSize(width, height)
                 end
-                self:RefreshMember(frame, entry.unitToken, raidConfig, true, shouldApplyLayout, MEMBER_REFRESH_FULL)
+                self:RefreshMember(frame, entry.unitToken, raidConfig, true, shouldApplyLayout, MEMBER_REFRESH_FULL, state)
                 if type(frame.EnableMouse) == "function" then
                     frame:EnableMouse(true)
                 end
@@ -1695,7 +1815,7 @@ function RaidFrames:RefreshAll(forceLayout)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     local entries, orderedGroups, groupCounts = buildLiveRaidEntries(sortBy, sortDirection)
@@ -1709,7 +1829,7 @@ function RaidFrames:RefreshAll(forceLayout)
         else
             self:HideAll()
         end
-        return
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 
     local groupGap = getGroupContainerGap(groupLayout, spacingX, spacingY, groupSpacing)
@@ -1825,7 +1945,7 @@ function RaidFrames:RefreshAll(forceLayout)
                 frame:SetSize(width, height)
             end
 
-            self:RefreshMember(frame, entry.unitToken, raidConfig, false, shouldApplyLayout, MEMBER_REFRESH_FULL)
+            self:RefreshMember(frame, entry.unitToken, raidConfig, false, shouldApplyLayout, MEMBER_REFRESH_FULL, state)
             activeFrames[#activeFrames + 1] = frame
             if not inCombat then
                 if type(frame.EnableMouse) == "function" then
@@ -1862,6 +1982,25 @@ function RaidFrames:RefreshAll(forceLayout)
     else
         self.pendingLayoutRefresh = true
     end
+    recordPerfCounters(self, "RefreshAll", perfStartedAt)
+end
+
+-- Enable or disable lightweight runtime profiling counters for raid hot paths.
+function RaidFrames:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function RaidFrames:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function RaidFrames:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 addon:RegisterModule("raidFrames", RaidFrames:New())

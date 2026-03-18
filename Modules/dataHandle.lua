@@ -16,11 +16,91 @@ local LibDeflate = nil
 local DataHandle = ns.Object:Extend()
 local DEFAULT_FONT_PATH = (Style and Style.DEFAULT_FONT) or "Interface\\AddOns\\mummuFrames\\Fonts\\expressway.ttf"
 local PROFILE_EXPORT_PREFIX = "MMFP3:"
+local BUNDLED_DEFAULT_PROFILE_VERSION = 1
 local BUNDLED_DEFAULT_PROFILE_IMPORT = "MMFP3:TNvBpTnsq4FrG23T9hR7rkibHiSRU7KqwSXEtI15yhTEtH0pWV9Bg)c4esO0wO3D64liN1ZoZSZ88m(XMeAs0kDPt)PIQP6IK4KitPEAHjljmjQ2TPWGRTk)otXeJDMj1H3ywvPlk)RMKXuws0uTn2CNBT1mr7wKeDwPdmvNAU(dzzxwwF9Y1lxUEKvV0uF9fMSC91v(h7MRBD0E2ufSPlMuSUooFPX2TNtUBL1uxFREZXXXJsIY02)6IQmtFcnQqpVoj6YphF(zJpjXLeTmVmFPEfEcwKdgonjsxohosJKCknGfqLukNeeqsMDKqIBbTlSi)RFvBZ(CzURnRXq4m1UMWbEznCNA0TZQsxx7025gxtDQ6wJ9YY4QvOvRQYlbx(XtghFYvOdSUCTDZe0i06njJjjr3183fM85lCjJ9HZLXPtxaDGPB1mUnpdQtJPsFmpBI0PDBIcoO2KwvMDi3p0N1Tno1E9oZF3Qqtfa3N1uOD5FXmz7J1q8YIQBp1OlClq8aUsQU2bWJDth0WZG8fnzyQnmUFe2AiS1TRc91jg5XCwrWCEWVGyn6iFpbLs9uCfnWxqKylw0Kakc9yPIjPCHqg41MoJHtzFw3heozxO(klaOEb14(mE6U9n9AREhw201ZMvpCnShvT2MAaZlkayS(UgGbeSJe9rBNUr4LXXxEX5Nmc8tDQUaZxeTNUOY2zs8Lt6UF7XPjFYmpe(Dn(QZ(0PX9HBq(U3i3z8JHUlz7Z9bX01GF1w3MDkedk10NWEWEuKPy2VN7wuT29jB16v9yURQkm9Wj83tk0BG(d(Rv608Y5nhHDaispQNqrKbmgNiiceF4Jhxa6Weko3JhWuccHO6GopLveU3g6GA6GvH6aRREi(rAFdnztJVARPmsBfTh0IhVkBUbgQ7YHAs0xW5oGpXQHPOiUzA1PGXfnByRS0DiAoCv7yUFTd7uVpSBNHDEBnSZRByNNNKkbeTiG4da8hh2nYlawvgi8cKsgPfMlFMrESxXrEQ3h5nyKxJwHFveNG3uIJK8FoIdG9hqCWF1Psiqrc4mQpYB2I4qG19vE(CpH4X7CqIJ)RiXj4DIZaIZV0h5W4VPmh)dWCc)hJ5e(nzoITyoIV1JC6tG9XseQxpwsxN6DwsllXQZZWG2j59pbLGpveD79(JKXYVVX31vw3VLBHx)VrsPUoDRdWCun(56nGW8H6nXxzoQxKAFBlG9ytE0rkpHptY8ukoTxfoVZHr9I3rCYdat)2SjCtNvBbOiFFcYjDLt(lThCGok2A4p0syp8soVlu(F5cL5DYHBGIucJ5hO8isjV7wI3sLYH)ikLd))WhhO9933M6e(sOoqxKZy0aqFh0nbzBp2GpeFk8LQciy)0jqdPqPy8apgNIZWAEsO6jn(W(ZjNSVikElvgGGBPhtjzso1JYANZQEwIx4RICbUSN4fqvcFoWVc4GE6T7l)mYfGZgWKHQptiK(SU6VCF1)Nw15TVjZ7Ai6PEyLy35nWXfk3zr4xpcVh6OqJgam3Ft1S7V58omW2RosN3uHtII0Pwt293a4jtrwZN)6dqyU)MlamLXUPrnYhCvLMLMsxJULjwCcqRJUWuMHYaCDpWVTSmfebmT5Y0QIQgSGgQjh7d(YIxGZNXp83XWS1OPys76)pAeLJG9(tVOH3v5EoNX6DMVxJZihlypR)aGSXwQloStPDE0t15r(Z5qx3xVd9hCn(FDOAz0Gv2Y2K)o"
 local maintainProfile = nil
 local bundledDefaultProfile = nil
 local bundledDefaultProfileFontPath = nil
 local bundledDefaultProfileResolved = false
+local legacyDefaultProfileSnapshot = nil
+local legacyDefaultProfileSnapshotFontPath = nil
+
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
+        return
+    end
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
 -- Units whose frames display a name label by default.
 local NAME_TEXT_UNITS = {
     player = true,
@@ -499,6 +579,16 @@ local function decodeProfileTransferCode(code)
     return normalizeProfileName(sourceProfileName), importedProfile, nil
 end
 
+-- Return a normalized snapshot of the legacy in-file defaults for comparison.
+local function getLegacyDefaultProfileSnapshot(defaultFontPath)
+    local resolvedFontPath = defaultFontPath or DEFAULT_FONT_PATH
+    if legacyDefaultProfileSnapshotFontPath ~= resolvedFontPath then
+        legacyDefaultProfileSnapshot = buildProfileSnapshot(DEFAULT_PROFILE, resolvedFontPath)
+        legacyDefaultProfileSnapshotFontPath = resolvedFontPath
+    end
+    return legacyDefaultProfileSnapshot
+end
+
 -- Return the addon's bundled default profile template for default/reset state.
 local function getDefaultProfileTemplate(defaultFontPath)
     local resolvedFontPath = defaultFontPath or DEFAULT_FONT_PATH
@@ -537,7 +627,7 @@ local function shouldReplaceStoredDefaultProfile(profile, defaultFontPath)
     end
 
     local currentSnapshot = buildProfileSnapshot(profile, defaultFontPath)
-    local legacySnapshot = buildProfileSnapshot(DEFAULT_PROFILE, defaultFontPath)
+    local legacySnapshot = getLegacyDefaultProfileSnapshot(defaultFontPath)
     if type(currentSnapshot) ~= "table" or type(legacySnapshot) ~= "table" then
         return false
     end
@@ -644,8 +734,6 @@ local function ensureCharacterSettings(charSettings, sourceProfiles, defaultFont
 
     if type(charSettings.profiles.Default) ~= "table" then
         charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
-    elseif shouldReplaceStoredDefaultProfile(charSettings.profiles.Default, defaultFontPath) then
-        charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
     end
 
     local activeProfile = normalizeProfileName(charSettings.activeProfile) or "Default"
@@ -654,6 +742,28 @@ local function ensureCharacterSettings(charSettings, sourceProfiles, defaultFont
     end
     charSettings.activeProfile = activeProfile
 
+    return charSettings
+end
+
+-- Upgrade one character's untouched Default profile to the bundled seed once.
+local function ensureBundledDefaultProfileSeedApplied(charSettings, defaultFontPath)
+    if type(charSettings) ~= "table" then
+        return charSettings
+    end
+
+    local appliedVersion = tonumber(charSettings.bundledDefaultProfileVersion) or 0
+    if appliedVersion >= BUNDLED_DEFAULT_PROFILE_VERSION then
+        return charSettings
+    end
+
+    charSettings.profiles = type(charSettings.profiles) == "table" and charSettings.profiles or newDefaultProfiles(defaultFontPath)
+    if type(charSettings.profiles.Default) ~= "table" then
+        charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
+    elseif shouldReplaceStoredDefaultProfile(charSettings.profiles.Default, defaultFontPath) then
+        charSettings.profiles.Default = deepCopy(getDefaultProfileTemplate(defaultFontPath))
+    end
+
+    charSettings.bundledDefaultProfileVersion = BUNDLED_DEFAULT_PROFILE_VERSION
     return charSettings
 end
 
@@ -676,6 +786,91 @@ function DataHandle:Constructor()
     self._profileDefaultsApplied = {}
     -- Tracks one-time unit-default application per profile/unit pair.
     self._unitDefaultsAppliedByProfile = {}
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
+end
+
+-- Resolve one character's settings and apply any one-time migrations once.
+local function resolveCharacterSettings(self, sourceProfiles)
+    if not self or not self.db then
+        return nil, nil
+    end
+
+    local charKey = Util:GetCharacterKey()
+    self.db.char = self.db.char or {}
+
+    local defaultFontPath = self._defaultFontPath or DEFAULT_FONT_PATH
+    local charSettings = ensureCharacterSettings(self.db.char[charKey], sourceProfiles, defaultFontPath)
+    if (tonumber(charSettings.bundledDefaultProfileVersion) or 0) < BUNDLED_DEFAULT_PROFILE_VERSION then
+        charSettings = ensureBundledDefaultProfileSeedApplied(charSettings, defaultFontPath)
+    end
+
+    self.db.char[charKey] = charSettings
+    return charSettings, charKey
+end
+
+-- Resolve the active profile and cache bookkeeping used by hot config readers.
+local function resolveActiveProfileContext(self)
+    local charSettings, charKey = resolveCharacterSettings(self)
+    if not charSettings then
+        return nil
+    end
+
+    local profileName = charSettings.activeProfile or "Default"
+    local profiles = charSettings.profiles
+    if type(profiles[profileName]) ~= "table" then
+        profiles[profileName] = {}
+    end
+
+    local profile = profiles[profileName]
+    local cacheKey = getProfileCacheKey(charKey, profileName)
+    if not self._profileDefaultsApplied[cacheKey] then
+        maintainProfile(profile, self._defaultFontPath or DEFAULT_FONT_PATH)
+        self._profileDefaultsApplied[cacheKey] = true
+    end
+
+    self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
+    return {
+        charKey = charKey,
+        charSettings = charSettings,
+        profileName = profileName,
+        profiles = profiles,
+        profile = profile,
+        cacheKey = cacheKey,
+    }
+end
+
+-- Resolve one unit config from the active profile without re-entering profile lookup.
+local function resolveUnitConfigContext(self, unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil, nil
+    end
+
+    local context = resolveActiveProfileContext(self)
+    if not context then
+        return nil, nil
+    end
+
+    local profile = context.profile
+    profile.units = profile.units or {}
+
+    local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[context.cacheKey]
+    if type(unitDefaultsApplied) ~= "table" then
+        unitDefaultsApplied = {}
+        self._unitDefaultsAppliedByProfile[context.cacheKey] = unitDefaultsApplied
+    end
+
+    if type(profile.units[unitToken]) ~= "table" then
+        profile.units[unitToken] = {}
+        unitDefaultsApplied[unitToken] = nil
+    end
+
+    if not unitDefaultsApplied[unitToken] then
+        mergeDefaults(profile.units[unitToken], getDefaultUnitTemplate(unitToken, self._defaultFontPath or DEFAULT_FONT_PATH))
+        unitDefaultsApplied[unitToken] = true
+    end
+
+    return profile.units[unitToken], context
 end
 
 -- Initialize data module storage.
@@ -703,7 +898,8 @@ function DataHandle:OnInitialize(addonRef)
         mummuFramesDB.char = charStorage
 
         for charKey, charSettings in pairs(charStorage) do
-            charStorage[charKey] = ensureCharacterSettings(charSettings, legacyProfiles, self._defaultFontPath or DEFAULT_FONT_PATH)
+            local preparedSettings = ensureCharacterSettings(charSettings, legacyProfiles, self._defaultFontPath or DEFAULT_FONT_PATH)
+            charStorage[charKey] = ensureBundledDefaultProfileSeedApplied(preparedSettings, self._defaultFontPath or DEFAULT_FONT_PATH)
         end
 
         globalSettings.characterProfilesMigrationApplied = true
@@ -719,44 +915,21 @@ end
 
 -- Return character settings.
 function DataHandle:GetCharacterSettings()
-    if not self.db then
-        return nil
-    end
-    local charKey = Util:GetCharacterKey()
-    self.db.char = self.db.char or {}
-    self.db.char[charKey] = ensureCharacterSettings(self.db.char[charKey], nil, self._defaultFontPath or DEFAULT_FONT_PATH)
-    return self.db.char[charKey]
+    local perfStartedAt = startPerfCounters(self)
+    local charSettings = resolveCharacterSettings(self)
+    return finishPerfCounters(self, "GetCharacterSettings", perfStartedAt, charSettings)
 end
 
 -- Return current profile table.
 function DataHandle:GetProfile()
-    local charSettings = self:GetCharacterSettings()
-    if not charSettings then
-        return nil
-    end
-
-    local charKey = Util:GetCharacterKey()
-    local profileName = charSettings.activeProfile or "Default"
-    local profiles = charSettings.profiles
-
-    if type(profiles[profileName]) ~= "table" then
-        profiles[profileName] = {}
-    end
-
-    local profile = profiles[profileName]
-    local cacheKey = getProfileCacheKey(charKey, profileName)
-    if not self._profileDefaultsApplied[cacheKey] then
-        maintainProfile(profile, self._defaultFontPath or DEFAULT_FONT_PATH)
-        self._profileDefaultsApplied[cacheKey] = true
-    end
-
-    self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
-    return profile
+    local perfStartedAt = startPerfCounters(self)
+    local context = resolveActiveProfileContext(self)
+    return finishPerfCounters(self, "GetProfile", perfStartedAt, context and context.profile or nil)
 end
 
 -- Return active profile name.
 function DataHandle:GetActiveProfileName()
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     if not charSettings then
         return "Default"
     end
@@ -765,7 +938,7 @@ end
 
 -- Return sorted profile names.
 function DataHandle:GetProfileNames()
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or {}
     local names = {}
     for name, profile in pairs(profiles) do
@@ -786,7 +959,7 @@ function DataHandle:ProfileExists(name)
         return false
     end
 
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or {}
     return type(profiles[normalized]) == "table"
 end
@@ -798,7 +971,7 @@ function DataHandle:CreateProfile(name, sourceProfileName)
         return false, "invalid_name"
     end
 
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
@@ -827,7 +1000,7 @@ function DataHandle:SetActiveProfile(name)
         return false, "invalid_name"
     end
 
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
@@ -849,7 +1022,7 @@ function DataHandle:RenameProfile(oldName, newName)
         return false, "invalid_name"
     end
 
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
@@ -888,7 +1061,7 @@ function DataHandle:DeleteProfile(name)
         return false, "cannot_delete_default"
     end
 
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return false, "missing_storage"
@@ -916,7 +1089,7 @@ function DataHandle:ExportProfileCode(profileName)
     end
 
     local normalized = normalizeProfileName(profileName) or self:GetActiveProfileName()
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return nil, "missing_storage"
@@ -958,7 +1131,7 @@ function DataHandle:ImportProfileCode(code, targetProfileName, overwriteExisting
     end
 
     local targetName = normalizeProfileName(targetProfileName) or normalizedSourceName or "Imported"
-    local charSettings = self:GetCharacterSettings()
+    local charSettings = resolveCharacterSettings(self)
     local profiles = charSettings and charSettings.profiles or nil
     if type(profiles) ~= "table" then
         return nil, "missing_storage"
@@ -990,39 +1163,18 @@ end
 
 -- Return unit config.
 function DataHandle:GetUnitConfig(unitToken)
-    local profile = self:GetProfile()
-    local charSettings = self:GetCharacterSettings()
-    if not charSettings then
-        return nil
-    end
-    local charKey = Util:GetCharacterKey()
-    local profileName = charSettings.activeProfile or "Default"
-    local cacheKey = getProfileCacheKey(charKey, profileName)
-    local unitDefaultsApplied = self._unitDefaultsAppliedByProfile[cacheKey]
-    if type(unitDefaultsApplied) ~= "table" then
-        unitDefaultsApplied = {}
-        self._unitDefaultsAppliedByProfile[cacheKey] = unitDefaultsApplied
-    end
-
-    if type(profile.units[unitToken]) ~= "table" then
-        profile.units[unitToken] = {}
-        unitDefaultsApplied[unitToken] = nil
-    end
-
-    if not unitDefaultsApplied[unitToken] then
-        mergeDefaults(profile.units[unitToken], getDefaultUnitTemplate(unitToken, self._defaultFontPath or DEFAULT_FONT_PATH))
-        unitDefaultsApplied[unitToken] = true
-    end
-
-    return profile.units[unitToken]
+    local perfStartedAt = startPerfCounters(self)
+    local unitConfig = resolveUnitConfigContext(self, unitToken)
+    return finishPerfCounters(self, "GetUnitConfig", perfStartedAt, unitConfig)
 end
 
 -- Set unit config.
 function DataHandle:SetUnitConfig(unitToken, key, value)
-    local unitConfig = self:GetUnitConfig(unitToken)
-    local charSettings = self:GetCharacterSettings()
-    local profileName = (charSettings and charSettings.activeProfile or "Default")
-    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), profileName)
+    local unitConfig, context = resolveUnitConfigContext(self, unitToken)
+    if not unitConfig or not context then
+        return
+    end
+    local cacheKey = context.cacheKey
     if type(key) ~= "string" or key == "" then
         return
     end
@@ -1062,21 +1214,37 @@ function DataHandle:ResetUnitConfig(unitToken)
         return nil
     end
 
-    local profile = self:GetProfile()
-    if not profile then
+    local context = resolveActiveProfileContext(self)
+    if not context then
         return nil
     end
 
+    local profile = context.profile
     profile.units = profile.units or {}
     profile.units[unitToken] = deepCopy(getDefaultUnitTemplate(unitToken, self._defaultFontPath or DEFAULT_FONT_PATH))
 
-    local charSettings = self:GetCharacterSettings()
-    local profileName = charSettings and (charSettings.activeProfile or "Default") or "Default"
-    local cacheKey = getProfileCacheKey(Util:GetCharacterKey(), profileName)
-    self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
-    self._unitDefaultsAppliedByProfile[cacheKey][unitToken] = true
+    self._unitDefaultsAppliedByProfile[context.cacheKey] = self._unitDefaultsAppliedByProfile[context.cacheKey] or {}
+    self._unitDefaultsAppliedByProfile[context.cacheKey][unitToken] = true
 
     return profile.units[unitToken]
+end
+
+-- Enable or disable lightweight runtime profiling counters for hot getters.
+function DataHandle:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function DataHandle:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function DataHandle:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 addon:RegisterModule("dataHandle", DataHandle:New())
