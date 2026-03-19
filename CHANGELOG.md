@@ -5,6 +5,13 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.3.0 - 2026-03-19
+- Reworked the configuration window so the Frames tab keeps every unit's settings on one page, groups target-related units together, and aligns section headers and subsections cleanly instead of letting the layout drift farther right as you scroll.
+- Added party and raid debuff declutter filters with options to hide permanent debuffs, hide long-duration debuffs, and configure the duration threshold, including default-profile and profile-maintenance support for the new settings.
+- Removed the live party and raid range polling tickers in favor of Midnight's event-driven group range updates so group frames no longer rely on protected fallback polling during combat.
+- Added and updated the related English configuration strings for the new config sections and debuff filter controls.
+- Bumped addon metadata to `2.3.0`.
+
 ## 2.2.5 - 2026-03-18
 - Fixed shared group-event health dispatch so party and raid frames refresh live healthbars correctly again during combat.
 - Bumped addon metadata to `2.2.5`.
@@ -49,9 +56,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Shortened the Profiles page activate button text so it fits cleanly in the config UI.
 - Localized the remaining profile and configuration strings across non-English locale files.
 - Bumped addon metadata to `2.0.3`.
-
-## 2.0.2 - 2026-03-15
-- Changed profile storage to be character-local, so profile lists and active selections no longer bleed across the whole account.
-- Added a one-time migration that copies legacy account-wide profiles into each existing character's local profile set while preserving that character's selected profile when possible.
-- Updated the Profiles page copy to explain the new per-character behavior and position export/import as the way to move layouts between characters.
-- Bumped addon metadata to `2.0.2`.

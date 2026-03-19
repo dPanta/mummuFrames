@@ -57,7 +57,6 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_SPELL_TARGET_ONLY = {
     spellTarget = true,
 }
-local RANGE_POLL_INTERVAL = 0.5
 local OUT_OF_RANGE_ALPHA = 0.55
 local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
@@ -513,7 +512,6 @@ function PartyFrames:OnEnable()
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
-    self:EnsureRangeTicker()
     self._combatRemapRetryAt = 0
     self._lastLiveUnitsToShow = nil
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
@@ -1711,6 +1709,8 @@ function PartyFrames:RefreshAllVitalsOnly(runtimeState)
 end
 
 -- Refresh alpha-only range state for every currently displayed live party frame.
+-- Kept as an explicit sync helper; live updates normally arrive from
+-- UNIT_IN_RANGE_UPDATE through AuraHandle's group dispatcher.
 function PartyFrames:RefreshAllDisplayedRangeStates(runtimeState)
     local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
@@ -1747,7 +1747,7 @@ function PartyFrames:StopTestTicker()
     self._testTicker = nil
 end
 
--- Stop the periodic live range fallback ticker.
+-- Stop any legacy live range ticker if one exists.
 function PartyFrames:StopRangeTicker()
     local ticker = self._rangeTicker
     if ticker and type(ticker.Cancel) == "function" then
@@ -1756,15 +1756,10 @@ function PartyFrames:StopRangeTicker()
     self._rangeTicker = nil
 end
 
--- Start a lightweight live range fallback ticker if not already running.
+-- Group range is event-driven in Midnight retail; keep this as a no-op so
+-- callers do not reintroduce protected range polling during combat.
 function PartyFrames:EnsureRangeTicker()
-    if self._rangeTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
-        return
-    end
-
-    self._rangeTicker = C_Timer.NewTicker(RANGE_POLL_INTERVAL, function()
-        self:RefreshAllDisplayedRangeStates()
-    end)
+    self:StopRangeTicker()
 end
 
 -- Start periodic test mode ticker if not already running.

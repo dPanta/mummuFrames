@@ -189,6 +189,9 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
                 size = 18,
                 scale = 1,
                 max = 8,
+                hidePermanent = false,
+                hideLongDuration = false,
+                maxDurationSeconds = 60,
             },
         },
     }
@@ -250,6 +253,9 @@ local DEFAULT_PROFILE = {
                     size = 16,
                     scale = 1,
                     max = 4,
+                    hidePermanent = false,
+                    hideLongDuration = false,
+                    maxDurationSeconds = 60,
                 },
             },
         },
@@ -282,6 +288,9 @@ local DEFAULT_PROFILE = {
                     size = 12,
                     scale = 1,
                     max = 3,
+                    hidePermanent = false,
+                    hideLongDuration = false,
+                    maxDurationSeconds = 60,
                 },
             },
         },
@@ -647,6 +656,29 @@ local function getProfileCacheKey(charKey, profileName)
     return string.format("%s::%s", tostring(charKey or "UnknownCharacter"), tostring(profileName or "Default"))
 end
 
+local function sanitizeGroupDebuffFilterConfig(unitConfig)
+    if type(unitConfig) ~= "table" then
+        return
+    end
+
+    unitConfig.aura = type(unitConfig.aura) == "table" and unitConfig.aura or {}
+    unitConfig.aura.debuffs = type(unitConfig.aura.debuffs) == "table" and unitConfig.aura.debuffs or {}
+
+    local debuffsConfig = unitConfig.aura.debuffs
+    debuffsConfig.hidePermanent = debuffsConfig.hidePermanent == true
+    debuffsConfig.hideLongDuration = debuffsConfig.hideLongDuration == true
+
+    local threshold = tonumber(debuffsConfig.maxDurationSeconds)
+    if type(threshold) ~= "number" then
+        threshold = 60
+    end
+    threshold = math.floor(threshold + 0.5)
+    if threshold < 1 then
+        threshold = 60
+    end
+    debuffsConfig.maxDurationSeconds = Util:Clamp(threshold, 1, 3600)
+end
+
 -- Apply runtime-safe defaults and migrations to one profile table.
 maintainProfile = function(profile, defaultFontPath)
     if type(profile) ~= "table" then
@@ -686,6 +718,9 @@ maintainProfile = function(profile, defaultFontPath)
     profile.auras.allowedSpells = allowedSpells
 
     if type(profile.units) == "table" then
+        sanitizeGroupDebuffFilterConfig(profile.units.party)
+        sanitizeGroupDebuffFilterConfig(profile.units.raid)
+
         for unitToken, unitConfig in pairs(profile.units) do
             if NAME_TEXT_UNITS[unitToken] and type(unitConfig) == "table" and unitConfig.showNameText == false then
                 unitConfig.showNameText = true

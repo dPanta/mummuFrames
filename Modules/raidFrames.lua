@@ -43,7 +43,6 @@ local MEMBER_REFRESH_VITALS_ONLY = {
 local MEMBER_REFRESH_AURAS_ONLY = {
     auras = true,
 }
-local RANGE_POLL_INTERVAL = 0.5
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 
@@ -648,7 +647,6 @@ function RaidFrames:OnEnable()
     self:CreateRaidFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
-    self:EnsureRangeTicker()
     self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     if self.editModeActive then
         self:EnsureEditModeSelection()
@@ -1628,6 +1626,8 @@ function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRa
 end
 
 -- Refresh alpha-only range state for every currently displayed live raid frame.
+-- Kept as an explicit sync helper; live updates normally arrive from
+-- UNIT_IN_RANGE_UPDATE through AuraHandle's group dispatcher.
 function RaidFrames:RefreshAllDisplayedRangeStates(runtimeState)
     local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
@@ -1655,7 +1655,7 @@ function RaidFrames:RefreshAllDisplayedRangeStates(runtimeState)
     recordPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
 end
 
--- Stop the periodic live range fallback ticker.
+-- Stop any legacy live range ticker if one exists.
 function RaidFrames:StopRangeTicker()
     local ticker = self._rangeTicker
     if ticker and type(ticker.Cancel) == "function" then
@@ -1664,15 +1664,10 @@ function RaidFrames:StopRangeTicker()
     self._rangeTicker = nil
 end
 
--- Start a lightweight live range fallback ticker if not already running.
+-- Group range is event-driven in Midnight retail; keep this as a no-op so
+-- callers do not reintroduce protected range polling during combat.
 function RaidFrames:EnsureRangeTicker()
-    if self._rangeTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
-        return
-    end
-
-    self._rangeTicker = C_Timer.NewTicker(RANGE_POLL_INTERVAL, function()
-        self:RefreshAllDisplayedRangeStates()
-    end)
+    self:StopRangeTicker()
 end
 
 -- Refresh every raid frame in live mode or preview mode.

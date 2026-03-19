@@ -5,7 +5,7 @@
 -- shared style settings, tracked aura management, and profile tools.
 --
 -- FEATURES:
---   - Frames hub with grouped unit navigation and basic/advanced setup modes
+--   - Frames hub with grouped unit navigation and always-visible unit settings
 --   - Shared global styling for fonts, textures, and preview behavior
 --   - Tracked-aura configuration for party/raid support indicators
 --   - Profile create/rename/delete/import/export workflows
@@ -81,13 +81,8 @@ local FRAME_SELECTOR_GROUPS = {
         units = { "player", "pet" },
     },
     {
-        label = L.CONFIG_FRAMES_GROUP_ENEMY or "Enemy & Focus",
-        units = { "target", "focus" },
-    },
-    {
-        label = L.CONFIG_FRAMES_GROUP_ADVANCED or "Advanced Units",
-        units = { "targettarget", "focustarget" },
-        subdued = true,
+        label = L.CONFIG_FRAMES_GROUP_TARGETING or "Targeting",
+        units = { "target", "focus", "targettarget", "focustarget" },
     },
 }
 local FRAME_UNIT_DESCRIPTION = {
@@ -98,17 +93,8 @@ local FRAME_UNIT_DESCRIPTION = {
     target = L.CONFIG_FRAME_DESC_TARGET or "Adjust target readability, cast visibility, and aura placement.",
     targettarget = L.CONFIG_FRAME_DESC_TARGETTARGET or "Configure the lightweight target-of-target frame.",
     focus = L.CONFIG_FRAME_DESC_FOCUS or "Set up a focus frame that mirrors your target priorities.",
-    focustarget = L.CONFIG_FRAME_DESC_FOCUSTARGET or "Tune the compact focus-target frame for advanced setups.",
+    focustarget = L.CONFIG_FRAME_DESC_FOCUSTARGET or "Tune the compact focus-target frame to stay readable alongside your main targets.",
 }
-local ADVANCED_TOGGLE_UNITS = {
-    player = true,
-    target = true,
-    focus = true,
-}
-
-local function unitUsesAdvancedToggle(unitToken)
-    return ADVANCED_TOGGLE_UNITS[unitToken] == true
-end
 
 -- Named anchor presets for buff placement.
 local BUFF_POSITION_PRESETS = {
@@ -223,7 +209,7 @@ local RAID_TEST_SIZE_OPTIONS = {
 }
 local CONFIG_WINDOW_WIDTH = 960
 local CONFIG_WINDOW_HEIGHT = 720
-local CONFIG_PAGE_CONTENT_HEIGHT = 1900
+local CONFIG_PAGE_MIN_CONTENT_HEIGHT = CONFIG_WINDOW_HEIGHT
 local CONFIG_PAGE_LEFT_INSET = 34
 local CONFIG_PAGE_RIGHT_INSET = 8
 local REFRESH_DEBOUNCE_SECONDS = 0.05
@@ -691,7 +677,6 @@ function Configuration:Constructor()
     self._pendingRefreshRequest = nil
     self._profilesSelectedName = nil
     self._selectedFrameUnit = "party"
-    self._showAdvancedFrameOptions = false
 end
 
 -- Store the addon reference used by later UI callbacks.
@@ -2261,12 +2246,11 @@ local function setTableValueAtPath(root, path, value)
     cursor[parts[#parts]] = value
 end
 
-local function makeDynamicControlKey(unitToken, suffix, showAdvanced)
-    local modePrefix = showAdvanced and "Advanced" or "Basic"
+local function makeDynamicControlKey(unitToken, suffix)
     local token = tostring(unitToken or "")
     local cleanedToken = string.gsub(token, "[^%w]", "")
     local cleanedSuffix = string.gsub(tostring(suffix or ""), "[^%w]", "")
-    return modePrefix .. cleanedToken .. cleanedSuffix
+    return cleanedToken .. cleanedSuffix
 end
 
 -- Create a prominent section header with supporting copy and divider.
@@ -2275,7 +2259,10 @@ function Configuration:CreateSectionHeader(parent, title, description, anchor, t
     if anchor == parent then
         titleText:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -6)
     else
-        titleText:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -(topSpacing or 24))
+        -- Reset each section to the parent's left edge so nested controls do not
+        -- push later sections further to the right as the page continues.
+        titleText:SetPoint("TOP", anchor, "BOTTOM", 0, -(topSpacing or 24))
+        titleText:SetPoint("LEFT", parent, "LEFT", 0, 0)
     end
     titleText:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
     Style:ApplyFont(titleText, 14)
@@ -2308,7 +2295,8 @@ function Configuration:CreateHelpText(parent, text, anchor, topSpacing)
     if anchor == parent then
         body:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -6)
     else
-        body:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -(topSpacing or 8))
+        body:SetPoint("TOP", anchor, "BOTTOM", 0, -(topSpacing or 8))
+        body:SetPoint("LEFT", parent, "LEFT", 0, 0)
     end
     body:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
     body:SetJustifyH("LEFT")
@@ -2317,6 +2305,44 @@ function Configuration:CreateHelpText(parent, text, anchor, topSpacing)
     setFontStringTextSafe(body, text or "", 11)
     body:SetTextColor(0.8, 0.83, 0.9, 0.96)
     return body
+end
+
+function Configuration:CreateSubsectionLabel(parent, title, anchor, topSpacing)
+    local label = parent:CreateFontString(nil, "ARTWORK")
+    -- Subsections should also restart from the shared content column instead of
+    -- inheriting the x-offset of the control above them.
+    label:SetPoint("TOP", anchor, "BOTTOM", 0, -(topSpacing or 18))
+    label:SetPoint("LEFT", parent, "LEFT", 0, 0)
+    label:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
+    Style:ApplyFont(label, 12)
+    setFontStringTextSafe(label, title, 12)
+    label:SetTextColor(0.88, 0.91, 0.98, 0.94)
+    return label
+end
+
+function Configuration:ResolveAnchoredContentHeight(parent, bottomAnchor, bottomPadding)
+    if not parent or not bottomAnchor then
+        return CONFIG_PAGE_MIN_CONTENT_HEIGHT
+    end
+
+    local top = parent:GetTop()
+    local bottom = bottomAnchor:GetBottom()
+    if not top or not bottom then
+        return CONFIG_PAGE_MIN_CONTENT_HEIGHT
+    end
+
+    local padding = tonumber(bottomPadding) or 28
+    return math.max(CONFIG_PAGE_MIN_CONTENT_HEIGHT, math.ceil((top - bottom) + padding))
+end
+
+function Configuration:FitContentHeight(parent, bottomAnchor, bottomPadding)
+    if not parent or not bottomAnchor then
+        return CONFIG_PAGE_MIN_CONTENT_HEIGHT
+    end
+
+    local resolvedHeight = self:ResolveAnchoredContentHeight(parent, bottomAnchor, bottomPadding)
+    parent:SetHeight(resolvedHeight)
+    return resolvedHeight
 end
 
 -- Record one checkbox widget so page refresh can resync from config data.
@@ -2497,8 +2523,8 @@ function Configuration:BuildProfilesPage(page)
 
     local currentProfileAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_PROFILES_SECTION_CURRENT or "Current Profile",
-        L.CONFIG_PROFILES_SECTION_CURRENT_HELP or "Choose which saved profile this character is using, then switch when you are ready.",
+        L.CONFIG_PROFILES_SECTION_ACTIVE or "Active Profile",
+        nil,
         intro,
         18
     )
@@ -2544,8 +2570,8 @@ function Configuration:BuildProfilesPage(page)
 
     local manageAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_PROFILES_SECTION_MANAGE or "Manage Profiles",
-        L.CONFIG_PROFILES_SECTION_MANAGE_HELP or "Create, rename, or delete profiles that belong only to this character.",
+        L.CONFIG_PROFILES_SECTION_LOCAL or "Manage Local Profiles",
+        nil,
         activateButton,
         20
     )
@@ -2581,8 +2607,8 @@ function Configuration:BuildProfilesPage(page)
 
     local transferAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_PROFILES_SECTION_TRANSFER or "Share & Import",
-        L.CONFIG_PROFILES_SECTION_TRANSFER_HELP or "Export a profile to move it to another character, or import one into this character under a new or existing profile name.",
+        L.CONFIG_PROFILES_SECTION_IMPORT_EXPORT or "Import & Export",
+        nil,
         deleteButton,
         20
     )
@@ -2831,6 +2857,8 @@ function Configuration:BuildProfilesPage(page)
         overwriteCheckbox = overwriteExisting,
         importEdit = importEdit,
         statusText = statusText,
+        bottomAnchor = statusText,
+        bottomPadding = 32,
     }
 end
 
@@ -2848,8 +2876,8 @@ function Configuration:BuildGlobalPage(page)
 
     local generalAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_GLOBAL_SECTION_GENERAL or "General",
-        L.CONFIG_GLOBAL_SECTION_GENERAL_HELP or "Control whether the addon is active, whether Blizzard unit frames are suppressed, and whether test mode is enabled.",
+        L.CONFIG_GLOBAL_SECTION_BEHAVIOR or "Addon Behavior",
+        nil,
         intro,
         18
     )
@@ -2880,13 +2908,21 @@ function Configuration:BuildGlobalPage(page)
         return profile.hideBlizzardUnitFrames == true
     end)
 
+    local previewAnchor = self:CreateSectionHeader(
+        page,
+        L.CONFIG_GLOBAL_SECTION_PREVIEW or "Preview & Testing",
+        nil,
+        hideBlizzardUnitFrames,
+        20
+    )
+
     local testMode = self:CreateCheckbox(
         "mummuFramesConfigTestMode",
         page,
         L.CONFIG_TEST_MODE,
-        hideBlizzardUnitFrames,
+        previewAnchor,
         0,
-        -8
+        -14
     )
     self:BindProfileCheckbox(testMode, "testMode", REFRESH_INTENT_LAYOUT, "global")
     self:RegisterCheckboxWidget(registry, testMode, function(profile)
@@ -2896,7 +2932,7 @@ function Configuration:BuildGlobalPage(page)
     local styleAnchor = self:CreateSectionHeader(
         page,
         L.CONFIG_GLOBAL_SECTION_STYLE or "Shared Style",
-        L.CONFIG_GLOBAL_SECTION_STYLE_HELP or "These settings become the default visual language for all frames in the current profile.",
+        nil,
         testMode
     )
 
@@ -2981,6 +3017,8 @@ function Configuration:BuildGlobalPage(page)
         globalFontSize = globalFontSize,
         fontDropdown = fontDropdown,
         barTextureDropdown = barTextureDropdown,
+        bottomAnchor = barTextureDropdown or textureAnchor,
+        bottomPadding = 30,
     }
 end
 
@@ -3001,7 +3039,7 @@ function Configuration:BuildAurasPage(page)
     local trackingAnchor = self:CreateSectionHeader(
         page,
         L.CONFIG_AURAS_SECTION_TRACKING or "Tracking",
-        L.CONFIG_AURAS_SECTION_TRACKING_HELP or "Enable tracked auras globally and choose the icon size used on party and raid frames.",
+        nil,
         intro,
         18
     )
@@ -3048,11 +3086,10 @@ function Configuration:BuildAurasPage(page)
         return (config and config.size) or 14
     end)
 
-    local filterDivider = self:CreateSectionHeader(
+    local listAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_AURAS_FILTER_HEADER or "Spell filter",
-        L.CONFIG_AURAS_FILTER_HELP
-            or "Only show buffs whose names are in this list. Leave empty to show all tracked auras that match the other rules.",
+        L.CONFIG_AURAS_SECTION_LIST or "Spell List",
+        nil,
         sizeControl.slider
     )
 
@@ -3062,7 +3099,7 @@ function Configuration:BuildAurasPage(page)
     local rowHeight  = 20
 
     local listContainer = CreateFrame("Frame", "mummuFramesConfigAurasListContainer", page)
-    listContainer:SetPoint("TOPLEFT", filterDivider, "BOTTOMLEFT", 0, -14)
+    listContainer:SetPoint("TOPLEFT", listAnchor, "BOTTOMLEFT", 0, -14)
     listContainer:SetSize(listWidth, listHeight)
     Style:CreateBackground(listContainer, 0.05, 0.05, 0.07, 0.9)
 
@@ -3137,9 +3174,17 @@ function Configuration:BuildAurasPage(page)
         listChild:SetHeight(math.max(1, yOffset))
     end
 
+    local actionsAnchor = self:CreateSectionHeader(
+        page,
+        L.CONFIG_AURAS_SECTION_ACTIONS or "List Actions",
+        nil,
+        listContainer,
+        20
+    )
+
     -- Add-spell input row.
     local addLabel = page:CreateFontString(nil, "ARTWORK")
-    addLabel:SetPoint("TOPLEFT", listContainer, "BOTTOMLEFT", 0, -14)
+    addLabel:SetPoint("TOPLEFT", actionsAnchor, "BOTTOMLEFT", 0, -14)
     setFontStringTextSafe(addLabel, L.CONFIG_AURAS_ADD_LABEL or "Add spell name", 12)
 
     local addInput = createTextEditBox("mummuFramesConfigAurasAddInput", page, 220)
@@ -3209,25 +3254,24 @@ function Configuration:BuildAurasPage(page)
         enabled     = enabled,
         size        = sizeControl,
         refreshList = refreshList,
+        bottomAnchor = resetButton,
+        bottomPadding = 30,
     }
 end
 
 -- Build unit page.
-function Configuration:BuildUnitPage(page, unitToken, options)
+function Configuration:BuildUnitPage(page, unitToken)
     local dataHandle = self:GetDataHandle()
     if not dataHandle then
         return nil
     end
 
-    local advancedToggleRelevant = unitUsesAdvancedToggle(unitToken)
-    local showAdvanced = advancedToggleRelevant and options and options.showAdvanced == true
     local widgetRegistry = {}
-    local namePrefix = makeDynamicControlKey(unitToken, "Frame", showAdvanced)
+    local namePrefix = makeDynamicControlKey(unitToken, "Frame")
     local pageWidgets = {
         unitToken = unitToken,
-        showAdvanced = showAdvanced,
-        advancedToggleRelevant = advancedToggleRelevant,
         registry = widgetRegistry,
+        bottomPadding = 30,
     }
 
     local function getUnitConfig()
@@ -3302,6 +3346,14 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         end
     end
 
+    local function createSection(title, anchor, topSpacing)
+        return self:CreateSectionHeader(page, title, nil, anchor, topSpacing)
+    end
+
+    local function createSubsection(title, anchor, topSpacing)
+        return self:CreateSubsectionLabel(page, title, anchor, topSpacing)
+    end
+
     local hideBlizzardLabel = L.CONFIG_UNIT_HIDE_BLIZZARD or "Hide Blizzard frame"
     if unitToken == "party" then
         hideBlizzardLabel = L.CONFIG_PARTY_HIDE_BLIZZARD or hideBlizzardLabel
@@ -3309,19 +3361,15 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         hideBlizzardLabel = L.CONFIG_RAID_HIDE_BLIZZARD or "Hide Blizzard raid frames"
     end
 
-    local cursor = self:CreateSectionHeader(
-        page,
-        L.CONFIG_SECTION_VISIBILITY or "Visibility",
-        L.CONFIG_SECTION_VISIBILITY_HELP or "Start with the settings that decide whether this frame appears and which Blizzard elements it replaces.",
+    local cursor = createSection(
+        L.CONFIG_SECTION_VISIBILITY_BLIZZARD or "Visibility & Blizzard",
         page
     )
     local enabled = registerCheckbox("Enabled", L.CONFIG_UNIT_ENABLE or "Enable frame", cursor, "enabled", REFRESH_INTENT_LAYOUT, boolValue("enabled", true), -14)
     local hideBlizzard = registerCheckbox("HideBlizzard", hideBlizzardLabel, enabled, "hideBlizzardFrame", REFRESH_INTENT_LAYOUT, boolValue("hideBlizzardFrame", false))
 
-    local includePlayer
-    local showSelfWithoutGroup
     if unitToken == "party" then
-        includePlayer = registerCheckbox(
+        local includePlayer = registerCheckbox(
             "IncludePlayer",
             L.CONFIG_PARTY_INCLUDE_PLAYER or "Include player in party frames",
             hideBlizzard,
@@ -3329,7 +3377,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             REFRESH_INTENT_LAYOUT,
             boolValue("showPlayer", true)
         )
-        showSelfWithoutGroup = registerCheckbox(
+        local showSelfWithoutGroup = registerCheckbox(
             "ShowSelfWithoutGroup",
             L.CONFIG_PARTY_SHOW_SELF_WITHOUT_GROUP or "Show self without a group",
             includePlayer,
@@ -3342,10 +3390,8 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         cursor = hideBlizzard
     end
 
-    cursor = self:CreateSectionHeader(
-        page,
-        L.CONFIG_SECTION_LAYOUT or "Layout",
-        L.CONFIG_SECTION_LAYOUT_HELP or "Adjust the frame size and any group-specific spacing so the overall footprint feels right first.",
+    cursor = createSection(
+        L.CONFIG_SECTION_FRAME_LAYOUT or "Frame Size & Layout",
         cursor
     )
 
@@ -3375,19 +3421,9 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         function(value) return math.floor((tonumber(value) or 0) + 0.5) end
     )
 
-    local spacing
-    local spacingX
-    local spacingY
-    local groupSpacing
-    local partyLayoutDropdown
-    local groupLayoutDropdown
-    local sortDropdown
-    local sortDirectionDropdown
-    local testSizeDropdown
     local layoutAnchor = height.slider
-
     if unitToken == "party" then
-        spacing = registerNumeric(
+        local spacing = registerNumeric(
             "Spacing",
             L.CONFIG_PARTY_SPACING or "Gap between party frames",
             0,
@@ -3405,14 +3441,14 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             L.CONFIG_PARTY_LAYOUT or "Layout",
             spacing.slider
         )
-        partyLayoutDropdown = partyLayoutControl and partyLayoutControl.dropdown or nil
+        local partyLayoutDropdown = partyLayoutControl and partyLayoutControl.dropdown or nil
         if partyLayoutDropdown then
             self:InitializePartyLayoutDropdown(partyLayoutDropdown)
             self:RegisterDropdownWidget(widgetRegistry, partyLayoutDropdown, false)
         end
         layoutAnchor = partyLayoutDropdown or spacing.slider
     elseif unitToken == "raid" then
-        spacingX = registerNumeric(
+        local spacingX = registerNumeric(
             "SpacingX",
             L.CONFIG_RAID_SPACING_X or "Horizontal gap",
             0,
@@ -3424,7 +3460,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             numericValue("spacingX", 5),
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end
         )
-        spacingY = registerNumeric(
+        local spacingY = registerNumeric(
             "SpacingY",
             L.CONFIG_RAID_SPACING_Y or "Vertical gap",
             0,
@@ -3436,7 +3472,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             numericValue("spacingY", 6),
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end
         )
-        groupSpacing = registerNumeric(
+        local groupSpacing = registerNumeric(
             "GroupSpacing",
             L.CONFIG_RAID_GROUP_SPACING or "Group gap",
             0,
@@ -3449,55 +3485,93 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end
         )
 
-        local _, groupDropdown = registerDropdown(
+        local _, groupLayoutDropdown = registerDropdown(
             "GroupLayout",
             L.CONFIG_RAID_GROUP_LAYOUT or "Group layout",
             groupSpacing.slider,
             Configuration.InitializeRaidGroupLayoutDropdown,
             false
         )
-        groupLayoutDropdown = groupDropdown
-        local _, sortByDropdown = registerDropdown(
+        local _, sortDropdown = registerDropdown(
             "Sort",
             L.CONFIG_RAID_SORT or "Sort by",
             groupLayoutDropdown or groupSpacing.slider,
             Configuration.InitializeRaidSortDropdown,
             false
         )
-        sortDropdown = sortByDropdown
-        local _, sortDirDropdown = registerDropdown(
+        local _, sortDirectionDropdown = registerDropdown(
             "SortDirection",
             L.CONFIG_RAID_SORT_DIRECTION or "Sort direction",
             sortDropdown or groupLayoutDropdown or groupSpacing.slider,
             Configuration.InitializeRaidSortDirectionDropdown,
             false
         )
-        sortDirectionDropdown = sortDirDropdown
-        local _, sizeDropdown = registerDropdown(
+        local _, testSizeDropdown = registerDropdown(
             "TestSize",
             L.CONFIG_RAID_TEST_SIZE or "Test raid size",
             sortDirectionDropdown or sortDropdown or groupLayoutDropdown or groupSpacing.slider,
             Configuration.InitializeRaidTestSizeDropdown,
             false
         )
-        testSizeDropdown = sizeDropdown
         layoutAnchor = testSizeDropdown or sortDirectionDropdown or sortDropdown or groupLayoutDropdown or groupSpacing.slider
     end
 
-    cursor = self:CreateSectionHeader(
-        page,
-        L.CONFIG_SECTION_CONTENT or "Content & Indicators",
-        L.CONFIG_SECTION_CONTENT_HELP or "Turn on the information that matters during combat before fine-tuning offsets and detached bars.",
+    local powerHeight
+    local powerOnTop
+    if unitToken ~= "raid" then
+        powerHeight = registerNumeric(
+            "PowerHeight",
+            L.CONFIG_UNIT_POWER_HEIGHT or "Power bar height",
+            4,
+            60,
+            1,
+            layoutAnchor,
+            "powerHeight",
+            REFRESH_INTENT_LAYOUT,
+            numericValue("powerHeight", 10),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        powerOnTop = registerCheckbox(
+            "PowerOnTop",
+            L.CONFIG_UNIT_POWER_ON_TOP or "Power bar on top",
+            powerHeight.slider,
+            "powerOnTop",
+            REFRESH_INTENT_LAYOUT,
+            boolValue("powerOnTop", false)
+        )
+        layoutAnchor = powerOnTop
+    end
+
+    cursor = createSection(
+        L.CONFIG_SECTION_TEXT or "Text",
         layoutAnchor
     )
 
+    local fontSize = registerNumeric(
+        "FontSize",
+        L.CONFIG_UNIT_FONT_SIZE or "Unit font size",
+        8,
+        26,
+        1,
+        cursor,
+        "fontSize",
+        REFRESH_INTENT_APPEARANCE,
+        numericValue("fontSize", 12),
+        function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+        20
+    )
+
+    local sectionAnchor = fontSize.slider
     local showRoleIcon
     local spellTargetHighlight
-    local powerHeight
-    local powerOnTop
-    local contentAnchor = cursor
 
     if unitToken == "party" then
+        cursor = createSection(
+            L.CONFIG_SECTION_INDICATORS or "Indicators",
+            sectionAnchor
+        )
+
         showRoleIcon = registerCheckbox(
             "ShowRoleIcon",
             L.CONFIG_PARTY_SHOW_ROLE_ICON or "Show role icon",
@@ -3515,56 +3589,8 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             REFRESH_INTENT_APPEARANCE,
             boolValue("spellTargetHighlight.enabled", true)
         )
-        contentAnchor = spellTargetHighlight
+        sectionAnchor = spellTargetHighlight
     end
-
-    if unitToken ~= "raid" then
-        powerHeight = registerNumeric(
-            "PowerHeight",
-            L.CONFIG_UNIT_POWER_HEIGHT or "Power bar height",
-            4,
-            60,
-            1,
-            contentAnchor,
-            "powerHeight",
-            REFRESH_INTENT_LAYOUT,
-            numericValue("powerHeight", 10),
-            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
-            (contentAnchor == cursor) and 20 or nil
-        )
-        powerOnTop = registerCheckbox(
-            "PowerOnTop",
-            L.CONFIG_UNIT_POWER_ON_TOP or "Power bar on top",
-            powerHeight.slider,
-            "powerOnTop",
-            REFRESH_INTENT_LAYOUT,
-            boolValue("powerOnTop", false)
-        )
-        contentAnchor = powerOnTop
-    end
-
-    cursor = self:CreateSectionHeader(
-        page,
-        L.CONFIG_SECTION_TEXT or "Text",
-        L.CONFIG_SECTION_TEXT_HELP or "Set the baseline text size here, then move into advanced offsets only if the frame still needs extra nudging.",
-        contentAnchor
-    )
-
-    local fontSize = registerNumeric(
-        "FontSize",
-        L.CONFIG_UNIT_FONT_SIZE or "Unit font size",
-        8,
-        26,
-        1,
-        cursor,
-        "fontSize",
-        REFRESH_INTENT_APPEARANCE,
-        numericValue("fontSize", 12),
-        function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
-        20
-    )
-
-    local textAnchor = fontSize.slider
 
     local buffsEnabled
     local buffsMax
@@ -3577,78 +3603,21 @@ function Configuration:BuildUnitPage(page, unitToken, options)
     local debuffsPositionDropdown
     local debuffsX
     local debuffsY
+    local debuffsHidePermanent
+    local debuffsHideLongDuration
+    local debuffsMaxDuration
     local isGroupFrameUnit = unitToken == "party" or unitToken == "raid"
-    do
-        cursor = self:CreateSectionHeader(
-            page,
-            L.CONFIG_SECTION_BUFFS or "Buffs & Debuffs",
-            L.CONFIG_SECTION_BUFFS_HELP or "Control how auras are displayed on this frame without mixing them up with tracked group-healing auras.",
-            textAnchor
-        )
 
-        local debuffAnchor = cursor
-        if not isGroupFrameUnit then
-            buffsEnabled = registerCheckbox(
-                "BuffsEnabled",
-                L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
-                cursor,
-                "aura.buffs.enabled",
-                REFRESH_INTENT_APPEARANCE,
-                boolValue("aura.buffs.enabled", true),
-                -14
-            )
-            buffsMax = registerNumeric(
-                "BuffsMax",
-                L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
-                1,
-                16,
-                1,
-                buffsEnabled,
-                "aura.buffs.max",
-                REFRESH_INTENT_APPEARANCE,
-                numericValue("aura.buffs.max", 8),
-                function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
-                20
-            )
-            buffsSize = registerNumeric(
-                "BuffsSize",
-                L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
-                10,
-                48,
-                1,
-                buffsMax.slider,
-                "aura.buffs.size",
-                REFRESH_INTENT_APPEARANCE,
-                numericValue("aura.buffs.size", 18),
-                function(value) return math.floor((tonumber(value) or 0) + 0.5) end
-            )
-            local _, buffPosition = registerDropdown(
-                "BuffPosition",
-                L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
-                buffsSize.slider,
-                function(configuration, dropdown)
-                    configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
-                end,
-                false
-            )
-            buffsPositionDropdown = buffPosition
-            local _, buffSource = registerDropdown(
-                "BuffSource",
-                L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
-                buffsPositionDropdown or buffsSize.slider,
-                function(configuration, dropdown)
-                    configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
-                end,
-                false
-            )
-            buffsSourceDropdown = buffSource
-            debuffAnchor = buffsSourceDropdown or buffsPositionDropdown or buffsSize.slider or cursor
-        end
+    if isGroupFrameUnit then
+        cursor = createSection(
+            L.CONFIG_SECTION_DEBUFFS or "Debuffs",
+            sectionAnchor
+        )
 
         debuffsEnabled = registerCheckbox(
             "DebuffsEnabled",
             L.CONFIG_UNIT_DEBUFFS_ENABLE or "Show debuffs",
-            debuffAnchor,
+            cursor,
             "aura.debuffs.enabled",
             REFRESH_INTENT_APPEARANCE,
             boolValue("aura.debuffs.enabled", true),
@@ -3715,7 +3684,179 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
             20
         )
-        textAnchor = debuffsY.slider or debuffsX.slider or debuffsPositionDropdown or debuffsSize.slider
+        debuffsHidePermanent = registerCheckbox(
+            "DebuffsHidePermanent",
+            L.CONFIG_UNIT_DEBUFFS_HIDE_PERMANENT or "Hide permanent debuffs",
+            debuffsY.slider,
+            "aura.debuffs.hidePermanent",
+            REFRESH_INTENT_APPEARANCE,
+            boolValue("aura.debuffs.hidePermanent", false),
+            -14
+        )
+        debuffsHideLongDuration = registerCheckbox(
+            "DebuffsHideLongDuration",
+            L.CONFIG_UNIT_DEBUFFS_HIDE_LONG or "Hide long debuffs",
+            debuffsHidePermanent,
+            "aura.debuffs.hideLongDuration",
+            REFRESH_INTENT_APPEARANCE,
+            boolValue("aura.debuffs.hideLongDuration", false)
+        )
+        debuffsMaxDuration = registerNumeric(
+            "DebuffsMaxDuration",
+            L.CONFIG_UNIT_DEBUFFS_MAX_DURATION or "Long debuff threshold (sec)",
+            1,
+            3600,
+            1,
+            debuffsHideLongDuration,
+            "aura.debuffs.maxDurationSeconds",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.maxDurationSeconds", 60),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        sectionAnchor = debuffsMaxDuration.slider
+    else
+        cursor = createSection(
+            L.CONFIG_SECTION_AURAS or L.CONFIG_SECTION_BUFFS or "Buffs & Debuffs",
+            sectionAnchor
+        )
+
+        local buffsLabel = createSubsection(
+            L.CONFIG_SUBSECTION_BUFFS or "Buffs",
+            cursor,
+            14
+        )
+        buffsEnabled = registerCheckbox(
+            "BuffsEnabled",
+            L.CONFIG_UNIT_BUFFS_ENABLE or "Show buffs",
+            buffsLabel,
+            "aura.buffs.enabled",
+            REFRESH_INTENT_APPEARANCE,
+            boolValue("aura.buffs.enabled", true),
+            -12
+        )
+        buffsMax = registerNumeric(
+            "BuffsMax",
+            L.CONFIG_UNIT_BUFFS_MAX or "Buff count",
+            1,
+            16,
+            1,
+            buffsEnabled,
+            "aura.buffs.max",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.buffs.max", 8),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        buffsSize = registerNumeric(
+            "BuffsSize",
+            L.CONFIG_UNIT_BUFFS_SIZE or "Buff size",
+            10,
+            48,
+            1,
+            buffsMax.slider,
+            "aura.buffs.size",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.buffs.size", 18),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+        )
+        local _, buffPosition = registerDropdown(
+            "BuffPosition",
+            L.CONFIG_UNIT_BUFFS_POSITION or "Buff position",
+            buffsSize.slider,
+            function(configuration, dropdown)
+                configuration:InitializeBuffPositionDropdown(dropdown, unitToken)
+            end,
+            false
+        )
+        buffsPositionDropdown = buffPosition
+        local _, buffSource = registerDropdown(
+            "BuffSource",
+            L.CONFIG_UNIT_BUFFS_SOURCE or "Buff source",
+            buffsPositionDropdown or buffsSize.slider,
+            function(configuration, dropdown)
+                configuration:InitializeBuffSourceDropdown(dropdown, unitToken)
+            end,
+            false
+        )
+        buffsSourceDropdown = buffSource
+
+        local debuffLabel = createSubsection(
+            L.CONFIG_SUBSECTION_DEBUFFS or "Debuffs",
+            buffsSourceDropdown or buffsPositionDropdown or buffsSize.slider,
+            22
+        )
+        debuffsEnabled = registerCheckbox(
+            "DebuffsEnabled",
+            L.CONFIG_UNIT_DEBUFFS_ENABLE or "Show debuffs",
+            debuffLabel,
+            "aura.debuffs.enabled",
+            REFRESH_INTENT_APPEARANCE,
+            boolValue("aura.debuffs.enabled", true),
+            -12
+        )
+        debuffsMax = registerNumeric(
+            "DebuffsMax",
+            L.CONFIG_UNIT_DEBUFFS_MAX or "Debuff count",
+            1,
+            16,
+            1,
+            debuffsEnabled,
+            "aura.debuffs.max",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.max", 8),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        debuffsSize = registerNumeric(
+            "DebuffsSize",
+            L.CONFIG_UNIT_DEBUFFS_SIZE or "Debuff size",
+            10,
+            48,
+            1,
+            debuffsMax.slider,
+            "aura.debuffs.size",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.size", 18),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+        )
+        local _, debuffPosition = registerDropdown(
+            "DebuffPosition",
+            L.CONFIG_UNIT_DEBUFFS_POSITION or "Debuff position",
+            debuffsSize.slider,
+            function(configuration, dropdown)
+                configuration:InitializeDebuffPositionDropdown(dropdown, unitToken)
+            end,
+            false
+        )
+        debuffsPositionDropdown = debuffPosition
+        debuffsX = registerNumeric(
+            "DebuffsX",
+            L.CONFIG_UNIT_DEBUFFS_X or "Debuff X offset",
+            -80,
+            80,
+            1,
+            debuffsPositionDropdown or debuffsSize.slider,
+            "aura.debuffs.x",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.x", 0),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        debuffsY = registerNumeric(
+            "DebuffsY",
+            L.CONFIG_UNIT_DEBUFFS_Y or "Debuff Y offset",
+            -80,
+            80,
+            1,
+            debuffsX.slider,
+            "aura.debuffs.y",
+            REFRESH_INTENT_APPEARANCE,
+            numericValue("aura.debuffs.y", -4),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+            20
+        )
+        sectionAnchor = debuffsY.slider
     end
 
     local castbarEnabled
@@ -3725,11 +3866,9 @@ function Configuration:BuildUnitPage(page, unitToken, options)
     local castbarShowIcon
     local castbarHideBlizzard
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
-        cursor = self:CreateSectionHeader(
-            page,
-            L.CONFIG_SECTION_CASTBAR or "Cast Bar",
-            L.CONFIG_SECTION_CASTBAR_HELP or "Keep the core cast-bar controls visible up front and leave detaching or Blizzard replacement for advanced setup.",
-            textAnchor
+        cursor = createSection(
+            L.CONFIG_SECTION_CASTING or L.CONFIG_SECTION_CASTBAR or "Casting",
+            sectionAnchor
         )
 
         castbarEnabled = registerCheckbox(
@@ -3776,7 +3915,23 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             REFRESH_INTENT_APPEARANCE,
             boolValue("castbar.showIcon", true)
         )
-        textAnchor = castbarShowIcon
+        castbarDetach = registerCheckbox(
+            "CastbarDetach",
+            L.CONFIG_UNIT_CASTBAR_DETACH or "Detach cast bar",
+            castbarShowIcon,
+            "castbar.detached",
+            REFRESH_INTENT_LAYOUT,
+            boolValue("castbar.detached", false)
+        )
+        castbarHideBlizzard = registerCheckbox(
+            "CastbarHideBlizzard",
+            L.CONFIG_UNIT_CASTBAR_HIDE_BLIZZARD or "Hide Blizzard cast bar",
+            castbarDetach,
+            "castbar.hideBlizzardCastBar",
+            REFRESH_INTENT_LAYOUT,
+            boolValue("castbar.hideBlizzardCastBar", false)
+        )
+        sectionAnchor = castbarHideBlizzard
     end
 
     local primaryPowerEnabled
@@ -3792,113 +3947,33 @@ function Configuration:BuildUnitPage(page, unitToken, options)
     local tertiaryPowerWidth
 
     if unitToken ~= "party" and unitToken ~= "raid" then
-        cursor = self:CreateSectionHeader(
-            page,
+        cursor = createSection(
             L.CONFIG_SECTION_RESOURCES or "Resources",
-            L.CONFIG_SECTION_RESOURCES_HELP or "Show the resource elements you need, then only move into detached widths and specialist bars if you want a more custom layout.",
-            textAnchor
+            sectionAnchor
         )
-
-        primaryPowerEnabled = registerCheckbox(
-            "PrimaryPowerEnabled",
-            L.CONFIG_UNIT_PRIMARY_POWER_ENABLE or "Show primary power bar",
-            cursor,
-            "primaryPower.enabled",
-            REFRESH_INTENT_LAYOUT,
-            boolValue("primaryPower.enabled", true),
-            -14
-        )
-        textAnchor = primaryPowerEnabled
 
         if unitToken == "player" then
-            secondaryPowerEnabled = registerCheckbox(
-                "SecondaryPowerEnabled",
-                L.CONFIG_UNIT_SECONDARY_POWER_ENABLE or "Show secondary power bar",
-                primaryPowerEnabled,
-                "secondaryPower.enabled",
-                REFRESH_INTENT_LAYOUT,
-                boolValue("secondaryPower.enabled", true)
+            local primaryLabel = createSubsection(
+                L.CONFIG_SUBSECTION_PRIMARY_POWER or "Primary Power",
+                cursor,
+                14
             )
-            tertiaryPowerEnabled = registerCheckbox(
-                "TertiaryPowerEnabled",
-                L.CONFIG_UNIT_TERTIARY_POWER_ENABLE or "Show tertiary power bar",
-                secondaryPowerEnabled,
-                "tertiaryPower.enabled",
+            primaryPowerEnabled = registerCheckbox(
+                "PrimaryPowerEnabled",
+                L.CONFIG_UNIT_PRIMARY_POWER_ENABLE or "Show primary power bar",
+                primaryLabel,
+                "primaryPower.enabled",
                 REFRESH_INTENT_LAYOUT,
-                boolValue("tertiaryPower.enabled", true)
-            )
-            textAnchor = tertiaryPowerEnabled
-        end
-    end
-
-    local xOffset
-    local yOffset
-    if showAdvanced then
-        cursor = self:CreateSectionHeader(
-            page,
-            L.CONFIG_SECTION_ADVANCED or "Advanced",
-            L.CONFIG_SECTION_ADVANCED_HELP or "These controls are useful when you already know the general shape you want and need more exact placement or detached sizing.",
-            textAnchor
-        )
-
-        xOffset = registerNumeric(
-            "XOffset",
-            L.CONFIG_UNIT_X or "X offset",
-            -1600,
-            1600,
-            1,
-            cursor,
-            "x",
-            REFRESH_INTENT_POSITION,
-            numericValue("x", 0),
-            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
-            20
-        )
-        yOffset = registerNumeric(
-            "YOffset",
-            L.CONFIG_UNIT_Y or "Y offset",
-            -1600,
-            1600,
-            1,
-            xOffset.slider,
-            "y",
-            REFRESH_INTENT_POSITION,
-            numericValue("y", 0),
-            function(value) return math.floor((tonumber(value) or 0) + 0.5) end
-        )
-        textAnchor = yOffset.slider
-
-        if castbarEnabled then
-            castbarDetach = registerCheckbox(
-                "CastbarDetach",
-                L.CONFIG_UNIT_CASTBAR_DETACH or "Detach cast bar",
-                yOffset.slider,
-                "castbar.detached",
-                REFRESH_INTENT_LAYOUT,
-                boolValue("castbar.detached", false),
+                boolValue("primaryPower.enabled", true),
                 -12
             )
-            castbarHideBlizzard = registerCheckbox(
-                "CastbarHideBlizzard",
-                L.CONFIG_UNIT_CASTBAR_HIDE_BLIZZARD or "Hide Blizzard cast bar",
-                castbarDetach,
-                "castbar.hideBlizzardCastBar",
-                REFRESH_INTENT_LAYOUT,
-                boolValue("castbar.hideBlizzardCastBar", false)
-            )
-            textAnchor = castbarHideBlizzard
-        end
-
-        if unitToken == "player" then
-            local baseAdvancedAnchor = castbarHideBlizzard or yOffset.slider
             primaryPowerDetach = registerCheckbox(
                 "PrimaryPowerDetach",
                 L.CONFIG_UNIT_PRIMARY_POWER_DETACH or "Detach primary power bar",
-                baseAdvancedAnchor,
+                primaryPowerEnabled,
                 "primaryPower.detached",
                 REFRESH_INTENT_LAYOUT,
-                boolValue("primaryPower.detached", false),
-                (baseAdvancedAnchor == yOffset.slider) and -12 or -8
+                boolValue("primaryPower.detached", false)
             )
             primaryPowerWidth = registerNumeric(
                 "PrimaryPowerWidth",
@@ -3917,14 +3992,28 @@ function Configuration:BuildUnitPage(page, unitToken, options)
                 function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
                 20
             )
+
+            local secondaryLabel = createSubsection(
+                L.CONFIG_SUBSECTION_SECONDARY_POWER or "Secondary Power",
+                primaryPowerWidth.slider,
+                22
+            )
+            secondaryPowerEnabled = registerCheckbox(
+                "SecondaryPowerEnabled",
+                L.CONFIG_UNIT_SECONDARY_POWER_ENABLE or "Show secondary power bar",
+                secondaryLabel,
+                "secondaryPower.enabled",
+                REFRESH_INTENT_LAYOUT,
+                boolValue("secondaryPower.enabled", true),
+                -12
+            )
             secondaryPowerDetach = registerCheckbox(
                 "SecondaryPowerDetach",
                 L.CONFIG_UNIT_SECONDARY_POWER_DETACH or "Detach secondary power bar",
-                primaryPowerWidth.slider,
+                secondaryPowerEnabled,
                 "secondaryPower.detached",
                 REFRESH_INTENT_LAYOUT,
-                boolValue("secondaryPower.detached", false),
-                -12
+                boolValue("secondaryPower.detached", false)
             )
             secondaryPowerSize = registerNumeric(
                 "SecondaryPowerSize",
@@ -3936,9 +4025,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
                 "secondaryPower.size",
                 REFRESH_INTENT_LAYOUT,
                 numericValue("secondaryPower.size", 16),
-                function(value)
-                    return math.floor((tonumber(value) or 0) + 0.5)
-                end,
+                function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
                 20
             )
             secondaryPowerWidth = registerNumeric(
@@ -3957,18 +4044,30 @@ function Configuration:BuildUnitPage(page, unitToken, options)
                     local configured = tonumber(getTableValueAtPath(config, "secondaryPower.width")) or fallback
                     return Util:Clamp(math.max(configured, size * 8), 80, 600)
                 end,
-                function(value)
-                    return math.floor((tonumber(value) or 0) + 0.5)
-                end
+                function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+            )
+
+            local tertiaryLabel = createSubsection(
+                L.CONFIG_SUBSECTION_TERTIARY_POWER or "Tertiary Power",
+                secondaryPowerWidth.slider,
+                22
+            )
+            tertiaryPowerEnabled = registerCheckbox(
+                "TertiaryPowerEnabled",
+                L.CONFIG_UNIT_TERTIARY_POWER_ENABLE or "Show tertiary power bar",
+                tertiaryLabel,
+                "tertiaryPower.enabled",
+                REFRESH_INTENT_LAYOUT,
+                boolValue("tertiaryPower.enabled", true),
+                -12
             )
             tertiaryPowerDetach = registerCheckbox(
                 "TertiaryPowerDetach",
                 L.CONFIG_UNIT_TERTIARY_POWER_DETACH or "Detach tertiary power bar",
-                secondaryPowerWidth.slider,
+                tertiaryPowerEnabled,
                 "tertiaryPower.detached",
                 REFRESH_INTENT_LAYOUT,
-                boolValue("tertiaryPower.detached", false),
-                -12
+                boolValue("tertiaryPower.detached", false)
             )
             tertiaryPowerHeight = registerNumeric(
                 "TertiaryPowerHeight",
@@ -3999,41 +4098,52 @@ function Configuration:BuildUnitPage(page, unitToken, options)
                 end,
                 function(value) return math.floor((tonumber(value) or 0) + 0.5) end
             )
+            sectionAnchor = tertiaryPowerWidth.slider
+        else
+            primaryPowerEnabled = registerCheckbox(
+                "PrimaryPowerEnabled",
+                L.CONFIG_UNIT_PRIMARY_POWER_ENABLE or "Show primary power bar",
+                cursor,
+                "primaryPower.enabled",
+                REFRESH_INTENT_LAYOUT,
+                boolValue("primaryPower.enabled", true),
+                -14
+            )
+            sectionAnchor = primaryPowerEnabled
         end
-    elseif not advancedToggleRelevant then
-        cursor = self:CreateSectionHeader(
-            page,
-            L.CONFIG_SECTION_POSITION or "Position",
-            L.CONFIG_SECTION_POSITION_HELP or "Use these controls when the frame shape is already right and you only need to nudge where it sits.",
-            textAnchor
-        )
-
-        xOffset = registerNumeric(
-            "XOffset",
-            L.CONFIG_UNIT_X or "X offset",
-            -1600,
-            1600,
-            1,
-            cursor,
-            "x",
-            REFRESH_INTENT_POSITION,
-            numericValue("x", 0),
-            function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
-            20
-        )
-        yOffset = registerNumeric(
-            "YOffset",
-            L.CONFIG_UNIT_Y or "Y offset",
-            -1600,
-            1600,
-            1,
-            xOffset.slider,
-            "y",
-            REFRESH_INTENT_POSITION,
-            numericValue("y", 0),
-            function(value) return math.floor((tonumber(value) or 0) + 0.5) end
-        )
     end
+
+    cursor = createSection(
+        L.CONFIG_SECTION_POSITION or "Position",
+        sectionAnchor
+    )
+
+    local xOffset = registerNumeric(
+        "XOffset",
+        L.CONFIG_UNIT_X or "X offset",
+        -1600,
+        1600,
+        1,
+        cursor,
+        "x",
+        REFRESH_INTENT_POSITION,
+        numericValue("x", 0),
+        function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+        20
+    )
+    local yOffset = registerNumeric(
+        "YOffset",
+        L.CONFIG_UNIT_Y or "Y offset",
+        -1600,
+        1600,
+        1,
+        xOffset.slider,
+        "y",
+        REFRESH_INTENT_POSITION,
+        numericValue("y", 0),
+        function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+    )
+    pageWidgets.bottomAnchor = yOffset.slider
 
     function pageWidgets:Refresh()
         local unitConfig = getUnitConfig()
@@ -4044,8 +4154,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         self._owner:SyncWidgetRegistry(self.registry, unitConfig)
 
         if buffsEnabled then
-            local enabledBuffs = getTableValueAtPath(unitConfig, "aura.buffs.enabled")
-            local buffWidgetsEnabled = enabledBuffs ~= false
+            local buffWidgetsEnabled = getTableValueAtPath(unitConfig, "aura.buffs.enabled") ~= false
             if buffsMax then
                 self._owner:SetNumericControlEnabled(buffsMax, buffWidgetsEnabled)
             end
@@ -4061,8 +4170,7 @@ function Configuration:BuildUnitPage(page, unitToken, options)
         end
 
         if debuffsEnabled then
-            local enabledDebuffs = getTableValueAtPath(unitConfig, "aura.debuffs.enabled")
-            local debuffWidgetsEnabled = enabledDebuffs ~= false
+            local debuffWidgetsEnabled = getTableValueAtPath(unitConfig, "aura.debuffs.enabled") ~= false
             if debuffsMax then
                 self._owner:SetNumericControlEnabled(debuffsMax, debuffWidgetsEnabled)
             end
@@ -4077,6 +4185,18 @@ function Configuration:BuildUnitPage(page, unitToken, options)
             end
             if debuffsY then
                 self._owner:SetNumericControlEnabled(debuffsY, debuffWidgetsEnabled)
+            end
+            if debuffsHidePermanent then
+                self._owner:SetButtonEnabled(debuffsHidePermanent, debuffWidgetsEnabled)
+                debuffsHidePermanent:SetAlpha(debuffWidgetsEnabled and 1 or 0.55)
+            end
+            if debuffsHideLongDuration then
+                self._owner:SetButtonEnabled(debuffsHideLongDuration, debuffWidgetsEnabled)
+                debuffsHideLongDuration:SetAlpha(debuffWidgetsEnabled and 1 or 0.55)
+            end
+            if debuffsMaxDuration then
+                local hideLongDuration = getTableValueAtPath(unitConfig, "aura.debuffs.hideLongDuration") == true
+                self._owner:SetNumericControlEnabled(debuffsMaxDuration, debuffWidgetsEnabled and hideLongDuration)
             end
         end
 
@@ -4143,16 +4263,12 @@ function Configuration:BuildUnitPage(page, unitToken, options)
     return pageWidgets
 end
 
-local function getFramesPageKey(unitToken, showAdvanced)
-    return tostring(unitToken or "") .. ":" .. ((showAdvanced and "advanced") or "basic")
-end
-
 -- Build the Frames hub page with grouped unit navigation.
 function Configuration:BuildFramesPage(page)
     local intro = self:CreateHelpText(
         page,
         L.CONFIG_FRAMES_HELP
-            or "Pick a frame on the left, then work top-to-bottom through the sections on the right. Basic mode keeps the most common controls visible first.",
+            or "Pick a frame on the left, then work top-to-bottom through the sections on the right. Every setting for that unit stays visible on one page.",
         page,
         0
     )
@@ -4175,7 +4291,7 @@ function Configuration:BuildFramesPage(page)
 
     local headerControls = CreateFrame("Frame", nil, rightPane)
     headerControls:SetPoint("TOPRIGHT", rightPane, "TOPRIGHT", 0, 0)
-    headerControls:SetSize(240, 56)
+    headerControls:SetSize(168, 26)
 
     local unitTitle = rightPane:CreateFontString(nil, "ARTWORK")
     unitTitle:SetPoint("TOPLEFT", rightPane, "TOPLEFT", 0, 0)
@@ -4190,36 +4306,9 @@ function Configuration:BuildFramesPage(page)
     Style:ApplyFont(unitDescription, 11)
     unitDescription:SetTextColor(0.8, 0.83, 0.9, 0.96)
 
-    local advancedToggle = self:CreateCheckbox(
-        "mummuFramesConfigFramesAdvancedToggle",
-        rightPane,
-        L.CONFIG_FRAMES_SHOW_ADVANCED or "Show advanced options",
-        headerControls,
-        0,
-        -2,
-        "TOPRIGHT"
-    )
-    advancedToggle:ClearAllPoints()
-    advancedToggle:SetPoint("TOPRIGHT", headerControls, "TOPRIGHT", 0, -2)
-    local advancedToggleText = _G[advancedToggle:GetName() .. "Text"]
-    if advancedToggleText then
-        advancedToggleText:ClearAllPoints()
-        advancedToggleText:SetPoint("LEFT", headerControls, "LEFT", 0, 0)
-        advancedToggleText:SetPoint("RIGHT", advancedToggle, "LEFT", -6, 0)
-        advancedToggleText:SetJustifyH("RIGHT")
-        advancedToggleText:SetWordWrap(false)
-    end
-    if type(advancedToggle.SetHitRectInsets) == "function" then
-        advancedToggle:SetHitRectInsets(-196, 0, 0, 0)
-    end
-    advancedToggle:SetScript("OnClick", function(button)
-        self._showAdvancedFrameOptions = button:GetChecked() == true
-        self:RefreshFramesPage(true)
-    end)
-
     local resetButton = CreateFrame("Button", "mummuFramesConfigFramesResetButton", headerControls, "UIPanelButtonTemplate")
     resetButton:SetSize(158, 22)
-    resetButton:SetPoint("TOPRIGHT", advancedToggle, "BOTTOMRIGHT", 0, -6)
+    resetButton:SetPoint("TOPRIGHT", headerControls, "TOPRIGHT", 0, -2)
     resetButton:SetText(L.CONFIG_FRAMES_RESET_UNIT or "Reset this frame")
     resetButton:SetScript("OnClick", function()
         local dataHandle = self:GetDataHandle()
@@ -4234,8 +4323,8 @@ function Configuration:BuildFramesPage(page)
     end)
 
     local headerDivider = rightPane:CreateTexture(nil, "ARTWORK")
-    headerDivider:SetPoint("TOPLEFT", rightPane, "TOPLEFT", 0, -68)
-    headerDivider:SetPoint("TOPRIGHT", rightPane, "TOPRIGHT", 0, -68)
+    headerDivider:SetPoint("TOPLEFT", rightPane, "TOPLEFT", 0, -60)
+    headerDivider:SetPoint("TOPRIGHT", rightPane, "TOPRIGHT", 0, -60)
     headerDivider:SetHeight(1)
     headerDivider:SetColorTexture(1, 1, 1, 0.08)
 
@@ -4253,8 +4342,6 @@ function Configuration:BuildFramesPage(page)
         headerControls = headerControls,
         unitTitle = unitTitle,
         unitDescription = unitDescription,
-        advancedToggle = advancedToggle,
-        advancedToggleText = advancedToggleText,
         resetButton = resetButton,
         headerDivider = headerDivider,
         contentPage = contentPage,
@@ -4276,7 +4363,7 @@ function Configuration:BuildFramesPage(page)
         groupLabel:SetPoint("RIGHT", selectorInset, "RIGHT", 0, 0)
         Style:ApplyFont(groupLabel, 11)
         setFontStringTextSafe(groupLabel, group.label, 11)
-        groupLabel:SetTextColor(0.73, 0.78, 0.88, group.subdued and 0.72 or 0.92)
+        groupLabel:SetTextColor(0.73, 0.78, 0.88, 0.92)
 
         local previous = groupLabel
         for unitIndex = 1, #group.units do
@@ -4296,9 +4383,8 @@ function Configuration:BuildFramesPage(page)
             label:SetJustifyH("LEFT")
             Style:ApplyFont(label, 12)
             setFontStringTextSafe(label, UNIT_TAB_LABELS[unitToken] or unitToken, 12)
-            label:SetAlpha(group.subdued and 0.78 or 0.95)
+            label:SetAlpha(0.95)
             button._label = label
-            button._subdued = group.subdued == true
 
             button:SetScript("OnClick", function()
                 self:SelectFrameUnit(unitToken)
@@ -4332,23 +4418,6 @@ function Configuration:RefreshFramesPage(forceSync)
     end
 
     local selectedUnit = self:GetSelectedFrameUnit()
-    local advancedToggleRelevant = unitUsesAdvancedToggle(selectedUnit)
-    local showAdvanced = advancedToggleRelevant and self._showAdvancedFrameOptions == true
-
-    if framesWidgets.advancedToggle then
-        framesWidgets.advancedToggle:SetShown(advancedToggleRelevant)
-        framesWidgets.advancedToggle:SetChecked(showAdvanced)
-    end
-    if framesWidgets.resetButton then
-        framesWidgets.resetButton:ClearAllPoints()
-        if advancedToggleRelevant and framesWidgets.advancedToggle then
-            framesWidgets.resetButton:SetPoint("TOPRIGHT", framesWidgets.advancedToggle, "BOTTOMRIGHT", 0, -6)
-        elseif framesWidgets.headerControls then
-            framesWidgets.resetButton:SetPoint("TOPRIGHT", framesWidgets.headerControls, "TOPRIGHT", 0, -2)
-        else
-            framesWidgets.resetButton:SetPoint("TOPRIGHT", framesWidgets.rightPane, "TOPRIGHT", 0, -2)
-        end
-    end
     if framesWidgets.unitTitle then
         setFontStringTextSafe(framesWidgets.unitTitle, UNIT_TAB_LABELS[selectedUnit] or selectedUnit, 16)
     end
@@ -4369,25 +4438,24 @@ function Configuration:RefreshFramesPage(forceSync)
             if selected then
                 button._label:SetAlpha(1)
             else
-                button._label:SetAlpha(button._subdued and 0.78 or 0.9)
+                button._label:SetAlpha(0.9)
             end
         end
     end
 
-    local pageKey = getFramesPageKey(selectedUnit, showAdvanced)
+    local pageKey = tostring(selectedUnit or "")
     local pageInfo = framesWidgets.unitPages[pageKey]
     if not pageInfo then
         local root = CreateFrame("Frame", nil, framesWidgets.content)
         root:SetPoint("TOPLEFT", framesWidgets.content, "TOPLEFT", 0, 0)
         root:SetPoint("RIGHT", framesWidgets.content, "RIGHT", 0, 0)
-        root:SetHeight(CONFIG_PAGE_CONTENT_HEIGHT)
+        root:SetHeight(CONFIG_PAGE_MIN_CONTENT_HEIGHT)
 
         pageInfo = {
             key = pageKey,
             unitToken = selectedUnit,
-            showAdvanced = showAdvanced,
             root = root,
-            widgets = self:BuildUnitPage(root, selectedUnit, { showAdvanced = showAdvanced }),
+            widgets = self:BuildUnitPage(root, selectedUnit),
         }
         framesWidgets.unitPages[pageKey] = pageInfo
     end
@@ -4400,6 +4468,14 @@ function Configuration:RefreshFramesPage(forceSync)
 
     if pageInfo and pageInfo.widgets and type(pageInfo.widgets.Refresh) == "function" then
         pageInfo.widgets:Refresh()
+        local resolvedHeight = self:FitContentHeight(
+            pageInfo.root,
+            pageInfo.widgets.bottomAnchor,
+            pageInfo.widgets.bottomPadding
+        )
+        if framesWidgets.content then
+            framesWidgets.content:SetHeight(resolvedHeight)
+        end
     end
 
     if framesWidgets.contentPage and framesWidgets.contentPage.ScrollFrame then
@@ -4440,6 +4516,17 @@ function Configuration:EnsureTabPageBuilt(tabKey)
     end
 
     hostPage._built = true
+end
+
+function Configuration:RefreshScrollableTabHeight(tabKey)
+    local hostPage = self.tabPages and self.tabPages[tabKey] or nil
+    local scrollOwner = hostPage and hostPage.InnerPage or nil
+    local widgets = self.widgets and self.widgets[tabKey] or nil
+    if not scrollOwner or not scrollOwner.Content or not widgets or not widgets.bottomAnchor then
+        return
+    end
+
+    self:FitContentHeight(scrollOwner.Content, widgets.bottomAnchor, widgets.bottomPadding)
 end
 
 function Configuration:SelectTab(tabKey)
@@ -4486,6 +4573,8 @@ function Configuration:SelectTab(tabKey)
 
     if tabKey == "frames" then
         self:RefreshFramesPage(true)
+    else
+        self:RefreshScrollableTabHeight(tabKey)
     end
 
     self.currentTab = tabKey
@@ -4515,7 +4604,7 @@ function Configuration:CreateScrollableTabPage(parent)
     local content = CreateFrame("Frame", nil, scrollFrame)
     content:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", CONFIG_PAGE_LEFT_INSET, 0)
     content:SetWidth(1)
-    content:SetHeight(CONFIG_PAGE_CONTENT_HEIGHT)
+    content:SetHeight(CONFIG_PAGE_MIN_CONTENT_HEIGHT)
     scrollFrame:SetScrollChild(content)
 
     -- Keep the page content width aligned with the scroll frame viewport.

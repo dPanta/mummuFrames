@@ -7,8 +7,6 @@ local _, ns = ...
 
 -- Shared utility namespace.
 local Util = {}
-local GROUP_UNIT_FRIENDLY_RANGE_ITEM_ID = 1713
-local GROUP_UNIT_INTERACT_RANGE_INDEX = 4
 local TRACKED_AURA_DEFAULT_SIZE = 14
 local TRACKED_AURA_DEFAULT_NAMES_BY_CLASS = {
     DEATHKNIGHT = {},
@@ -219,10 +217,9 @@ function Util:GetUnitGUIDSafe(unitToken)
 end
 
 -- Return whether a party or raid unit should be considered out of range.
--- Prefer confirmed positive probes over dimming on ambiguous API returns.
--- Some clients surface noisy UNIT_IN_RANGE_UPDATE payloads or transient
--- UnitInRange false negatives for valid party members, so only explicit direct
--- or 40-yard item misses should fade the frame.
+-- Prefer event-provided range state when available, then fall back to
+-- UnitInRange. Unknown states fail open so secure group frames never dim from
+-- ambiguous or protected probe results.
 function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
         return true
@@ -246,19 +243,6 @@ function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
             normalizedCanCheckRange = normalizeBooleanLike(checkedRange)
 
             if normalizedDirectInRange == true then
-                return true
-            end
-        end
-    end
-
-    -- Midnight retail can still flag item range probes on party/raid units as a
-    -- protected action in combat, so group frames avoid IsItemInRange here.
-
-    if type(CheckInteractDistance) == "function" then
-        local okInteractRange, inInteractRange = pcall(CheckInteractDistance, unitToken, GROUP_UNIT_INTERACT_RANGE_INDEX)
-        if okInteractRange then
-            local normalizedInteractRange = normalizeBooleanLike(inInteractRange)
-            if normalizedInteractRange == true then
                 return true
             end
         end

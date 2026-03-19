@@ -99,6 +99,9 @@ local DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER = {
         size = 16,
         scale = 1,
         max = 4,
+        hidePermanent = false,
+        hideLongDuration = false,
+        maxDurationSeconds = 60,
     },
     raid = {
         enabled = true,
@@ -109,6 +112,9 @@ local DEFAULT_GROUP_DEBUFF_CONFIG_BY_OWNER = {
         size = 12,
         scale = 1,
         max = 3,
+        hidePermanent = false,
+        hideLongDuration = false,
+        maxDurationSeconds = 60,
     },
 }
 
@@ -1706,6 +1712,11 @@ local function getGroupDebuffConfig(self, frame, unitToken)
     local unitConfig = dataHandle and type(dataHandle.GetUnitConfig) == "function" and dataHandle:GetUnitConfig(ownerKey) or nil
     local auraConfig = unitConfig and type(unitConfig.aura) == "table" and unitConfig.aura or nil
     local debuffsConfig = auraConfig and type(auraConfig.debuffs) == "table" and auraConfig.debuffs or nil
+    local maxDurationSeconds = tonumber(debuffsConfig and debuffsConfig.maxDurationSeconds) or defaults.maxDurationSeconds or 60
+    maxDurationSeconds = math.floor(maxDurationSeconds + 0.5)
+    if maxDurationSeconds < 1 then
+        maxDurationSeconds = defaults.maxDurationSeconds or 60
+    end
 
     return {
         enabled = debuffsConfig == nil or debuffsConfig.enabled ~= false,
@@ -1716,16 +1727,57 @@ local function getGroupDebuffConfig(self, frame, unitToken)
         size = tonumber(debuffsConfig and debuffsConfig.size) or defaults.size,
         scale = tonumber(debuffsConfig and debuffsConfig.scale) or defaults.scale,
         max = tonumber(debuffsConfig and debuffsConfig.max) or defaults.max,
+        hidePermanent = debuffsConfig and debuffsConfig.hidePermanent == true or defaults.hidePermanent == true,
+        hideLongDuration = debuffsConfig and debuffsConfig.hideLongDuration == true or defaults.hideLongDuration == true,
+        maxDurationSeconds = Util:Clamp(maxDurationSeconds, 1, 3600),
     }
 end
 
 local getAuraDataByIndex
 local isAuraIndexSecret
 
+-- Returns true when a debuff entry should be hidden by the optional
+-- party/raid declutter filter. Fail open on unknown/secret timing fields so
+-- we never suppress an aura we could not classify safely.
+local function shouldHideGroupDebuffEntry(config, entry)
+    if type(config) ~= "table" or type(entry) ~= "table" then
+        return false
+    end
+    if config.hidePermanent ~= true and config.hideLongDuration ~= true then
+        return false
+    end
+
+    local duration = getSafeAuraNumericValue(entry.duration, nil)
+    local expirationTime = getSafeAuraNumericValue(entry.expirationTime, nil)
+
+    if config.hidePermanent == true
+        and type(duration) == "number"
+        and type(expirationTime) == "number"
+        and duration <= 0
+        and expirationTime <= 0
+    then
+        return true
+    end
+
+    if config.hideLongDuration == true and type(duration) == "number" then
+        local threshold = tonumber(config.maxDurationSeconds) or 60
+        threshold = math.floor(threshold + 0.5)
+        if threshold < 1 then
+            threshold = 60
+        end
+        threshold = Util:Clamp(threshold, 1, 3600)
+        if duration > threshold then
+            return true
+        end
+    end
+
+    return false
+end
+
 -- Convert the cached harmful aura bucket into render entries for the debuff row.
-local function gatherGroupDebuffEntries(unitToken, maxIcons)
+local function gatherGroupDebuffEntries(unitToken, config)
     local entries = {}
-    local limit = Util:Clamp(tonumber(maxIcons) or 0, 0, GROUP_DEBUFF_MAX_BUTTONS)
+    local limit = Util:Clamp(tonumber(config and config.max) or 0, 0, GROUP_DEBUFF_MAX_BUTTONS)
     if type(unitToken) ~= "string" or unitToken == "" or limit <= 0 then
         return entries
     end
@@ -1757,10 +1809,12 @@ local function gatherGroupDebuffEntries(unitToken, maxIcons)
             entries[#entries + 1] = {
                 icon = isSecretAuraValue(auraData.icon) and nil or auraData.icon,
                 applications = applications,
-                expirationTime = getSafeAuraNumericValue(auraData.expirationTime, 0) or 0,
-                duration = getSafeAuraNumericValue(auraData.duration, 0) or 0,
+                expirationTime = getSafeAuraNumericValue(auraData.expirationTime, nil),
+                duration = getSafeAuraNumericValue(auraData.duration, nil),
             }
-            if #entries >= limit then
+            if shouldHideGroupDebuffEntry(config, entries[#entries]) then
+                entries[#entries] = nil
+            elseif #entries >= limit then
                 break
             end
         end
@@ -1777,12 +1831,19 @@ local function getPreviewGroupDebuffEntries(maxIcons)
     end
 
     local total = math.min(limit, 3)
+    local now = getSafeNowSeconds()
+    local previewDurations = {
+        45,
+        120,
+        0,
+    }
     for index = 1, total do
+        local duration = previewDurations[index] or 0
         entries[#entries + 1] = {
             icon = DEFAULT_AURA_TEXTURE,
             applications = index == 1 and 2 or 0,
-            expirationTime = nil,
-            duration = nil,
+            expirationTime = duration > 0 and (now + duration) or 0,
+            duration = duration,
         }
     end
     return entries
@@ -3479,7 +3540,17 @@ function AuraHandle:RefreshFrameDebuffIcons(frame, unitToken, previewMode)
 
     local entries = previewMode == true
         and getPreviewGroupDebuffEntries(config.max)
-        or gatherGroupDebuffEntries(unitToken, config.max)
+        or gatherGroupDebuffEntries(unitToken, config)
+    if previewMode == true and (config.hidePermanent == true or config.hideLongDuration == true) then
+        local filteredEntries = {}
+        for index = 1, #entries do
+            local entry = entries[index]
+            if not shouldHideGroupDebuffEntry(config, entry) then
+                filteredEntries[#filteredEntries + 1] = entry
+            end
+        end
+        entries = filteredEntries
+    end
     if #entries == 0 then
         hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
         return
