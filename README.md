@@ -17,11 +17,8 @@ Unitframes addon for World of Warcraft. Minimal, core functionalities, basic cus
     - Specify where and how to display given buff/hot (icon, colored rectangle)
 
 # How to use:
-- A blue M icon will appear in minimap
+- A minimap icon for configuration.
 - You can also use a chatcommand:  /mmf
 
 # Idea
 The whole idea behind these is simplicity and hopefully performance. No overly complex configuration, no complex logic.
-
-# Still thinking about you
-Raid Frames feature will come in a few days (ready for midnight launch).

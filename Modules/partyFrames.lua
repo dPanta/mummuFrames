@@ -906,6 +906,10 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.SpellTargetHighlight.Fill:SetPoint("BOTTOMRIGHT", frame.SpellTargetHighlight, "BOTTOMRIGHT", -spellHighlightBorder, spellHighlightBorder)
     frame.SpellTargetHighlight.Fill:SetColorTexture(1, 0.18, 0.14, 0.08)
 
+    if ns.AuraHandle and type(ns.AuraHandle.PrimeTrackedAuraIndicators) == "function" then
+        ns.AuraHandle:PrimeTrackedAuraIndicators(frame)
+    end
+
     frame._mummuVisualsBuilt = true
 end
 
@@ -2481,6 +2485,33 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
+        return finishPerfCounters(self, "RefreshAll", perfStartedAt)
+    end
+
+    -- Raid mode: the raid module owns group presentation, so the live party
+    -- container should disappear entirely instead of leaving an empty shell.
+    if inAnyRaid then
+        self._frameByDisplayedUnit = {}
+        self._displayedUnitByGUID = {}
+        self.frames = {}
+        ns.activeMummuPartyFrames = {}
+        self:StopTestTicker()
+        self._testMemberStateByUnit = nil
+
+        if ns.AuraHandle and type(ns.AuraHandle.RebuildSharedUnitFrameMap) == "function" then
+            ns.AuraHandle:RebuildSharedUnitFrameMap(inCombat, inCombat and "party_hidden_in_raid_combat" or "party_hidden_in_raid")
+        end
+
+        if inCombat then
+            self.pendingLayoutRefresh = true
+        else
+            self.header:Hide()
+            for i = 1, #self.testFrames do
+                self.testFrames[i]:Hide()
+            end
+            self.container:Hide()
+        end
+
         return finishPerfCounters(self, "RefreshAll", perfStartedAt)
     end
 

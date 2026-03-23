@@ -676,6 +676,7 @@ function Configuration:Constructor()
     self._refreshScheduled = false
     self._pendingRefreshRequest = nil
     self._profilesSelectedName = nil
+    self._selectedAuraEntryIndex = nil
     self._selectedFrameUnit = "party"
 end
 
@@ -732,6 +733,16 @@ function Configuration:SetProfilesStatus(message, r, g, b)
 
     local text = message or ""
     widgets.statusText:SetText(text)
+    widgets.statusText:SetTextColor(r or 0.82, g or 0.84, b or 0.9, 1)
+end
+
+function Configuration:SetAurasStatus(message, r, g, b)
+    local widgets = self.widgets and self.widgets.auras
+    if not widgets or not widgets.statusText then
+        return
+    end
+
+    widgets.statusText:SetText(message or "")
     widgets.statusText:SetTextColor(r or 0.82, g or 0.84, b or 0.9, 1)
 end
 
@@ -3028,6 +3039,320 @@ function Configuration:BuildAurasPage(page)
 
     local registry = {}
 
+    local displayOptions = {
+        { value = "square", label = L.CONFIG_PARTY_HEALER_STYLE_RECTANGLE or "Colored square" },
+        { value = "icon", label = L.CONFIG_PARTY_HEALER_STYLE_ICON or "Icon" },
+    }
+    local iconSlotOptions = {
+        { value = "AUTO", label = L.CONFIG_AURAS_ENTRY_AUTO_SLOT or "Auto strip" },
+        { value = "ICON1", label = L.CONFIG_AURAS_ENTRY_ICON1 or "Icon slot 1" },
+        { value = "ICON2", label = L.CONFIG_AURAS_ENTRY_ICON2 or "Icon slot 2" },
+        { value = "ICON3", label = L.CONFIG_AURAS_ENTRY_ICON3 or "Icon slot 3" },
+        { value = "ICON4", label = L.CONFIG_AURAS_ENTRY_ICON4 or "Icon slot 4" },
+    }
+    local listRowHeight = 30
+    local squareSlotOptions = {
+        { value = "TOPLEFT", label = L.CONFIG_PARTY_HEALER_ANCHOR_TOPLEFT or "Top left" },
+        { value = "TOPRIGHT", label = L.CONFIG_PARTY_HEALER_ANCHOR_TOPRIGHT or "Top right" },
+        { value = "BOTTOMLEFT", label = L.CONFIG_PARTY_HEALER_ANCHOR_BOTTOMLEFT or "Bottom left" },
+        { value = "BOTTOMRIGHT", label = L.CONFIG_PARTY_HEALER_ANCHOR_BOTTOMRIGHT or "Bottom right" },
+    }
+
+    local function normalizeEntryDisplay(display)
+        if display == "icon" then
+            return "icon"
+        end
+        return "square"
+    end
+
+    local function normalizeEditorSlot(display, slot)
+        if normalizeEntryDisplay(display) == "square" then
+            for index = 1, #squareSlotOptions do
+                if squareSlotOptions[index].value == slot then
+                    return slot
+                end
+            end
+            return "TOPLEFT"
+        end
+
+        for index = 1, #iconSlotOptions do
+            if iconSlotOptions[index].value == slot then
+                return slot
+            end
+        end
+        return "AUTO"
+    end
+
+    local function normalizeEntrySize(display, value, fallback)
+        local numeric = tonumber(value)
+        if type(numeric) ~= "number" then
+            numeric = tonumber(fallback)
+        end
+        if type(numeric) ~= "number" then
+            numeric = normalizeEntryDisplay(display) == "square" and 8 or 14
+        end
+
+        numeric = math.floor(numeric + 0.5)
+        if normalizeEntryDisplay(display) == "square" then
+            return Util:Clamp(numeric, 4, 24)
+        end
+        return Util:Clamp(numeric, 6, 48)
+    end
+
+    local function normalizeColorPercent(value, fallback)
+        local numeric = tonumber(value)
+        if type(numeric) ~= "number" then
+            numeric = tonumber(fallback)
+        end
+        if type(numeric) ~= "number" then
+            numeric = 0
+        end
+        return Util:Clamp(math.floor(numeric + 0.5), 0, 100)
+    end
+
+    local function getAuraDisplayLabel(display)
+        local resolvedDisplay = normalizeEntryDisplay(display)
+        for index = 1, #displayOptions do
+            if displayOptions[index].value == resolvedDisplay then
+                return displayOptions[index].label
+            end
+        end
+        return displayOptions[1].label
+    end
+
+    local function getAuraSlotLabel(display, slot)
+        local options = normalizeEntryDisplay(display) == "square" and squareSlotOptions or iconSlotOptions
+        local resolvedSlot = normalizeEditorSlot(display, slot)
+        for index = 1, #options do
+            if options[index].value == resolvedSlot then
+                return options[index].label
+            end
+        end
+        return options[1] and options[1].label or ""
+    end
+
+    local function trimTextValue(text)
+        if type(text) ~= "string" then
+            return nil
+        end
+        text = string.match(text, "^%s*(.-)%s*$")
+        if not text or text == "" then
+            return nil
+        end
+        return text
+    end
+
+    local function getAuraEntriesConfig()
+        local config = self:GetTrackedAurasConfig()
+        if not config then
+            return nil
+        end
+        if type(config.entries) ~= "table" then
+            config.entries = {}
+        end
+        return config
+    end
+
+    local function getDefaultEditorState(displayOverride)
+        local config = getAuraEntriesConfig()
+        local resolvedDisplay = normalizeEntryDisplay(displayOverride)
+        local baseSize = tonumber(config and config.size) or 14
+
+        return {
+            spell = "",
+            display = resolvedDisplay,
+            slot = normalizeEditorSlot(resolvedDisplay, nil),
+            ownOnly = true,
+            size = normalizeEntrySize(resolvedDisplay, nil, baseSize),
+            color = {
+                r = 25,
+                g = 95,
+                b = 35,
+            },
+            source = nil,
+        }
+    end
+
+    local function buildEditorSourceSnapshot(entry, config, index)
+        local resolvedDisplay = normalizeEntryDisplay(entry and entry.display)
+        return {
+            index = index,
+            spell = type(entry and entry.spell) == "string" and entry.spell or "",
+            display = resolvedDisplay,
+            slot = normalizeEditorSlot(resolvedDisplay, entry and entry.slot or nil),
+            ownOnly = entry and entry.ownOnly ~= false or true,
+            size = normalizeEntrySize(resolvedDisplay, entry and entry.size or nil, config and config.size or 14),
+            colorR = normalizeColorPercent(entry and entry.color and entry.color.r and (tonumber(entry.color.r) * 100) or nil, 25),
+            colorG = normalizeColorPercent(entry and entry.color and entry.color.g and (tonumber(entry.color.g) * 100) or nil, 95),
+            colorB = normalizeColorPercent(entry and entry.color and entry.color.b and (tonumber(entry.color.b) * 100) or nil, 35),
+        }
+    end
+
+    local function doesEditorSourceMatch(snapshot, entry, config, index)
+        if type(snapshot) ~= "table" then
+            return false
+        end
+
+        local current = buildEditorSourceSnapshot(entry, config, index)
+        return snapshot.index == current.index
+            and snapshot.spell == current.spell
+            and snapshot.display == current.display
+            and snapshot.slot == current.slot
+            and snapshot.ownOnly == current.ownOnly
+            and snapshot.size == current.size
+            and snapshot.colorR == current.colorR
+            and snapshot.colorG == current.colorG
+            and snapshot.colorB == current.colorB
+    end
+
+    local editorState = getDefaultEditorState("square")
+    local listRows = {}
+    local spellInput
+    local displayDropdown
+    local slotDropdown
+    local ownOnly
+    local entrySizeControl
+    local colorRedControl
+    local colorGreenControl
+    local colorBlueControl
+    local colorPreview
+    local colorPreviewFill
+    local colorPreviewLabel
+    local listChild
+    local listScroll
+    local emptyText
+    local selectedStateText
+    local saveButton
+    local addButton
+    local clearButton
+    local resetButton
+
+    local function getSlotOptionsForDisplay(display)
+        if normalizeEntryDisplay(display) == "square" then
+            return squareSlotOptions
+        end
+        return iconSlotOptions
+    end
+
+    local function refreshAuraPageHeight()
+        local widgets = self.widgets and self.widgets.auras
+        if widgets and widgets.bottomAnchor then
+            self:RefreshScrollableTabHeight("auras")
+        end
+    end
+
+    local function refreshTrackedAuraData()
+        if auraHandle and type(auraHandle.InvalidateAuraNameSetCache) == "function" then
+            auraHandle:InvalidateAuraNameSetCache()
+        end
+        self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras")
+    end
+
+    local function clearEntrySelection(preserveDisplay)
+        self._selectedAuraEntryIndex = nil
+        local nextDisplay = preserveDisplay
+        if type(nextDisplay) ~= "string" then
+            nextDisplay = editorState and editorState.display or "square"
+        end
+        editorState = getDefaultEditorState(nextDisplay)
+    end
+
+    local function loadEditorFromEntry(index)
+        local config = getAuraEntriesConfig()
+        local entry = config and config.entries and config.entries[index] or nil
+        if type(entry) ~= "table" then
+            clearEntrySelection("square")
+            return false
+        end
+
+        local resolvedDisplay = normalizeEntryDisplay(entry.display)
+        local defaultSize = tonumber(config and config.size) or 14
+        local snapshot = buildEditorSourceSnapshot(entry, config, index)
+        editorState = {
+            spell = snapshot.spell,
+            display = snapshot.display,
+            slot = snapshot.slot,
+            ownOnly = snapshot.ownOnly,
+            size = snapshot.size,
+            color = {
+                r = snapshot.colorR,
+                g = snapshot.colorG,
+                b = snapshot.colorB,
+            },
+            source = snapshot,
+        }
+        self._selectedAuraEntryIndex = index
+        return true
+    end
+
+    local function commitEditorNumericInputs()
+        local controls = {
+            entrySizeControl,
+            colorRedControl,
+            colorGreenControl,
+            colorBlueControl,
+        }
+        for index = 1, #controls do
+            local control = controls[index]
+            local input = control and control.input or nil
+            if input and type(input.HasFocus) == "function" and input:HasFocus() then
+                input:ClearFocus()
+            end
+        end
+    end
+
+    local function buildEntryFromEditor()
+        commitEditorNumericInputs()
+
+        editorState.spell = spellInput and spellInput:GetText() or editorState.spell
+        local spellName = trimTextValue(editorState.spell)
+        if not spellName then
+            return nil, L.CONFIG_AURAS_STATUS_SPELL_REQUIRED or "Tracked spell name is required"
+        end
+
+        local config = getAuraEntriesConfig()
+        local display = normalizeEntryDisplay(editorState.display)
+        local globalSize = tonumber(config and config.size) or 14
+        local size = normalizeEntrySize(display, editorState.size, globalSize)
+        local defaultSize = normalizeEntrySize(display, globalSize, globalSize)
+        local slot = normalizeEditorSlot(display, editorState.slot)
+        local entry = {
+            spell = spellName,
+            display = display,
+            ownOnly = editorState.ownOnly ~= false,
+        }
+
+        if display == "square" then
+            entry.slot = slot
+            entry.color = {
+                r = normalizeColorPercent(editorState.color and editorState.color.r or nil, 25) / 100,
+                g = normalizeColorPercent(editorState.color and editorState.color.g or nil, 95) / 100,
+                b = normalizeColorPercent(editorState.color and editorState.color.b or nil, 35) / 100,
+                a = 0.95,
+            }
+        elseif slot ~= "AUTO" then
+            entry.slot = slot
+        end
+
+        if size ~= defaultSize then
+            entry.size = size
+        end
+
+        return entry
+    end
+
+    local function setCheckboxEnabled(control, enabled)
+        if not control then
+            return
+        end
+        if enabled and type(control.Enable) == "function" then
+            control:Enable()
+        elseif (not enabled) and type(control.Disable) == "function" then
+            control:Disable()
+        end
+        control:SetAlpha(enabled and 1 or 0.55)
+    end
+
     local intro = self:CreateHelpText(
         page,
         L.CONFIG_AURAS_HELP
@@ -3067,7 +3392,7 @@ function Configuration:BuildAurasPage(page)
     local sizeControl = self:CreateNumericControl(
         page,
         "AurasSize",
-        L.CONFIG_AURAS_SIZE or "Icon size",
+        L.CONFIG_AURAS_SIZE or "Default indicator size",
         6,
         48,
         1,
@@ -3088,22 +3413,20 @@ function Configuration:BuildAurasPage(page)
 
     local listAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_AURAS_SECTION_LIST or "Spell List",
+        L.CONFIG_AURAS_SECTION_ENTRIES or "Tracked entries",
+        L.CONFIG_AURAS_SECTION_ENTRIES_HELP
+            or "Each entry can render as an icon strip slot or a colored corner square.",
         nil,
         sizeControl.slider
     )
 
-    -- Scrollable spell list.
-    local listWidth  = 380
-    local listHeight = 180
-    local rowHeight  = 20
-
     local listContainer = CreateFrame("Frame", "mummuFramesConfigAurasListContainer", page)
     listContainer:SetPoint("TOPLEFT", listAnchor, "BOTTOMLEFT", 0, -14)
-    listContainer:SetSize(listWidth, listHeight)
+    listContainer:SetPoint("RIGHT", page, "RIGHT", -24, 0)
+    listContainer:SetHeight(200)
     Style:CreateBackground(listContainer, 0.05, 0.05, 0.07, 0.9)
 
-    local listScroll = CreateFrame(
+    listScroll = CreateFrame(
         "ScrollFrame",
         "mummuFramesConfigAurasListScroll",
         listContainer,
@@ -3114,149 +3437,628 @@ function Configuration:BuildAurasPage(page)
     listScroll:EnableMouseWheel(true)
     listScroll:SetScript("OnMouseWheel", function(sf, delta)
         local cur    = sf:GetVerticalScroll() or 0
-        local target = cur - delta * rowHeight
+        local target = cur - delta * listRowHeight
         if target < 0 then target = 0 end
         local maxR = sf:GetVerticalScrollRange() or 0
         if target > maxR then target = maxR end
         sf:SetVerticalScroll(target)
     end)
 
-    local listChild = CreateFrame("Frame", "mummuFramesConfigAurasListChild", listScroll)
-    listChild:SetSize(listWidth - 32, 1)
+    listChild = CreateFrame("Frame", "mummuFramesConfigAurasListChild", listScroll)
+    listChild:SetSize(math.max(1, listScroll:GetWidth() or 1), 1)
     listScroll:SetScrollChild(listChild)
 
-    -- Track row frames so the spell list can be rebuilt without leaking widgets.
-    local listRows = {}
+    emptyText = listContainer:CreateFontString(nil, "ARTWORK")
+    emptyText:SetPoint("CENTER", listContainer, "CENTER", 0, 0)
+    emptyText:SetPoint("LEFT", listContainer, "LEFT", 16, 0)
+    emptyText:SetPoint("RIGHT", listContainer, "RIGHT", -40, 0)
+    emptyText:SetJustifyH("CENTER")
+    emptyText:SetJustifyV("MIDDLE")
+    Style:ApplyFont(emptyText, 11)
+    setFontStringTextSafe(
+        emptyText,
+        L.CONFIG_AURAS_EMPTY or "No tracked entries yet. Add a HoT or support buff below.",
+        11
+    )
+    emptyText:SetTextColor(0.74, 0.77, 0.84, 0.96)
 
-    -- Rebuild the visible whitelist rows from the current aura config.
-    local function refreshList()
-        for i = 1, #listRows do
-            listRows[i]:Hide()
+    local function ensureListRow(index)
+        local row = listRows[index]
+        if row then
+            return row
         end
-        listRows = {}
 
-        local config = auraHandle and auraHandle:GetAurasConfig()
-        local names  = (config and type(config.allowedSpells) == "table") and config.allowedSpells or {}
+        row = CreateFrame("Button", nil, listChild)
+        row:SetHeight(listRowHeight)
+        row:SetPoint("LEFT", listChild, "LEFT", 0, 0)
+        row:SetPoint("RIGHT", listChild, "RIGHT", 0, 0)
+        row:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
+        if row:GetHighlightTexture() then
+            row:GetHighlightTexture():SetVertexColor(0.24, 0.46, 0.72, 0.16)
+        end
+
+        local background = row:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints()
+        row.Background = background
+
+        local title = row:CreateFontString(nil, "ARTWORK")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -4)
+        title:SetPoint("RIGHT", row, "RIGHT", -66, 0)
+        title:SetJustifyH("LEFT")
+        title:SetJustifyV("TOP")
+        Style:ApplyFont(title, 11)
+        row.Title = title
+
+        local detail = row:CreateFontString(nil, "ARTWORK")
+        detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 6, 4)
+        detail:SetPoint("RIGHT", row, "RIGHT", -66, 0)
+        detail:SetJustifyH("LEFT")
+        detail:SetJustifyV("BOTTOM")
+        Style:ApplyFont(detail, 10)
+        detail:SetTextColor(0.72, 0.76, 0.84, 0.96)
+        row.Detail = detail
+
+        local swatch = row:CreateTexture(nil, "ARTWORK")
+        swatch:SetPoint("RIGHT", row, "RIGHT", -28, 0)
+        swatch:SetSize(12, 12)
+        row.Swatch = swatch
+
+        local removeButton = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+        removeButton:SetSize(18, 18)
+        removeButton:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+        row.RemoveButton = removeButton
+
+        row:SetScript("OnClick", function(selfRow)
+            local entryIndex = selfRow._entryIndex
+            if type(entryIndex) ~= "number" then
+                return
+            end
+            loadEditorFromEntry(entryIndex)
+            if self.widgets and self.widgets.auras then
+                self.widgets.auras.refreshList()
+                self.widgets.auras.refreshEditor()
+            end
+            self:SetAurasStatus(
+                string.format(L.CONFIG_AURAS_STATUS_SELECTED or "Editing tracked entry #%d", entryIndex),
+                0.82,
+                0.84,
+                0.9
+            )
+        end)
+
+        removeButton:SetScript("OnClick", function()
+            local config = getAuraEntriesConfig()
+            local entryIndex = row._entryIndex
+            if not config or type(entryIndex) ~= "number" or not config.entries[entryIndex] then
+                return
+            end
+
+            table.remove(config.entries, entryIndex)
+            if self._selectedAuraEntryIndex == entryIndex then
+                if config.entries[entryIndex] then
+                    loadEditorFromEntry(entryIndex)
+                elseif #config.entries > 0 then
+                    loadEditorFromEntry(#config.entries)
+                else
+                    clearEntrySelection(editorState and editorState.display or "square")
+                end
+            elseif type(self._selectedAuraEntryIndex) == "number" and self._selectedAuraEntryIndex > entryIndex then
+                self._selectedAuraEntryIndex = self._selectedAuraEntryIndex - 1
+            end
+
+            refreshTrackedAuraData()
+            if self.widgets and self.widgets.auras then
+                self.widgets.auras.refreshList()
+                self.widgets.auras.refreshEditor()
+            end
+            self:SetAurasStatus(
+                L.CONFIG_AURAS_STATUS_REMOVED or "Tracked entry removed",
+                0.3,
+                1,
+                0.45
+            )
+        end)
+
+        listRows[index] = row
+        return row
+    end
+
+    local function refreshList()
+        local config = getAuraEntriesConfig()
+        local entries = config and config.entries or {}
         local yOffset = 0
 
-        for idx = 1, #names do
-            local name = names[idx]
-            local row  = CreateFrame("Button", nil, listChild)
-            row:SetSize(listChild:GetWidth(), rowHeight)
+        if type(self._selectedAuraEntryIndex) == "number" and self._selectedAuraEntryIndex > #entries then
+            clearEntrySelection(editorState and editorState.display or "square")
+        end
+
+        for index = 1, #listRows do
+            listRows[index]:Hide()
+        end
+
+        for idx = 1, #entries do
+            local entry = entries[idx]
+            local row = ensureListRow(idx)
+            local display = normalizeEntryDisplay(entry and entry.display)
+            local slotLabel = getAuraSlotLabel(display, entry and entry.slot)
+            local casterLabel = (entry and entry.ownOnly) ~= false
+                and (L.CONFIG_AURAS_ENTRY_OWN_ONLY or "Own casts only")
+                or (L.CONFIG_AURAS_ENTRY_ANY_CASTER or "Any caster")
+
+            row._entryIndex = idx
+            row:ClearAllPoints()
             row:SetPoint("TOPLEFT", listChild, "TOPLEFT", 0, -yOffset)
+            row:SetPoint("RIGHT", listChild, "RIGHT", 0, 0)
+            row:SetShown(true)
+            row.Background:SetColorTexture(1, 1, 1, self._selectedAuraEntryIndex == idx and 0.12 or 0.04)
+            setFontStringTextSafe(
+                row.Title,
+                string.format("%d. %s", idx, type(entry.spell) == "string" and entry.spell or ""),
+                11
+            )
+            setFontStringTextSafe(
+                row.Detail,
+                string.format(
+                    "%s | %s | %s | %spx",
+                    getAuraDisplayLabel(display),
+                    slotLabel,
+                    casterLabel,
+                    tostring(normalizeEntrySize(display, entry and entry.size or nil, config and config.size or 14))
+                ),
+                10
+            )
 
-            local nameText = row:CreateFontString(nil, "ARTWORK")
-            nameText:SetPoint("LEFT", row, "LEFT", 4, 0)
-            nameText:SetPoint("RIGHT", row, "RIGHT", -24, 0)
-            nameText:SetJustifyH("LEFT")
-            Style:ApplyFont(nameText, 11)
-            setFontStringTextSafe(nameText, name, 11)
+            if display == "square" then
+                row.Swatch:SetColorTexture(
+                    tonumber(entry.color and entry.color.r) or 0.25,
+                    tonumber(entry.color and entry.color.g) or 0.95,
+                    tonumber(entry.color and entry.color.b) or 0.35,
+                    tonumber(entry.color and entry.color.a) or 0.95
+                )
+                row.Swatch:Show()
+            else
+                row.Swatch:Hide()
+            end
 
-            local removeBtn = CreateFrame("Button", nil, row, "UIPanelCloseButton")
-            removeBtn:SetSize(18, 18)
-            removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
-            local capturedIdx = idx
-            removeBtn:SetScript("OnClick", function()
-                local cfg = auraHandle and auraHandle:GetAurasConfig()
-                if not cfg or type(cfg.allowedSpells) ~= "table" then
-                    return
-                end
-                table.remove(cfg.allowedSpells, capturedIdx)
-                auraHandle:InvalidateAuraNameSetCache()
-                self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras")
-                refreshList()
-            end)
-
-            listRows[#listRows + 1] = row
-            yOffset = yOffset + rowHeight
+            yOffset = yOffset + listRowHeight
         end
 
         listChild:SetHeight(math.max(1, yOffset))
+        emptyText:SetShown(#entries == 0)
+        refreshAuraPageHeight()
     end
 
-    local actionsAnchor = self:CreateSectionHeader(
+    listScroll:SetScript("OnSizeChanged", function()
+        listChild:SetWidth(math.max(1, listScroll:GetWidth() or 1))
+        for index = 1, #listRows do
+            listRows[index]:SetWidth(listChild:GetWidth())
+        end
+    end)
+
+    local editorAnchor = self:CreateSectionHeader(
         page,
-        L.CONFIG_AURAS_SECTION_ACTIONS or "List Actions",
+        L.CONFIG_AURAS_SECTION_EDITOR or "Entry editor",
+        L.CONFIG_AURAS_SECTION_EDITOR_HELP
+            or "Squares use fixed corner slots so the indicators stay combat-safe on party and raid frames.",
         nil,
         listContainer,
         20
     )
 
-    -- Add-spell input row.
-    local addLabel = page:CreateFontString(nil, "ARTWORK")
-    addLabel:SetPoint("TOPLEFT", actionsAnchor, "BOTTOMLEFT", 0, -14)
-    setFontStringTextSafe(addLabel, L.CONFIG_AURAS_ADD_LABEL or "Add spell name", 12)
+    selectedStateText = self:CreateHelpText(
+        page,
+        L.CONFIG_AURAS_STATUS_NEW or "Creating a new tracked entry",
+        editorAnchor,
+        14
+    )
 
-    local addInput = createTextEditBox("mummuFramesConfigAurasAddInput", page, 220)
-    addInput:SetPoint("TOPLEFT", addLabel, "BOTTOMLEFT", 0, -6)
+    local spellLabel = page:CreateFontString(nil, "ARTWORK")
+    spellLabel:SetPoint("TOPLEFT", selectedStateText, "BOTTOMLEFT", 0, -12)
+    setFontStringTextSafe(spellLabel, L.CONFIG_AURAS_ENTRY_SPELL or "Spell name", 12)
 
-    local addButton = CreateFrame("Button", "mummuFramesConfigAurasAddButton", page, "UIPanelButtonTemplate")
-    addButton:SetSize(64, 22)
-    addButton:SetPoint("LEFT", addInput, "RIGHT", 8, 0)
-    if type(addButton.SetText) == "function" then
-        addButton:SetText(L.CONFIG_AURAS_ADD or "Add")
+    spellInput = createTextEditBox("mummuFramesConfigAurasEntrySpellInput", page, 320)
+    spellInput:SetPoint("TOPLEFT", spellLabel, "BOTTOMLEFT", 0, -6)
+    spellInput:SetScript("OnTextChanged", function(editBox)
+        editorState.spell = editBox:GetText() or ""
+    end)
+
+    local displayControl = createLabeledDropdown(
+        "mummuFramesConfigAurasDisplayDropdown",
+        page,
+        L.CONFIG_AURAS_ENTRY_DISPLAY or "Display style",
+        spellInput
+    )
+    displayDropdown = displayControl and displayControl.dropdown or nil
+    if displayDropdown then
+        self:ConfigureSelectControl(
+            displayDropdown,
+            function()
+                return displayOptions
+            end,
+            function()
+                return normalizeEntryDisplay(editorState.display)
+            end,
+            function(option)
+                editorState.display = normalizeEntryDisplay(option and option.value or nil)
+                editorState.slot = normalizeEditorSlot(editorState.display, editorState.slot)
+                editorState.size = normalizeEntrySize(editorState.display, editorState.size, self:GetTrackedAurasConfig() and self:GetTrackedAurasConfig().size)
+                if self.widgets and self.widgets.auras then
+                    self.widgets.auras.refreshList()
+                    self.widgets.auras.refreshEditor()
+                end
+            end,
+            CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+            nil,
+            function(value)
+                return getAuraDisplayLabel(value)
+            end
+        )
     end
 
-    local resetButton = CreateFrame("Button", "mummuFramesConfigAurasResetButton", page, "UIPanelButtonTemplate")
-    resetButton:SetSize(160, 22)
-    resetButton:SetPoint("TOPLEFT", addInput, "BOTTOMLEFT", 0, -8)
-    if type(resetButton.SetText) == "function" then
-        resetButton:SetText(L.CONFIG_AURAS_RESET or "Reset to class defaults")
+    local slotControl = createLabeledDropdown(
+        "mummuFramesConfigAurasSlotDropdown",
+        page,
+        L.CONFIG_AURAS_ENTRY_SLOT or "Indicator slot",
+        displayDropdown or spellInput
+    )
+    slotDropdown = slotControl and slotControl.dropdown or nil
+    if slotDropdown then
+        self:ConfigureSelectControl(
+            slotDropdown,
+            function()
+                return getSlotOptionsForDisplay(editorState.display)
+            end,
+            function()
+                return normalizeEditorSlot(editorState.display, editorState.slot)
+            end,
+            function(option)
+                editorState.slot = normalizeEditorSlot(editorState.display, option and option.value or nil)
+                self:RefreshSelectControlText(slotDropdown, true)
+            end,
+            CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+            nil,
+            function(value)
+                return getAuraSlotLabel(editorState.display, value)
+            end
+        )
     end
 
-    -- Validate the input box value and append it to the aura whitelist.
-    local function addSpellFromInput()
-        local inputText = addInput and addInput:GetText() or nil
-        if type(inputText) ~= "string" then
-            return
+    ownOnly = self:CreateCheckbox(
+        "mummuFramesConfigAurasOwnOnly",
+        page,
+        L.CONFIG_AURAS_ENTRY_OWN_ONLY or "Own casts only",
+        slotDropdown or spellInput,
+        0,
+        -10
+    )
+    ownOnly:SetScript("OnClick", function(button)
+        editorState.ownOnly = button:GetChecked() == true
+    end)
+
+    entrySizeControl = self:CreateNumericControl(
+        page,
+        "AurasEntrySize",
+        L.CONFIG_AURAS_ENTRY_SIZE or "Entry size",
+        4,
+        48,
+        1,
+        ownOnly,
+        20
+    )
+    self:BindNumericControl(entrySizeControl, function(value)
+        editorState.size = normalizeEntrySize(editorState.display, value, self:GetTrackedAurasConfig() and self:GetTrackedAurasConfig().size)
+    end)
+
+    colorPreviewLabel = page:CreateFontString(nil, "ARTWORK")
+    colorPreviewLabel:SetPoint("TOPLEFT", entrySizeControl.slider, "BOTTOMLEFT", 0, -20)
+    setFontStringTextSafe(colorPreviewLabel, L.CONFIG_AURAS_ENTRY_COLOR or "Square color preview", 12)
+
+    colorPreview = CreateFrame("Frame", nil, page)
+    colorPreview:SetPoint("TOPLEFT", colorPreviewLabel, "BOTTOMLEFT", 0, -6)
+    colorPreview:SetSize(72, 22)
+
+    local colorPreviewBackground = colorPreview:CreateTexture(nil, "BACKGROUND")
+    colorPreviewBackground:SetAllPoints()
+    colorPreviewBackground:SetColorTexture(0.08, 0.08, 0.1, 0.92)
+
+    local colorPreviewBorderTop = colorPreview:CreateTexture(nil, "BORDER")
+    colorPreviewBorderTop:SetPoint("TOPLEFT")
+    colorPreviewBorderTop:SetPoint("TOPRIGHT")
+    colorPreviewBorderTop:SetHeight(1)
+    colorPreviewBorderTop:SetColorTexture(1, 1, 1, 0.12)
+
+    local colorPreviewBorderBottom = colorPreview:CreateTexture(nil, "BORDER")
+    colorPreviewBorderBottom:SetPoint("BOTTOMLEFT")
+    colorPreviewBorderBottom:SetPoint("BOTTOMRIGHT")
+    colorPreviewBorderBottom:SetHeight(1)
+    colorPreviewBorderBottom:SetColorTexture(1, 1, 1, 0.12)
+
+    local colorPreviewBorderLeft = colorPreview:CreateTexture(nil, "BORDER")
+    colorPreviewBorderLeft:SetPoint("TOPLEFT")
+    colorPreviewBorderLeft:SetPoint("BOTTOMLEFT")
+    colorPreviewBorderLeft:SetWidth(1)
+    colorPreviewBorderLeft:SetColorTexture(1, 1, 1, 0.12)
+
+    local colorPreviewBorderRight = colorPreview:CreateTexture(nil, "BORDER")
+    colorPreviewBorderRight:SetPoint("TOPRIGHT")
+    colorPreviewBorderRight:SetPoint("BOTTOMRIGHT")
+    colorPreviewBorderRight:SetWidth(1)
+    colorPreviewBorderRight:SetColorTexture(1, 1, 1, 0.12)
+
+    colorPreviewFill = colorPreview:CreateTexture(nil, "ARTWORK")
+    colorPreviewFill:SetPoint("TOPLEFT", colorPreview, "TOPLEFT", 3, -3)
+    colorPreviewFill:SetPoint("BOTTOMRIGHT", colorPreview, "BOTTOMRIGHT", -3, 3)
+
+    colorRedControl = self:CreateNumericControl(
+        page,
+        "AurasEntryColorRed",
+        L.CONFIG_AURAS_ENTRY_RED or "Square red %",
+        0,
+        100,
+        1,
+        colorPreview,
+        20
+    )
+    self:BindNumericControl(colorRedControl, function(value)
+        editorState.color = editorState.color or {}
+        editorState.color.r = normalizeColorPercent(value, 25)
+        if colorPreviewFill then
+            colorPreviewFill:SetColorTexture(
+                normalizeColorPercent(editorState.color.r, 25) / 100,
+                normalizeColorPercent(editorState.color.g, 95) / 100,
+                normalizeColorPercent(editorState.color.b, 35) / 100,
+                0.95
+            )
         end
-        inputText = string.match(inputText, "^%s*(.-)%s*$")
-        if not inputText or inputText == "" then
-            return
+    end)
+
+    colorGreenControl = self:CreateNumericControl(
+        page,
+        "AurasEntryColorGreen",
+        L.CONFIG_AURAS_ENTRY_GREEN or "Square green %",
+        0,
+        100,
+        1,
+        colorRedControl.slider,
+        20
+    )
+    self:BindNumericControl(colorGreenControl, function(value)
+        editorState.color = editorState.color or {}
+        editorState.color.g = normalizeColorPercent(value, 95)
+        if colorPreviewFill then
+            colorPreviewFill:SetColorTexture(
+                normalizeColorPercent(editorState.color.r, 25) / 100,
+                normalizeColorPercent(editorState.color.g, 95) / 100,
+                normalizeColorPercent(editorState.color.b, 35) / 100,
+                0.95
+            )
         end
-        local config = auraHandle and auraHandle:GetAurasConfig()
+    end)
+
+    colorBlueControl = self:CreateNumericControl(
+        page,
+        "AurasEntryColorBlue",
+        L.CONFIG_AURAS_ENTRY_BLUE or "Square blue %",
+        0,
+        100,
+        1,
+        colorGreenControl.slider,
+        20
+    )
+    self:BindNumericControl(colorBlueControl, function(value)
+        editorState.color = editorState.color or {}
+        editorState.color.b = normalizeColorPercent(value, 35)
+        if colorPreviewFill then
+            colorPreviewFill:SetColorTexture(
+                normalizeColorPercent(editorState.color.r, 25) / 100,
+                normalizeColorPercent(editorState.color.g, 95) / 100,
+                normalizeColorPercent(editorState.color.b, 35) / 100,
+                0.95
+            )
+        end
+    end)
+
+    local function refreshEditor()
+        local config = getAuraEntriesConfig()
+        local entries = config and config.entries or {}
+        local selectedIndex = self._selectedAuraEntryIndex
+        local hasSelection = type(selectedIndex) == "number" and entries[selectedIndex] ~= nil
+
+        if hasSelection and not doesEditorSourceMatch(editorState.source, entries[selectedIndex], config, selectedIndex) then
+            loadEditorFromEntry(selectedIndex)
+        elseif (not hasSelection) and type(selectedIndex) == "number" then
+            clearEntrySelection(editorState and editorState.display or "square")
+            hasSelection = false
+        end
+
+        spellInput:SetText(editorState.spell or "")
+        ownOnly:SetChecked(editorState.ownOnly ~= false)
+        self:SetNumericControlValue(
+            entrySizeControl,
+            normalizeEntrySize(editorState.display, editorState.size, config and config.size or 14)
+        )
+        self:SetNumericControlValue(colorRedControl, normalizeColorPercent(editorState.color and editorState.color.r or nil, 25))
+        self:SetNumericControlValue(colorGreenControl, normalizeColorPercent(editorState.color and editorState.color.g or nil, 95))
+        self:SetNumericControlValue(colorBlueControl, normalizeColorPercent(editorState.color and editorState.color.b or nil, 35))
+
+        if displayDropdown then
+            self:RefreshSelectControlText(displayDropdown, false)
+        end
+        if slotDropdown then
+            self:RefreshSelectControlText(slotDropdown, true)
+        end
+
+        local isSquare = normalizeEntryDisplay(editorState.display) == "square"
+        if colorPreviewFill then
+            colorPreviewFill:SetColorTexture(
+                normalizeColorPercent(editorState.color and editorState.color.r or nil, 25) / 100,
+                normalizeColorPercent(editorState.color and editorState.color.g or nil, 95) / 100,
+                normalizeColorPercent(editorState.color and editorState.color.b or nil, 35) / 100,
+                0.95
+            )
+        end
+
+        self:SetNumericControlEnabled(colorRedControl, isSquare)
+        self:SetNumericControlEnabled(colorGreenControl, isSquare)
+        self:SetNumericControlEnabled(colorBlueControl, isSquare)
+        colorPreview:SetAlpha(isSquare and 1 or 0.45)
+        colorPreviewLabel:SetAlpha(isSquare and 1 or 0.55)
+        setCheckboxEnabled(ownOnly, true)
+        self:SetButtonEnabled(saveButton, hasSelection)
+        self:SetButtonEnabled(clearButton, true)
+        self:SetButtonEnabled(addButton, true)
+        self:SetButtonEnabled(resetButton, auraHandle and type(auraHandle.ResetAurasToClassDefaults) == "function")
+
+        if hasSelection then
+            setFontStringTextSafe(
+                selectedStateText,
+                string.format(L.CONFIG_AURAS_STATUS_SELECTED or "Editing tracked entry #%d", selectedIndex),
+                11
+            )
+        else
+            setFontStringTextSafe(
+                selectedStateText,
+                L.CONFIG_AURAS_STATUS_NEW or "Creating a new tracked entry",
+                11
+            )
+        end
+
+        refreshAuraPageHeight()
+    end
+
+    local function addEntryFromEditor()
+        local config = getAuraEntriesConfig()
         if not config then
             return
         end
-        config.allowedSpells = config.allowedSpells or {}
-        for _, existing in ipairs(config.allowedSpells) do
-            if existing == inputText then
-                addInput:SetText("")
-                return
-            end
+
+        local entry, err = buildEntryFromEditor()
+        if not entry then
+            self:SetAurasStatus(err, 1, 0.3, 0.3)
+            return
         end
-        config.allowedSpells[#config.allowedSpells + 1] = inputText
-        auraHandle:InvalidateAuraNameSetCache()
-        addInput:SetText("")
-        self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras")
+
+        config.entries[#config.entries + 1] = entry
+        loadEditorFromEntry(#config.entries)
+        refreshTrackedAuraData()
         refreshList()
+        refreshEditor()
+        self:SetAurasStatus(
+            L.CONFIG_AURAS_STATUS_ADDED or "Tracked entry added",
+            0.3,
+            1,
+            0.45
+        )
     end
 
-    addButton:SetScript("OnClick", addSpellFromInput)
-    addInput:SetScript("OnEnterPressed", function(editBox)
-        addSpellFromInput()
-        editBox:ClearFocus()
-    end)
-    addInput:SetScript("OnEscapePressed", function(editBox)
-        editBox:ClearFocus()
+    local function saveSelectedEntry()
+        local config = getAuraEntriesConfig()
+        local selectedIndex = self._selectedAuraEntryIndex
+        if not config or type(selectedIndex) ~= "number" or not config.entries[selectedIndex] then
+            self:SetAurasStatus(
+                L.CONFIG_AURAS_STATUS_SELECT_ENTRY or "Select an entry first",
+                1,
+                0.3,
+                0.3
+            )
+            return
+        end
+
+        local entry, err = buildEntryFromEditor()
+        if not entry then
+            self:SetAurasStatus(err, 1, 0.3, 0.3)
+            return
+        end
+
+        config.entries[selectedIndex] = entry
+        loadEditorFromEntry(selectedIndex)
+        refreshTrackedAuraData()
+        refreshList()
+        refreshEditor()
+        self:SetAurasStatus(
+            L.CONFIG_AURAS_STATUS_SAVED or "Tracked entry saved",
+            0.3,
+            1,
+            0.45
+        )
+    end
+
+    saveButton = CreateFrame("Button", "mummuFramesConfigAurasSaveButton", page, "UIPanelButtonTemplate")
+    saveButton:SetSize(110, 22)
+    saveButton:SetPoint("TOPLEFT", colorBlueControl.slider, "BOTTOMLEFT", 0, -12)
+    saveButton:SetText(L.CONFIG_AURAS_SAVE_SELECTED or "Save selected")
+    saveButton:SetScript("OnClick", saveSelectedEntry)
+
+    addButton = CreateFrame("Button", "mummuFramesConfigAurasAddButton", page, "UIPanelButtonTemplate")
+    addButton:SetSize(96, 22)
+    addButton:SetPoint("LEFT", saveButton, "RIGHT", 8, 0)
+    addButton:SetText(L.CONFIG_AURAS_ADD_ENTRY or "Add entry")
+    addButton:SetScript("OnClick", addEntryFromEditor)
+
+    clearButton = CreateFrame("Button", "mummuFramesConfigAurasClearSelectionButton", page, "UIPanelButtonTemplate")
+    clearButton:SetSize(114, 22)
+    clearButton:SetPoint("LEFT", addButton, "RIGHT", 8, 0)
+    clearButton:SetText(L.CONFIG_AURAS_CLEAR_SELECTION or "Clear selection")
+    clearButton:SetScript("OnClick", function()
+        clearEntrySelection(editorState and editorState.display or "square")
+        refreshList()
+        refreshEditor()
+        self:SetAurasStatus("", 0.82, 0.84, 0.9)
     end)
 
+    resetButton = CreateFrame("Button", "mummuFramesConfigAurasResetButton", page, "UIPanelButtonTemplate")
+    resetButton:SetSize(164, 22)
+    resetButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
+    resetButton:SetText(L.CONFIG_AURAS_RESET or "Reset to class defaults")
     resetButton:SetScript("OnClick", function()
         if auraHandle and type(auraHandle.ResetAurasToClassDefaults) == "function" then
             auraHandle:ResetAurasToClassDefaults()
-            self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras")
+            clearEntrySelection("square")
+            refreshTrackedAuraData()
             refreshList()
+            refreshEditor()
+            self:SetAurasStatus(
+                L.CONFIG_AURAS_STATUS_RESET or "Tracked auras reset to class defaults",
+                0.3,
+                1,
+                0.45
+            )
         end
     end)
 
+    spellInput:SetScript("OnEnterPressed", function(editBox)
+        if type(self._selectedAuraEntryIndex) == "number" then
+            saveSelectedEntry()
+        else
+            addEntryFromEditor()
+        end
+        editBox:ClearFocus()
+    end)
+    spellInput:SetScript("OnEscapePressed", function(editBox)
+        editBox:ClearFocus()
+    end)
+
+    local statusText = page:CreateFontString(nil, "ARTWORK")
+    statusText:SetPoint("TOPLEFT", saveButton, "BOTTOMLEFT", 0, -10)
+    statusText:SetPoint("RIGHT", page, "RIGHT", -20, 0)
+    statusText:SetJustifyH("LEFT")
+    statusText:SetJustifyV("TOP")
+    Style:ApplyFont(statusText, 11)
+    statusText:SetText("")
+
     self.widgets.auras = {
-        registry     = registry,
-        enabled     = enabled,
-        size        = sizeControl,
+        registry = registry,
+        enabled = enabled,
+        size = sizeControl,
         refreshList = refreshList,
-        bottomAnchor = resetButton,
+        refreshEditor = refreshEditor,
+        statusText = statusText,
+        bottomAnchor = statusText,
         bottomPadding = 30,
     }
+
+    refreshList()
+    refreshEditor()
 end
 
 -- Build unit page.
@@ -4803,6 +5605,10 @@ function Configuration:RefreshConfigWidgets()
         if type(aurasWidgets.refreshList) == "function" then
             aurasWidgets.refreshList()
         end
+        if type(aurasWidgets.refreshEditor) == "function" then
+            aurasWidgets.refreshEditor()
+        end
+        self:RefreshScrollableTabHeight("auras")
     end
 
     if self.widgets.frames then

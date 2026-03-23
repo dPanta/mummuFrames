@@ -5,6 +5,15 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.4.0 - 2026-03-23
+- Reworked tracked group auras around structured per-entry configuration so healer buffs can render either as configurable icon-strip slots or as colored corner squares on party and raid frames.
+- Added class-based tracked-aura entry defaults, legacy migration from the old spell-name whitelist, and profile maintenance/import sanitization for the new aura entry format.
+- Rebuilt the Tracked Auras configuration page into an entry editor with per-spell display style, slot, own-cast filtering, size, and square color controls.
+- Prebuilt party and raid tracked-aura indicator pools so combat updates stay on the existing `UNIT_AURA` refresh path without creating secure-child visuals mid-fight.
+- Hid live party frames automatically while the player is in a raid group so raid frames are the only active group presentation in raid content.
+- Added and updated the related English configuration strings for tracked-aura entry management.
+- Bumped addon metadata to `2.4.0`.
+
 ## 2.3.0 - 2026-03-19
 - Reworked the configuration window so the Frames tab keeps every unit's settings on one page, groups target-related units together, and aligns section headers and subsections cleanly instead of letting the layout drift farther right as you scroll.
 - Added party and raid debuff declutter filters with options to hide permanent debuffs, hide long-duration debuffs, and configure the duration threshold, including default-profile and profile-maintenance support for the new settings.

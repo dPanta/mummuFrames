@@ -1031,6 +1031,10 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame.DispelOverlay:SetAllPoints(frame.HealthBar)
     frame.DispelOverlay:Hide()
 
+    if ns.AuraHandle and type(ns.AuraHandle.PrimeTrackedAuraIndicators) == "function" then
+        ns.AuraHandle:PrimeTrackedAuraIndicators(frame)
+    end
+
     frame._mummuVisualsBuilt = true
 end
 

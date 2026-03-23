@@ -45,10 +45,31 @@ local SHARED_MAP_SELF_HEAL_THROTTLE = 1.0
 -- Minimum time between routine shared-map rebuilds (seconds).
 local MAP_REBUILD_THROTTLE          = 0.20
 
--- Maximum number of player-cast buff icons shown per frame.
-local MAX_TRACKER_AURAS    = 4
+-- Maximum number of tracked icon indicators shown per frame.
+local MAX_TRACKER_ICON_SLOTS = 4
+local TRACKER_ICON_SLOT_KEYS = {
+    "ICON1",
+    "ICON2",
+    "ICON3",
+    "ICON4",
+}
+local TRACKER_ICON_SLOT_INDEX = {
+    ICON1 = 1,
+    ICON2 = 2,
+    ICON3 = 3,
+    ICON4 = 4,
+}
+local TRACKER_SQUARE_SLOT_KEYS = {
+    "TOPLEFT",
+    "TOPRIGHT",
+    "BOTTOMLEFT",
+    "BOTTOMRIGHT",
+}
 -- Default tracker icon size in pixels.
 local DEFAULT_TRACKER_SIZE = (Util and type(Util.GetTrackedAuraDefaultSize) == "function" and Util:GetTrackedAuraDefaultSize()) or 14
+local DEFAULT_TRACKER_SQUARE_SIZE = 8
+local MIN_TRACKER_SQUARE_SIZE = 4
+local MAX_TRACKER_SQUARE_SIZE = 24
 local GROUP_DEBUFF_BUTTON_GAP = 2
 local GROUP_DEBUFF_MAX_BUTTONS = 8
 local CENTER_DEFENSIVE_MIN_SIZE = 16
@@ -610,6 +631,89 @@ local function resolveTrackedAuraIcon(spellName, trackedSpellInfo, auraData)
     end
 
     return DEFAULT_AURA_TEXTURE
+end
+
+local function normalizeTrackedAuraDisplay(display)
+    if display == "square" then
+        return "square"
+    end
+    return "icon"
+end
+
+local function normalizeTrackedAuraSlot(display, slot)
+    if display == "square" then
+        for index = 1, #TRACKER_SQUARE_SLOT_KEYS do
+            local slotKey = TRACKER_SQUARE_SLOT_KEYS[index]
+            if slot == slotKey then
+                return slotKey
+            end
+        end
+        return "TOPLEFT"
+    end
+
+    if TRACKER_ICON_SLOT_INDEX[slot] then
+        return slot
+    end
+    return nil
+end
+
+local function getSafeTrackedAuraColor(colorData)
+    if type(colorData) ~= "table" then
+        return 0.25, 0.95, 0.35, 0.95
+    end
+
+    local red = Util:Clamp(tonumber(colorData.r) or 0.25, 0, 1)
+    local green = Util:Clamp(tonumber(colorData.g) or 0.95, 0, 1)
+    local blue = Util:Clamp(tonumber(colorData.b) or 0.35, 0, 1)
+    local alpha = Util:Clamp(tonumber(colorData.a) or 0.95, 0, 1)
+    return red, green, blue, alpha
+end
+
+local function getTrackedAuraEntrySize(entry, config)
+    local configuredSize = type(entry) == "table" and tonumber(entry.size) or nil
+    if type(configuredSize) == "number" then
+        if normalizeTrackedAuraDisplay(entry.display) == "square" then
+            return Util:Clamp(math.floor(configuredSize + 0.5), MIN_TRACKER_SQUARE_SIZE, MAX_TRACKER_SQUARE_SIZE)
+        end
+        return Util:Clamp(math.floor(configuredSize + 0.5), 6, 48)
+    end
+
+    local fallbackSize = Util:Clamp(tonumber(config and config.size) or DEFAULT_TRACKER_SIZE, 6, 48)
+    if normalizeTrackedAuraDisplay(type(entry) == "table" and entry.display or nil) == "square" then
+        return Util:Clamp(fallbackSize, MIN_TRACKER_SQUARE_SIZE, MAX_TRACKER_SQUARE_SIZE)
+    end
+    return fallbackSize
+end
+
+local function copyTrackedAuraEntries(entries)
+    local copy = {}
+    if type(entries) ~= "table" then
+        return copy
+    end
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        if type(entry) == "table" then
+            local copiedEntry = {
+                spell = entry.spell,
+                display = normalizeTrackedAuraDisplay(entry.display),
+                slot = normalizeTrackedAuraSlot(entry.display, entry.slot),
+                ownOnly = entry.ownOnly ~= false,
+                size = tonumber(entry.size),
+            }
+            if type(entry.color) == "table" then
+                copiedEntry.color = {
+                    r = tonumber(entry.color.r) or 0.25,
+                    g = tonumber(entry.color.g) or 0.95,
+                    b = tonumber(entry.color.b) or 0.35,
+                    a = tonumber(entry.color.a) or 0.95,
+                }
+            end
+            copy[#copy + 1] = copiedEntry
+        end
+    end
+
+    return copy
 end
 
 -- Returns the canonical unit token if it is a valid group token
@@ -1625,6 +1729,116 @@ local function hideUnusedTrackerElements(frame, usedByKey)
     end
 end
 
+local function layoutTrackerIconElement(frame, element, slotIndex, size)
+    if type(frame) ~= "table" or type(element) ~= "table" then
+        return
+    end
+
+    local resolvedSize = Util:Clamp(math.floor((tonumber(size) or DEFAULT_TRACKER_SIZE) + 0.5), 6, 48)
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        resolvedSize = Style:Snap(resolvedSize)
+    end
+
+    element:SetSize(resolvedSize, resolvedSize)
+    element:ClearAllPoints()
+    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(slotIndex - 1) * (resolvedSize + 2), 0)
+end
+
+local function ensureTrackerSquareElement(frame, slotKey)
+    if type(frame) ~= "table" or type(slotKey) ~= "string" or slotKey == "" then
+        return nil
+    end
+
+    frame.HealerTrackerSquareElements = frame.HealerTrackerSquareElements or {}
+    local existing = frame.HealerTrackerSquareElements[slotKey]
+    if existing then
+        return existing
+    end
+
+    local parent = frame.HealthBar or frame
+    local element = CreateFrame("Frame", nil, parent)
+    element:SetFrameStrata(parent:GetFrameStrata())
+    element:SetFrameLevel(parent:GetFrameLevel() + 42)
+    element:Hide()
+
+    element.Fill = element:CreateTexture(nil, "ARTWORK")
+    element.Fill:SetAllPoints()
+
+    element.BorderTop = element:CreateTexture(nil, "BORDER")
+    element.BorderTop:SetPoint("TOPLEFT", element, "TOPLEFT", 0, 0)
+    element.BorderTop:SetPoint("TOPRIGHT", element, "TOPRIGHT", 0, 0)
+    element.BorderTop:SetHeight(1)
+    element.BorderTop:SetColorTexture(0, 0, 0, 0.95)
+
+    element.BorderRight = element:CreateTexture(nil, "BORDER")
+    element.BorderRight:SetPoint("TOPRIGHT", element, "TOPRIGHT", 0, 0)
+    element.BorderRight:SetPoint("BOTTOMRIGHT", element, "BOTTOMRIGHT", 0, 0)
+    element.BorderRight:SetWidth(1)
+    element.BorderRight:SetColorTexture(0, 0, 0, 0.95)
+
+    element.BorderBottom = element:CreateTexture(nil, "BORDER")
+    element.BorderBottom:SetPoint("BOTTOMLEFT", element, "BOTTOMLEFT", 0, 0)
+    element.BorderBottom:SetPoint("BOTTOMRIGHT", element, "BOTTOMRIGHT", 0, 0)
+    element.BorderBottom:SetHeight(1)
+    element.BorderBottom:SetColorTexture(0, 0, 0, 0.95)
+
+    element.BorderLeft = element:CreateTexture(nil, "BORDER")
+    element.BorderLeft:SetPoint("TOPLEFT", element, "TOPLEFT", 0, 0)
+    element.BorderLeft:SetPoint("BOTTOMLEFT", element, "BOTTOMLEFT", 0, 0)
+    element.BorderLeft:SetWidth(1)
+    element.BorderLeft:SetColorTexture(0, 0, 0, 0.95)
+
+    frame.HealerTrackerSquareElements[slotKey] = element
+    return element
+end
+
+local function layoutTrackerSquareElement(frame, element, slotKey, size)
+    if type(frame) ~= "table" or type(element) ~= "table" then
+        return
+    end
+
+    local parent = frame.HealthBar or frame
+    local resolvedSize = Util:Clamp(math.floor((tonumber(size) or DEFAULT_TRACKER_SQUARE_SIZE) + 0.5), MIN_TRACKER_SQUARE_SIZE, MAX_TRACKER_SQUARE_SIZE)
+    local offset = 1
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        resolvedSize = Style:Snap(resolvedSize)
+        offset = Style:GetPixelSize() or 1
+    end
+
+    element:SetSize(resolvedSize, resolvedSize)
+    element:ClearAllPoints()
+    if slotKey == "TOPRIGHT" then
+        element:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -offset, -offset)
+    elseif slotKey == "BOTTOMLEFT" then
+        element:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", offset, offset)
+    elseif slotKey == "BOTTOMRIGHT" then
+        element:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -offset, offset)
+    else
+        element:SetPoint("TOPLEFT", parent, "TOPLEFT", offset, -offset)
+    end
+end
+
+local function setTrackerSquareColor(element, colorData)
+    if type(element) ~= "table" or type(element.Fill) ~= "table" or type(element.Fill.SetColorTexture) ~= "function" then
+        return
+    end
+
+    local red, green, blue, alpha = getSafeTrackedAuraColor(colorData)
+    element.Fill:SetColorTexture(red, green, blue, alpha)
+end
+
+local function hideUnusedTrackerSquareElements(frame, usedBySlot)
+    if type(frame) ~= "table" or type(frame.HealerTrackerSquareElements) ~= "table" then
+        return
+    end
+
+    for slotKey, element in pairs(frame.HealerTrackerSquareElements) do
+        if usedBySlot[slotKey] ~= true and type(element) == "table" then
+            element:Hide()
+        end
+    end
+end
+
 local function getAuraAnchorGrowth(anchorPoint)
     local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPRIGHT"
     if string.find(resolvedAnchor, "RIGHT", 1, true) then
@@ -2314,25 +2528,76 @@ local function appendTrackedAuraRequestIndex(indexesByKey, key, requestIndex)
     requestIndexes[#requestIndexes + 1] = requestIndex
 end
 
-local function buildTrackedAuraRequests(allowedSpells)
-    local requests = {}
-    local requestIndexesByName = {}
-    local requestIndexesBySpellID = {}
+local function getConfiguredTrackedAuraEntries(config)
+    local entries = copyTrackedAuraEntries(config and config.entries)
+    if #entries > 0 then
+        return entries
+    end
 
+    local allowedSpells = config and config.allowedSpells or nil
     if type(allowedSpells) ~= "table" then
-        return requests, requestIndexesByName, requestIndexesBySpellID
+        return entries
     end
 
     for spellIndex = 1, #allowedSpells do
         local spellName = allowedSpells[spellIndex]
         if type(spellName) == "string" and spellName ~= "" then
+            entries[#entries + 1] = {
+                spell = spellName,
+                display = "icon",
+                ownOnly = true,
+            }
+        end
+    end
+
+    return entries
+end
+
+local function buildTrackedAuraSpellList(entries)
+    local spellNames = {}
+    local seen = {}
+    if type(entries) ~= "table" then
+        return spellNames
+    end
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        local spellName = type(entry) == "table" and entry.spell or nil
+        if type(spellName) == "string" and spellName ~= "" and seen[spellName] ~= true then
+            seen[spellName] = true
+            spellNames[#spellNames + 1] = spellName
+        end
+    end
+
+    return spellNames
+end
+
+local function buildTrackedAuraRequests(entries)
+    local requests = {}
+    local requestIndexesByName = {}
+    local requestIndexesBySpellID = {}
+
+    if type(entries) ~= "table" then
+        return requests, requestIndexesByName, requestIndexesBySpellID
+    end
+
+    for spellIndex = 1, #entries do
+        local entry = entries[spellIndex]
+        local spellName = type(entry) == "table" and entry.spell or nil
+        if type(spellName) == "string" and spellName ~= "" then
             local trackedSpellInfo = _trackerSpellInfoCache[spellName]
             local requestIndex = #requests + 1
             local request = {
+                entry = entry,
                 spellName = spellName,
                 trackedSpellInfo = trackedSpellInfo,
                 resolvedName = trackedSpellInfo and trackedSpellInfo.name or spellName,
                 preferDirectSpellIDMatch = shouldTrustDirectTrackedSpellMatch(trackedSpellInfo),
+                display = normalizeTrackedAuraDisplay(entry.display),
+                slot = normalizeTrackedAuraSlot(entry.display, entry.slot),
+                ownOnly = entry.ownOnly ~= false,
+                size = tonumber(entry.size),
+                color = entry.color,
                 matchedAura = nil,
             }
             requests[requestIndex] = request
@@ -2428,8 +2693,8 @@ end
 
 -- Resolve tracked group-buff matches without relying on direct spell-name or
 -- spell-ID aura APIs, which can be restricted while aura access is secret.
-local function collectTrackedAuraMatches(unitToken, allowedSpells)
-    local requests, requestIndexesByName, requestIndexesBySpellID = buildTrackedAuraRequests(allowedSpells)
+local function collectTrackedAuraMatches(unitToken, trackedEntries)
+    local requests, requestIndexesByName, requestIndexesBySpellID = buildTrackedAuraRequests(trackedEntries)
     if #requests == 0 then
         return requests
     end
@@ -2456,7 +2721,10 @@ local function collectTrackedAuraMatches(unitToken, allowedSpells)
         requestIndexesBySpellID,
         function(auraData)
             local ownedByPlayer = isTrackerAuraOwnedByPlayer(auraData)
-            return function()
+            return function(request)
+                if request and request.ownOnly == false then
+                    return true
+                end
                 return ownedByPlayer
             end
         end,
@@ -2464,10 +2732,13 @@ local function collectTrackedAuraMatches(unitToken, allowedSpells)
             local ownedByPlayer = isTrackerAuraOwnedByPlayer(auraData)
             local selfCastOnUnit = nil
             return function(request)
+                if request and request.ownOnly == false then
+                    return true
+                end
                 if ownedByPlayer then
                     return true
                 end
-                if request.preferDirectSpellIDMatch then
+                if request and request.preferDirectSpellIDMatch then
                     return true
                 end
                 if selfCastOnUnit == nil then
@@ -3287,6 +3558,19 @@ end
 -- Displays icons for configured player-owned buffs on group frames.
 -- ---------------------------------------------------------------------------
 
+function AuraHandle:PrimeTrackedAuraIndicators(frame)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    for slotIndex = 1, MAX_TRACKER_ICON_SLOTS do
+        ensureTrackerElement(frame, slotIndex)
+    end
+    for index = 1, #TRACKER_SQUARE_SLOT_KEYS do
+        ensureTrackerSquareElement(frame, TRACKER_SQUARE_SLOT_KEYS[index])
+    end
+end
+
 -- Redraws the tracker icon strip on frame for the given unitToken.
 function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     if type(frame) ~= "table" then
@@ -3299,50 +3583,79 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     local config = self:GetAurasConfig()
     if not config or config.enabled == false then
         hideUnusedTrackerElements(frame, {})
+        hideUnusedTrackerSquareElements(frame, {})
         return
     end
 
-    -- Snapshot config values as locals — no writes back to profile in the hot path.
-    local size = Util:Clamp(tonumber(config.size) or DEFAULT_TRACKER_SIZE, 6, 48)
-    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
-        size = Style:Snap(size)
-    else
-        size = math.floor(size + 0.5)
+    local usedIconSlots = {}
+    local usedSquareSlots = {}
+
+    local function showTrackedIconInSlot(slotIndex, request, auraData)
+        if type(slotIndex) ~= "number" or slotIndex < 1 or slotIndex > MAX_TRACKER_ICON_SLOTS then
+            return false
+        end
+
+        local element = ensureTrackerElement(frame, slotIndex)
+        local size = getTrackedAuraEntrySize(request and request.entry or request, config)
+        layoutTrackerIconElement(frame, element, slotIndex, size)
+        if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(request and request.spellName or nil, request and request.trackedSpellInfo or nil, auraData)) then
+            safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
+        end
+        element.Icon:Show()
+        element:Show()
+        usedIconSlots[tostring(slotIndex)] = true
+        return true
     end
 
-    local allowedSpells = config.allowedSpells
-    local hasFilter     = type(allowedSpells) == "table" and #allowedSpells > 0
+    local trackedEntries = getConfiguredTrackedAuraEntries(config)
+    if #trackedEntries > 0 then
+        local trackedRequests = collectTrackedAuraMatches(unitToken, trackedEntries)
+        local pendingAutoIcons = {}
 
-    local usedByKey = {}
-    local count     = 0
+        for index = 1, #trackedRequests do
+            local request = trackedRequests[index]
+            local auraData = request and request.matchedAura or nil
+            if auraData then
+                if request.display == "square" then
+                    local slotKey = normalizeTrackedAuraSlot("square", request.slot)
+                    if usedSquareSlots[slotKey] ~= true then
+                        local element = ensureTrackerSquareElement(frame, slotKey)
+                        layoutTrackerSquareElement(frame, element, slotKey, getTrackedAuraEntrySize(request.entry or request, config))
+                        setTrackerSquareColor(element, request.color or (request.entry and request.entry.color) or nil)
+                        element:Show()
+                        usedSquareSlots[slotKey] = true
+                    end
+                else
+                    local fixedSlotIndex = request.slot and TRACKER_ICON_SLOT_INDEX[request.slot] or nil
+                    if fixedSlotIndex and usedIconSlots[tostring(fixedSlotIndex)] ~= true then
+                        showTrackedIconInSlot(fixedSlotIndex, request, auraData)
+                    else
+                        pendingAutoIcons[#pendingAutoIcons + 1] = request
+                    end
+                end
+            end
+        end
 
-    if hasFilter then
-        local trackedRequests = collectTrackedAuraMatches(unitToken, allowedSpells)
-        for i = 1, #trackedRequests do
-            if count >= MAX_TRACKER_AURAS then
+        local nextAutoIconSlot = 1
+        for index = 1, #pendingAutoIcons do
+            while nextAutoIconSlot <= MAX_TRACKER_ICON_SLOTS and usedIconSlots[tostring(nextAutoIconSlot)] == true do
+                nextAutoIconSlot = nextAutoIconSlot + 1
+            end
+            if nextAutoIconSlot > MAX_TRACKER_ICON_SLOTS then
                 break
             end
-            local request = trackedRequests[i]
-            local spellName = request and request.spellName or nil
-            local cachedInfo = request and request.trackedSpellInfo or nil
-            local found = request and request.matchedAura or nil
-            if found then
-                count = count + 1
-                local element = ensureTrackerElement(frame, count)
-                element:SetSize(size, size)
-                element:ClearAllPoints()
-                element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(spellName, cachedInfo, found)) then
-                    safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
-                end
-                element.Icon:Show()
-                element:Show()
-                usedByKey[tostring(count)] = true
+
+            local request = pendingAutoIcons[index]
+            local auraData = request and request.matchedAura or nil
+            if auraData then
+                showTrackedIconInSlot(nextAutoIconSlot, request, auraData)
+                nextAutoIconSlot = nextAutoIconSlot + 1
             end
         end
     else
+        local count = 0
         for index = 1, MAX_AURA_SCAN do
-            if count >= MAX_TRACKER_AURAS then
+            if count >= MAX_TRACKER_ICON_SLOTS then
                 break
             end
             if not isAuraIndexSecret(unitToken, index, TRACKER_HELPFUL_FILTER) then
@@ -3353,22 +3666,14 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
 
                 if isTrackerAuraOwnedByPlayer(auraData) then
                     count = count + 1
-                    local element = ensureTrackerElement(frame, count)
-                    element:SetSize(size, size)
-                    element:ClearAllPoints()
-                    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(count - 1) * (size + 2), 0)
-                    if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(nil, nil, auraData)) then
-                        safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
-                    end
-                    element.Icon:Show()
-                    element:Show()
-                    usedByKey[tostring(count)] = true
+                    showTrackedIconInSlot(count, nil, auraData)
                 end
             end
         end
     end
 
-    hideUnusedTrackerElements(frame, usedByKey)
+    hideUnusedTrackerElements(frame, usedIconSlots)
+    hideUnusedTrackerSquareElements(frame, usedSquareSlots)
 end
 
 -- Redraws the large centre defensive icon on frame for the given unitToken.
@@ -3631,6 +3936,7 @@ function AuraHandle:ClearFrameAuraIndicators(frame)
         return
     end
     hideUnusedTrackerElements(frame, {})
+    hideUnusedTrackerSquareElements(frame, {})
     hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
     hideCenterDefensiveIndicator(frame)
     if frame.DispelOverlay and type(frame.DispelOverlay.Hide) == "function" then
@@ -3960,20 +4266,21 @@ end
 -- Aura configuration
 -- ---------------------------------------------------------------------------
 
--- Rebuilds _spellIconCache from the current allowedSpells list.
+-- Rebuilds _spellIconCache from the current tracked-aura entry list.
 -- Resolves each spell name to an icon texture using GetSpellInfo (accepts names).
 -- Must be called outside combat (on login or when the list changes).
 function AuraHandle:RebuildSpellIconCache()
     local config = self:GetAurasConfig()
-    local spells = config and type(config.allowedSpells) == "table" and config.allowedSpells or {}
+    local entries = getConfiguredTrackedAuraEntries(config)
     for k in pairs(_spellIconCache) do
         _spellIconCache[k] = nil
     end
     for k in pairs(_trackerSpellInfoCache) do
         _trackerSpellInfoCache[k] = nil
     end
-    for i = 1, #spells do
-        local name = spells[i]
+    for i = 1, #entries do
+        local entry = entries[i]
+        local name = type(entry) == "table" and entry.spell or nil
         if type(name) == "string" and name ~= "" then
             local info = getResolvedSpellInfo(name)
             local icon = info and (info.iconID or info.originalIconID) or nil
@@ -4018,6 +4325,13 @@ function AuraHandle:InitializeAurasDefaults()
     if config.size == nil then
         config.size = DEFAULT_TRACKER_SIZE
     end
+    if type(config.entries) ~= "table" or #config.entries == 0 then
+        if type(config.allowedSpells) == "table" and #config.allowedSpells > 0 then
+            config.entries = getConfiguredTrackedAuraEntries(config)
+        else
+            config.entries = self:GetClassDefaultAuraEntries()
+        end
+    end
     if config.allowedSpells == nil then
         config.allowedSpells = self:GetClassDefaultAuraNames()
     end
@@ -4054,17 +4368,28 @@ function AuraHandle:GetClassDefaultAuraNames()
     return {}
 end
 
--- Replaces allowedSpells with the class defaults and rebuilds the icon cache.
+function AuraHandle:GetClassDefaultAuraEntries()
+    if Util and type(Util.GetTrackedAuraDefaultEntries) == "function" then
+        return Util:GetTrackedAuraDefaultEntries()
+    end
+    return {}
+end
+
+-- Replaces tracked entries with the class defaults and rebuilds the icon cache.
 function AuraHandle:ResetAurasToClassDefaults()
     local config = self:GetAurasConfig()
     if not config then return end
+    config.entries = self:GetClassDefaultAuraEntries()
     config.allowedSpells = self:GetClassDefaultAuraNames()
     self:RebuildSpellIconCache()
 end
 
--- Signals that allowedSpells changed; rebuilds the icon cache.
--- Called by configuration.lua when the user adds or removes a spell.
+-- Signals that tracked aura entries changed; rebuilds the icon cache.
 function AuraHandle:InvalidateAuraNameSetCache()
+    local config = self:GetAurasConfig()
+    if config then
+        config.allowedSpells = buildTrackedAuraSpellList(getConfiguredTrackedAuraEntries(config))
+    end
     self:RebuildSpellIconCache()
 end
 

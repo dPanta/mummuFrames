@@ -648,9 +648,10 @@ local function getObservedUnitInRange(unitToken, providedInRange)
         end
     end
 
-    -- The global helper is the combat-safe item range probe. The C_Item variant
-    -- can trip protected-call taint on secure target/focus refreshes.
-    if type(IsItemInRange) == "function" then
+    -- IsItemInRange is protected during combat lockdown and will trigger
+    -- ADDON_ACTION_BLOCKED even through pcall. Skip it entirely in combat.
+    local inCombat = type(InCombatLockdown) == "function" and InCombatLockdown()
+    if type(IsItemInRange) == "function" and not inCombat then
         local probeItemIDs = getObservedUnitRangeProbeItemIDs(unitToken)
         for index = 1, #probeItemIDs do
             local okItemRange, inItemRange = pcall(IsItemInRange, probeItemIDs[index], unitToken)

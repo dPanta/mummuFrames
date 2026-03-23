@@ -299,6 +299,7 @@ local DEFAULT_PROFILE = {
     auras = {
         enabled = true,
         size = (Util and type(Util.GetTrackedAuraDefaultSize) == "function" and Util:GetTrackedAuraDefaultSize()) or 14,
+        entries = {},
     },
 }
 
@@ -446,6 +447,14 @@ local function getDefaultTrackedAuraNames()
     return {}
 end
 
+-- Return copied structured tracked aura defaults for the current class.
+local function getDefaultTrackedAuraEntries()
+    if Util and type(Util.GetTrackedAuraDefaultEntries) == "function" then
+        return Util:GetTrackedAuraDefaultEntries()
+    end
+    return {}
+end
+
 -- Normalize imported tracked aura whitelist into a unique, ordered string array.
 local function sanitizeAuraSpellList(value)
     if type(value) ~= "table" then
@@ -466,6 +475,160 @@ local function sanitizeAuraSpellList(value)
     end
 
     return sanitized
+end
+
+local TRACKED_AURA_SQUARE_SLOT_SET = {
+    TOPLEFT = true,
+    TOPRIGHT = true,
+    BOTTOMLEFT = true,
+    BOTTOMRIGHT = true,
+}
+
+local TRACKED_AURA_ICON_SLOT_SET = {
+    ICON1 = true,
+    ICON2 = true,
+    ICON3 = true,
+    ICON4 = true,
+}
+
+local function sanitizeTrackedAuraColor(value)
+    if type(value) ~= "table" then
+        return nil
+    end
+
+    local red = tonumber(value.r ~= nil and value.r or value[1])
+    local green = tonumber(value.g ~= nil and value.g or value[2])
+    local blue = tonumber(value.b ~= nil and value.b or value[3])
+    local alpha = tonumber(value.a ~= nil and value.a or value[4])
+    if type(red) ~= "number" or type(green) ~= "number" or type(blue) ~= "number" then
+        return nil
+    end
+
+    return {
+        r = Util:Clamp(red, 0, 1),
+        g = Util:Clamp(green, 0, 1),
+        b = Util:Clamp(blue, 0, 1),
+        a = Util:Clamp(type(alpha) == "number" and alpha or 0.95, 0, 1),
+    }
+end
+
+local function normalizeTrackedAuraDisplay(value)
+    if value == "square" or value == "corner" or value == "rectangle" then
+        return "square"
+    end
+    return "icon"
+end
+
+local function normalizeTrackedAuraSlot(display, value)
+    if display == "square" then
+        if TRACKED_AURA_SQUARE_SLOT_SET[value] == true then
+            return value
+        end
+        return "TOPLEFT"
+    end
+
+    if TRACKED_AURA_ICON_SLOT_SET[value] == true then
+        return value
+    end
+    return nil
+end
+
+local function sanitizeTrackedAuraEntry(value)
+    if type(value) ~= "table" then
+        return nil
+    end
+
+    local spellName = value.spell or value.spellName or value.name
+    if type(spellName) ~= "string" then
+        return nil
+    end
+
+    spellName = string.match(spellName, "^%s*(.-)%s*$")
+    if not spellName or spellName == "" then
+        return nil
+    end
+
+    local display = normalizeTrackedAuraDisplay(value.display)
+    local entry = {
+        spell = spellName,
+        display = display,
+        slot = normalizeTrackedAuraSlot(display, value.slot),
+        ownOnly = value.ownOnly ~= false,
+    }
+
+    local size = tonumber(value.size)
+    if type(size) == "number" then
+        entry.size = Util:Clamp(math.floor(size + 0.5), 4, 48)
+    end
+
+    local color = sanitizeTrackedAuraColor(value.color)
+    if display == "square" then
+        entry.color = color or {
+            r = 0.25,
+            g = 0.95,
+            b = 0.35,
+            a = 0.95,
+        }
+    elseif color ~= nil then
+        entry.color = color
+    end
+
+    return entry
+end
+
+local function sanitizeTrackedAuraEntries(value)
+    if type(value) ~= "table" then
+        return nil
+    end
+
+    local sanitized = {}
+    for index = 1, #value do
+        local entry = sanitizeTrackedAuraEntry(value[index])
+        if entry then
+            sanitized[#sanitized + 1] = entry
+        end
+    end
+
+    return sanitized
+end
+
+local function buildLegacyTrackedAuraEntries(allowedSpells)
+    local entries = {}
+    if type(allowedSpells) ~= "table" then
+        return entries
+    end
+
+    for index = 1, #allowedSpells do
+        local spellName = allowedSpells[index]
+        if type(spellName) == "string" and spellName ~= "" then
+            entries[#entries + 1] = {
+                spell = spellName,
+                display = "icon",
+                ownOnly = true,
+            }
+        end
+    end
+
+    return entries
+end
+
+local function buildTrackedAuraSpellListFromEntries(entries)
+    local spellNames = {}
+    local seen = {}
+    if type(entries) ~= "table" then
+        return spellNames
+    end
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        local spellName = type(entry) == "table" and entry.spell or nil
+        if type(spellName) == "string" and spellName ~= "" and seen[spellName] ~= true then
+            seen[spellName] = true
+            spellNames[#spellNames + 1] = spellName
+        end
+    end
+
+    return spellNames
 end
 
 -- Copy only supported profile keys and value types from imported data.
@@ -494,6 +657,11 @@ local function sanitizeImportedProfile(value, defaults, path)
         local allowedSpells = sanitizeAuraSpellList(value.allowedSpells)
         if allowedSpells ~= nil then
             sanitized.allowedSpells = allowedSpells
+        end
+
+        local entries = sanitizeTrackedAuraEntries(value.entries)
+        if entries ~= nil then
+            sanitized.entries = entries
         end
     end
 
@@ -711,10 +879,24 @@ maintainProfile = function(profile, defaultFontPath)
     end
     profile.auras.size = Util:Clamp(tonumber(profile.auras.size) or getDefaultTrackedAuraSize(), 6, 48)
 
+    local entries = sanitizeTrackedAuraEntries(profile.auras.entries)
     local allowedSpells = sanitizeAuraSpellList(profile.auras.allowedSpells)
-    if allowedSpells == nil then
-        allowedSpells = getDefaultTrackedAuraNames()
+    if entries == nil or #entries == 0 then
+        if allowedSpells ~= nil and #allowedSpells > 0 then
+            entries = buildLegacyTrackedAuraEntries(allowedSpells)
+        else
+            entries = getDefaultTrackedAuraEntries()
+        end
     end
+
+    if allowedSpells == nil or #allowedSpells == 0 then
+        allowedSpells = buildTrackedAuraSpellListFromEntries(entries)
+        if #allowedSpells == 0 then
+            allowedSpells = getDefaultTrackedAuraNames()
+        end
+    end
+
+    profile.auras.entries = entries
     profile.auras.allowedSpells = allowedSpells
 
     if type(profile.units) == "table" then

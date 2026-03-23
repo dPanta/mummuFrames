@@ -8,18 +8,67 @@ local _, ns = ...
 -- Shared utility namespace.
 local Util = {}
 local TRACKED_AURA_DEFAULT_SIZE = 14
-local TRACKED_AURA_DEFAULT_NAMES_BY_CLASS = {
+local function createTrackedAuraDefaultEntry(spellName, display, slot, color, size, ownOnly)
+    local entry = {
+        spell = spellName,
+        display = display,
+        slot = slot,
+        ownOnly = ownOnly ~= false,
+        size = size,
+    }
+    if type(color) == "table" then
+        entry.color = {
+            r = color[1] or 1,
+            g = color[2] or 1,
+            b = color[3] or 1,
+            a = color[4] or 0.95,
+        }
+    end
+    return entry
+end
+
+local TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS = {
     DEATHKNIGHT = {},
     DEMONHUNTER = {},
-    DRUID = { "Rejuvenation", "Germination", "Wild Growth", "Regrowth", "Lifebloom", "Cenarion Ward" },
-    EVOKER = { "Reversion", "Echo", "Temporal Anomaly", "Dream Breath" },
+    DRUID = {
+        createTrackedAuraDefaultEntry("Rejuvenation", "square", "TOPLEFT", { 0.20, 0.90, 0.45, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Lifebloom", "square", "TOPRIGHT", { 0.34, 1.00, 0.72, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Regrowth", "square", "BOTTOMLEFT", { 0.64, 1.00, 0.36, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Wild Growth", "square", "BOTTOMRIGHT", { 0.17, 0.78, 0.51, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Cenarion Ward", "icon", nil, nil, 12),
+        createTrackedAuraDefaultEntry("Germination", "icon", nil, nil, 12),
+    },
+    EVOKER = {
+        createTrackedAuraDefaultEntry("Reversion", "square", "TOPLEFT", { 0.32, 0.86, 0.67, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Echo", "square", "TOPRIGHT", { 0.95, 0.74, 0.32, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Dream Breath", "square", "BOTTOMLEFT", { 0.24, 0.92, 0.48, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Temporal Anomaly", "icon", nil, nil, 12),
+    },
     HUNTER = {},
     MAGE = {},
-    MONK = { "Renewing Mist", "Enveloping Mist", "Life Cocoon" },
-    PALADIN = { "Beacon of Light", "Beacon of Faith", "Sacred Shield", "Aura Mastery" },
-    PRIEST = { "Renew", "Atonement", "Power Word: Shield", "Prayer of Mending" },
+    MONK = {
+        createTrackedAuraDefaultEntry("Renewing Mist", "square", "TOPLEFT", { 0.24, 0.94, 0.54, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Enveloping Mist", "square", "TOPRIGHT", { 0.62, 1.00, 0.74, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Life Cocoon", "icon", nil, nil, 12),
+    },
+    PALADIN = {
+        createTrackedAuraDefaultEntry("Beacon of Light", "square", "TOPLEFT", { 1.00, 0.86, 0.28, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Beacon of Faith", "square", "TOPRIGHT", { 1.00, 0.72, 0.24, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Sacred Shield", "icon", nil, nil, 12),
+        createTrackedAuraDefaultEntry("Aura Mastery", "icon", nil, nil, 12),
+    },
+    PRIEST = {
+        createTrackedAuraDefaultEntry("Renew", "square", "TOPLEFT", { 1.00, 0.96, 0.42, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Atonement", "square", "TOPRIGHT", { 1.00, 0.86, 0.30, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Power Word: Shield", "square", "BOTTOMLEFT", { 0.34, 0.74, 1.00, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Prayer of Mending", "square", "BOTTOMRIGHT", { 0.95, 0.95, 1.00, 0.95 }, 8),
+    },
     ROGUE = {},
-    SHAMAN = { "Riptide", "Unleash Life", "Earthen Wall Totem" },
+    SHAMAN = {
+        createTrackedAuraDefaultEntry("Riptide", "square", "TOPLEFT", { 0.28, 0.74, 1.00, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Unleash Life", "square", "TOPRIGHT", { 0.22, 1.00, 0.78, 0.95 }, 8),
+        createTrackedAuraDefaultEntry("Earthen Wall Totem", "icon", nil, nil, 12),
+    },
     WARLOCK = {},
     WARRIOR = {},
 }
@@ -308,15 +357,57 @@ function Util:GetTrackedAuraDefaultNames(classToken)
         resolvedClassToken = liveClassToken
     end
 
-    local defaults = TRACKED_AURA_DEFAULT_NAMES_BY_CLASS[resolvedClassToken]
+    local defaults = TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS[resolvedClassToken]
     local copy = {}
     if type(defaults) ~= "table" then
         return copy
     end
 
     for index = 1, #defaults do
-        copy[index] = defaults[index]
+        local entry = defaults[index]
+        if type(entry) == "table" and type(entry.spell) == "string" and entry.spell ~= "" then
+            copy[#copy + 1] = entry.spell
+        end
     end
+    return copy
+end
+
+-- Return copied structured tracked aura defaults for the current or provided class.
+function Util:GetTrackedAuraDefaultEntries(classToken)
+    local resolvedClassToken = classToken
+    if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
+        local _, liveClassToken = UnitClass("player")
+        resolvedClassToken = liveClassToken
+    end
+
+    local defaults = TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS[resolvedClassToken]
+    local copy = {}
+    if type(defaults) ~= "table" then
+        return copy
+    end
+
+    for index = 1, #defaults do
+        local entry = defaults[index]
+        if type(entry) == "table" then
+            local copiedEntry = {
+                spell = entry.spell,
+                display = entry.display,
+                slot = entry.slot,
+                ownOnly = entry.ownOnly ~= false,
+                size = entry.size,
+            }
+            if type(entry.color) == "table" then
+                copiedEntry.color = {
+                    r = entry.color.r or 1,
+                    g = entry.color.g or 1,
+                    b = entry.color.b or 1,
+                    a = entry.color.a or 0.95,
+                }
+            end
+            copy[#copy + 1] = copiedEntry
+        end
+    end
+
     return copy
 end
 
