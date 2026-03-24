@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.4.1 - 2026-03-24
+- Fixed raid-frame absorb shields so full-health targets still show a visible shield cue, and hardened the first overlay refresh against unresolved raid health-bar widths.
+- Bumped addon metadata to `2.4.1`.
+
 ## 2.4.0 - 2026-03-23
 - Reworked tracked group auras around structured per-entry configuration so healer buffs can render either as configurable icon-strip slots or as colored corner squares on party and raid frames.
 - Added class-based tracked-aura entry defaults, legacy migration from the old spell-name whitelist, and profile maintenance/import sanitization for the new aura entry format.

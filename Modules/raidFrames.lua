@@ -210,24 +210,39 @@ local function refreshRaidAbsorbOverlay(frame, healthValue, maxHealthValue, abso
     local absorb = math.max(0, getSafeNumericValue(absorbValue, 0) or 0)
     local missingHealth = math.max(0, maxHealth - health)
     local visibleAbsorb = math.min(absorb, missingHealth)
-    if visibleAbsorb <= 0 then
+    -- Keep a tiny cue visible when a fully healed raid member still has shields.
+    local showOverflowCapOnly = absorb > 0 and visibleAbsorb <= 0
+    if visibleAbsorb <= 0 and not showOverflowCapOnly then
         return hideRaidAbsorbOverlay(frame)
     end
 
     local healthBarWidth = tonumber(frame.HealthBar:GetWidth()) or 0
+    if healthBarWidth <= 0 then
+        -- The first hidden-frame refresh can briefly report a zero child width.
+        healthBarWidth = tonumber(frame:GetWidth()) or 0
+    end
     if healthBarWidth <= 0 then
         return hideRaidAbsorbOverlay(frame)
     end
 
     local healthOffset = healthBarWidth * (health / maxHealth)
     local absorbWidth = healthBarWidth * (visibleAbsorb / maxHealth)
-    if Style:IsPixelPerfectEnabled() then
-        local pixelSize = Style:GetPixelSize() or 1
-        healthOffset = Style:Snap(healthOffset)
-        absorbWidth = math.max(pixelSize, Style:Snap(absorbWidth))
+    if showOverflowCapOnly then
+        local capWidth = Style:IsPixelPerfectEnabled() and (Style:GetPixelSize() or 1) or 1
+        if Style:IsPixelPerfectEnabled() then
+            capWidth = math.max(capWidth, Style:Snap(capWidth))
+        end
+        absorbWidth = capWidth
+        healthOffset = math.max(0, healthBarWidth - absorbWidth)
     else
-        healthOffset = math.floor(healthOffset + 0.5)
-        absorbWidth = math.max(1, math.floor(absorbWidth + 0.5))
+        if Style:IsPixelPerfectEnabled() then
+            local pixelSize = Style:GetPixelSize() or 1
+            healthOffset = Style:Snap(healthOffset)
+            absorbWidth = math.max(pixelSize, Style:Snap(absorbWidth))
+        else
+            healthOffset = math.floor(healthOffset + 0.5)
+            absorbWidth = math.max(1, math.floor(absorbWidth + 0.5))
+        end
     end
     absorbWidth = math.min(absorbWidth, math.max(0, healthBarWidth - healthOffset))
     if absorbWidth <= 0 then
