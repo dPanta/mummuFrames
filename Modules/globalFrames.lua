@@ -16,9 +16,13 @@ local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
 local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
 local LEADER_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\crown.png"
 local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
+local READY_CHECK_READY_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-Ready"
+local READY_CHECK_NOT_READY_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-NotReady"
+local READY_CHECK_WAITING_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-Waiting"
 local SECONDARY_POWER_MAX_ICONS = 10
 local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
 local TERTIARY_POWER_HEIGHT_BONUS = 5
+local READY_CHECK_FINISHED_HOLD_SECONDS = 6
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
 local RESTING_ICON_ASPECT = 424 / 793
@@ -189,6 +193,49 @@ local function updateDetachedBarBorder(frame, shown, borderSize)
     border.right:SetShown(shown == true)
 end
 
+local function invalidateReadyCheckIndicatorHide(indicator)
+    if not indicator then
+        return nil
+    end
+
+    local nextToken = (tonumber(indicator._mummuReadyCheckHideToken) or 0) + 1
+    indicator._mummuReadyCheckHideToken = nextToken
+    return nextToken
+end
+
+local function scheduleReadyCheckIndicatorHide(indicator, delaySeconds)
+    if not indicator then
+        return
+    end
+
+    local holdSeconds = tonumber(delaySeconds) or READY_CHECK_FINISHED_HOLD_SECONDS
+    if not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+
+    local hideToken = invalidateReadyCheckIndicatorHide(indicator)
+    C_Timer.After(holdSeconds, function()
+        if not indicator or indicator._mummuReadyCheckHideToken ~= hideToken then
+            return
+        end
+        indicator._mummuReadyCheckStatus = nil
+        indicator:Hide()
+    end)
+end
+
+local function getReadyCheckStatusTexture(status)
+    if status == "ready" then
+        return READY_CHECK_READY_TEXTURE
+    end
+    if status == "notready" then
+        return READY_CHECK_NOT_READY_TEXTURE
+    end
+    if status == "waiting" then
+        return READY_CHECK_WAITING_TEXTURE
+    end
+    return nil
+end
+
 -- Initialize global frames state.
 function GlobalFrames:Constructor()
     self.addon = nil
@@ -286,6 +333,95 @@ function GlobalFrames:CreateStatusBar(parent, role)
     Style:ApplyStatusBarBacking(bar)
 
     return bar
+end
+
+-- Create a centered ready-check indicator using Blizzard's default textures.
+function GlobalFrames:CreateReadyCheckIndicator(frame, overlayParent)
+    if not frame or frame.ReadyCheckIndicator then
+        return frame and frame.ReadyCheckIndicator or nil
+    end
+
+    local overlay = overlayParent
+    if not overlay then
+        overlay = CreateFrame("Frame", nil, frame)
+        overlay:SetAllPoints(frame)
+        overlay:SetFrameStrata(frame:GetFrameStrata())
+        overlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+        frame._mummuReadyCheckOverlayOwned = true
+    end
+
+    local indicator = overlay:CreateTexture(nil, "OVERLAY")
+    indicator:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    indicator:SetAlpha(0.95)
+    indicator:Hide()
+
+    frame.ReadyCheckOverlay = overlay
+    frame.ReadyCheckIndicator = indicator
+    return indicator
+end
+
+-- Return a frame-height-derived size so the ready-check mark stays readable.
+function GlobalFrames:GetReadyCheckIndicatorSize(frameHeight)
+    local size = Util:Clamp(math.floor(((tonumber(frameHeight) or 24) * 0.62) + 0.5), 12, 36)
+    if Style:IsPixelPerfectEnabled() then
+        size = Style:Snap(size)
+    end
+    return size
+end
+
+-- Re-anchor and resize the centered ready-check indicator for the current layout.
+function GlobalFrames:LayoutReadyCheckIndicator(frame, frameHeight)
+    if not frame or not frame.ReadyCheckIndicator then
+        return
+    end
+
+    if frame._mummuReadyCheckOverlayOwned == true and frame.ReadyCheckOverlay then
+        frame.ReadyCheckOverlay:SetAllPoints(frame)
+        frame.ReadyCheckOverlay:SetFrameStrata(frame:GetFrameStrata())
+        frame.ReadyCheckOverlay:SetFrameLevel(frame:GetFrameLevel() + 40)
+    end
+
+    local size = self:GetReadyCheckIndicatorSize(frameHeight)
+    frame.ReadyCheckIndicator:ClearAllPoints()
+    frame.ReadyCheckIndicator:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.ReadyCheckIndicator:SetSize(size, size)
+end
+
+-- Refresh one frame's ready-check state, including the post-finish hold window.
+function GlobalFrames:RefreshReadyCheckIndicator(frame, unitToken, eventName, previewMode)
+    local indicator = frame and frame.ReadyCheckIndicator or nil
+    if not indicator then
+        return
+    end
+
+    local effectiveUnit = type(unitToken) == "string" and unitToken or getTooltipUnit(frame)
+    if previewMode == true or type(GetReadyCheckStatus) ~= "function" or type(effectiveUnit) ~= "string" or effectiveUnit == "" then
+        invalidateReadyCheckIndicatorHide(indicator)
+        indicator._mummuReadyCheckStatus = nil
+        indicator:Hide()
+        return
+    end
+
+    local status = GetReadyCheckStatus(effectiveUnit)
+    local texture = getReadyCheckStatusTexture(status)
+    if texture then
+        invalidateReadyCheckIndicatorHide(indicator)
+        indicator:SetTexture(texture)
+        indicator:Show()
+        indicator._mummuReadyCheckStatus = status
+    elseif eventName ~= "READY_CHECK_FINISHED" then
+        invalidateReadyCheckIndicatorHide(indicator)
+        indicator._mummuReadyCheckStatus = nil
+        indicator:Hide()
+    end
+
+    if eventName == "READY_CHECK_FINISHED" and indicator:IsShown() then
+        if indicator._mummuReadyCheckStatus == "waiting" then
+            indicator:SetTexture(READY_CHECK_NOT_READY_TEXTURE)
+            indicator._mummuReadyCheckStatus = "notready"
+        end
+        scheduleReadyCheckIndicatorHide(indicator, READY_CHECK_FINISHED_HOLD_SECONDS)
+    end
 end
 
 -- Create the resting, leader, and combat badges shown above player frames.
@@ -577,6 +713,8 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
         self:CreateCastBar(frame)
     end
 
+    self:CreateReadyCheckIndicator(frame)
+
     if unitToken == "player" then
         self:CreatePlayerStatusIcons(frame)
         self:CreateSecondaryPowerBar(frame)
@@ -799,6 +937,10 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
         frame.StatusIcons.Combat.Icon:SetAllPoints()
         frame.StatusIcons.Combat.Icon:SetTexture(COMBAT_ICON_TEXTURE)
+    end
+
+    if frame.ReadyCheckIndicator then
+        self:LayoutReadyCheckIndicator(frame, height)
     end
 
     if frame.SecondaryPowerBar then

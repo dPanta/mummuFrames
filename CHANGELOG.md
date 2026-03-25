@@ -5,6 +5,14 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.5.0 - 2026-03-25
+- Added centered Blizzard ready-check indicators to unit, party, and raid frames.
+- Added leader-only `Ready` and `Pull` action buttons above the party frame, with `Pull` starting `/pull 9` and falling back to the Blizzard countdown API when needed.
+- Restyled the party leader action buttons with a custom modern look and included their preview/selection area in the party frame's edit-mode element.
+- Fixed the raid ready-check refresh path so it no longer trips a nil-function error during `READY_CHECK`.
+- Fixed custom leader action button label setup so the buttons initialize their font before setting text.
+- Bumped addon metadata to `2.5.0`.
+
 ## 2.4.1 - 2026-03-24
 - Fixed raid-frame absorb shields so full-health targets still show a visible shield cue, and hardened the first overlay refresh against unresolved raid health-bar widths.
 - Bumped addon metadata to `2.4.1`.

@@ -101,6 +101,18 @@ local POWER_TYPE_RUNIC = (_G.Enum and _G.Enum.PowerType and _G.Enum.PowerType.Ru
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
 local ROLE_GROUPING_ORDER_ASC = "TANK,HEALER,DAMAGER,NONE"
+local LEADER_ACTION_BUTTON_GAP = 4
+local LEADER_ACTION_BUTTON_OFFSET_Y = 4
+local PULL_ACTION_COMMAND = "/pull 9"
+local LEADER_ACTION_TEXT_COLOR = { 0.96, 0.98, 1.00, 1.00 }
+local LEADER_ACTION_BACKGROUND_COLOR = { 0.08, 0.09, 0.11, 0.96 }
+local LEADER_ACTION_BACKGROUND_HOVER_COLOR = { 0.11, 0.13, 0.16, 0.98 }
+local LEADER_ACTION_BACKGROUND_PRESSED_COLOR = { 0.16, 0.18, 0.22, 1.00 }
+local LEADER_ACTION_BORDER_COLOR = { 1.00, 1.00, 1.00, 0.12 }
+local LEADER_ACTION_BORDER_HOVER_COLOR = { 1.00, 1.00, 1.00, 0.20 }
+local LEADER_ACTION_BORDER_PRESSED_COLOR = { 1.00, 1.00, 1.00, 0.26 }
+local LEADER_ACTION_READY_ACCENT_COLOR = { 0.25, 0.88, 0.64, 0.95 }
+local LEADER_ACTION_PULL_ACCENT_COLOR = { 1.00, 0.76, 0.28, 0.95 }
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -319,6 +331,190 @@ local function shouldShowLeaderIcon(unitToken, previewMode)
     return Util:SafeBoolean(isLeader, false)
 end
 
+local function isPlayerGroupLeader()
+    if type(UnitIsGroupLeader) ~= "function" then
+        return false
+    end
+
+    local okLeader, isLeader = pcall(UnitIsGroupLeader, "player")
+    if not okLeader then
+        return false
+    end
+
+    return Util:SafeBoolean(isLeader, false)
+end
+
+local function getChatParseTextFunction()
+    if type(ChatEdit_ParseText) == "function" then
+        return ChatEdit_ParseText
+    end
+    if ChatFrameEditBoxMixin and type(ChatFrameEditBoxMixin.ParseText) == "function" then
+        return function(editBox, send)
+            return ChatFrameEditBoxMixin.ParseText(editBox, send)
+        end
+    end
+    return nil
+end
+
+local function openChatEditBox(initialText)
+    local text = type(initialText) == "string" and initialText or ""
+    local chatFrame = DEFAULT_CHAT_FRAME or nil
+
+    if type(ChatFrame_OpenChat) == "function" then
+        local okOpen, editBox = pcall(ChatFrame_OpenChat, text, chatFrame)
+        if okOpen and editBox then
+            return editBox
+        end
+    end
+    if ChatFrameUtil and type(ChatFrameUtil.OpenChat) == "function" then
+        local okOpen, editBox = pcall(ChatFrameUtil.OpenChat, text, chatFrame)
+        if okOpen and editBox then
+            return editBox
+        end
+    end
+
+    return nil
+end
+
+local function executeSlashCommand(commandText)
+    if type(commandText) ~= "string" or commandText == "" then
+        return false
+    end
+
+    local parseText = getChatParseTextFunction()
+    if not parseText then
+        return false
+    end
+
+    local editBox = openChatEditBox(commandText)
+    if not editBox or type(editBox.SetText) ~= "function" then
+        return false
+    end
+
+    local okSetText = pcall(editBox.SetText, editBox, commandText)
+    if not okSetText then
+        return false
+    end
+
+    local okParse = pcall(parseText, editBox, 1)
+    return okParse == true
+end
+
+local function setLeaderActionButtonVisualState(button, state)
+    if type(button) ~= "table" then
+        return
+    end
+
+    local backgroundColor = LEADER_ACTION_BACKGROUND_COLOR
+    local borderColor = LEADER_ACTION_BORDER_COLOR
+    local highlightAlpha = 0
+    if state == "pressed" then
+        backgroundColor = LEADER_ACTION_BACKGROUND_PRESSED_COLOR
+        borderColor = LEADER_ACTION_BORDER_PRESSED_COLOR
+        highlightAlpha = 0.10
+    elseif state == "hover" then
+        backgroundColor = LEADER_ACTION_BACKGROUND_HOVER_COLOR
+        borderColor = LEADER_ACTION_BORDER_HOVER_COLOR
+        highlightAlpha = 0.06
+    end
+
+    if button.Background then
+        button.Background:SetColorTexture(
+            backgroundColor[1],
+            backgroundColor[2],
+            backgroundColor[3],
+            backgroundColor[4]
+        )
+    end
+    if button.HighlightFill then
+        button.HighlightFill:SetAlpha(highlightAlpha)
+    end
+    if button.BorderTop then
+        button.BorderTop:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderBottom:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderLeft:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderRight:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+    end
+end
+
+local function createLeaderActionButton(parent, labelText, accentColor)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetFrameStrata(parent:GetFrameStrata())
+    button:SetFrameLevel(parent:GetFrameLevel() + 1)
+
+    button.Background = button:CreateTexture(nil, "BACKGROUND")
+    button.Background:SetAllPoints()
+
+    button.HighlightFill = button:CreateTexture(nil, "ARTWORK")
+    button.HighlightFill:SetAllPoints()
+    button.HighlightFill:SetColorTexture(1, 1, 1, 1)
+    button.HighlightFill:SetAlpha(0)
+
+    button.Accent = button:CreateTexture(nil, "BORDER")
+    button.Accent:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.Accent:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.Accent:SetHeight(2)
+    button.Accent:SetColorTexture(accentColor[1], accentColor[2], accentColor[3], accentColor[4])
+
+    button.BorderTop = button:CreateTexture(nil, "BORDER")
+    button.BorderTop:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.BorderTop:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.BorderTop:SetHeight(1)
+
+    button.BorderBottom = button:CreateTexture(nil, "BORDER")
+    button.BorderBottom:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    button.BorderBottom:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    button.BorderBottom:SetHeight(1)
+
+    button.BorderLeft = button:CreateTexture(nil, "BORDER")
+    button.BorderLeft:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.BorderLeft:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    button.BorderLeft:SetWidth(1)
+
+    button.BorderRight = button:CreateTexture(nil, "BORDER")
+    button.BorderRight:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.BorderRight:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    button.BorderRight:SetWidth(1)
+
+    button.Label = button:CreateFontString(nil, "OVERLAY")
+    button.Label:SetPoint("CENTER", button, "CENTER", 0, 0)
+    Style:ApplyFont(button.Label, 11, "OUTLINE")
+    if not button.Label:GetFont() and GameFontNormalSmall then
+        button.Label:SetFontObject(GameFontNormalSmall)
+    end
+    button.Label:SetTextColor(
+        LEADER_ACTION_TEXT_COLOR[1],
+        LEADER_ACTION_TEXT_COLOR[2],
+        LEADER_ACTION_TEXT_COLOR[3],
+        LEADER_ACTION_TEXT_COLOR[4]
+    )
+    button.Label:SetText(labelText)
+
+    button:SetScript("OnEnter", function(selfButton)
+        if selfButton:IsMouseEnabled() then
+            setLeaderActionButtonVisualState(selfButton, "hover")
+        end
+    end)
+    button:SetScript("OnLeave", function(selfButton)
+        setLeaderActionButtonVisualState(selfButton, "normal")
+    end)
+    button:SetScript("OnMouseDown", function(selfButton)
+        if selfButton:IsMouseEnabled() then
+            setLeaderActionButtonVisualState(selfButton, "pressed")
+        end
+    end)
+    button:SetScript("OnMouseUp", function(selfButton)
+        if selfButton:IsMouseEnabled() and selfButton:IsMouseOver() then
+            setLeaderActionButtonVisualState(selfButton, "hover")
+        else
+            setLeaderActionButtonVisualState(selfButton, "normal")
+        end
+    end)
+
+    setLeaderActionButtonVisualState(button, "normal")
+    return button
+end
+
 local function copyUnitList(units)
     if type(units) ~= "table" then
         return {}
@@ -480,6 +676,7 @@ function PartyFrames:Constructor()
     self.unitFrames = nil
     self.spellTargetTracker = nil
     self.container = nil
+    self.leaderActionBar = nil
     self.header = nil          -- SecureGroupHeaderTemplate frame
     self.testFrames = {}       -- fixed pool for preview/test mode only
     self.frames = {}           -- active frame set; populated by RefreshAll
@@ -539,6 +736,7 @@ function PartyFrames:OnDisable()
     self._displayedUnitByGUID = {}
     self._lastLiveUnitsToShow = nil
     ns.activeMummuPartyFrames = {}
+    self:HideLeaderActionButtons()
     self:StopRangeTicker()
     self:StopTestTicker()
     self:SetBlizzardPartyFramesHidden(false)
@@ -771,6 +969,9 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.LeaderIcon = frame.RoleIconOverlay:CreateTexture(nil, "OVERLAY")
     frame.LeaderIcon:SetAlpha(0.95)
     frame.LeaderIcon:Hide()
+    if self.globalFrames and type(self.globalFrames.CreateReadyCheckIndicator) == "function" then
+        self.globalFrames:CreateReadyCheckIndicator(frame, frame.RoleIconOverlay)
+    end
 
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -1022,6 +1223,161 @@ local function buildPartyRuntimeState(self, profileOverride, partyConfigOverride
     }
 end
 
+function PartyFrames:CreateLeaderActionButtons()
+    if not self.container then
+        return nil
+    end
+    if self.leaderActionBar then
+        return self.leaderActionBar
+    end
+
+    local actionBar = CreateFrame("Frame", nil, self.container)
+    actionBar:SetFrameStrata("MEDIUM")
+    actionBar:SetFrameLevel(self.container:GetFrameLevel() + 60)
+    actionBar:Hide()
+
+    local readyButton = createLeaderActionButton(actionBar, "Ready", LEADER_ACTION_READY_ACCENT_COLOR)
+    readyButton:SetScript("OnClick", function()
+        if not isPlayerGroupLeader() or type(DoReadyCheck) ~= "function" then
+            return
+        end
+        pcall(DoReadyCheck)
+    end)
+
+    local pullButton = createLeaderActionButton(actionBar, "Pull", LEADER_ACTION_PULL_ACCENT_COLOR)
+    pullButton:SetScript("OnClick", function()
+        if not isPlayerGroupLeader() then
+            return
+        end
+        if executeSlashCommand(PULL_ACTION_COMMAND) then
+            return
+        end
+        if C_PartyInfo and type(C_PartyInfo.DoCountdown) == "function" then
+            local okCountdown = pcall(C_PartyInfo.DoCountdown, 9)
+            if okCountdown then
+                return
+            end
+        end
+        Util:Print("Unable to start /pull 9.")
+    end)
+
+    actionBar.ReadyButton = readyButton
+    actionBar.PullButton = pullButton
+    self.leaderActionBar = actionBar
+    return actionBar
+end
+
+function PartyFrames:RefreshLeaderActionSelectionBounds()
+    if not self.container or not self.container.EditModeSelection then
+        return
+    end
+
+    local selection = self.container.EditModeSelection
+    local extraTop = 0
+    if self.leaderActionBar and self.leaderActionBar:IsShown() then
+        local actionBarHeight = self.leaderActionBar:GetHeight() or 0
+        local actionBarOffset = tonumber(self.leaderActionBar._mummuOffsetY) or LEADER_ACTION_BUTTON_OFFSET_Y
+        extraTop = actionBarHeight + actionBarOffset
+        if Style:IsPixelPerfectEnabled() then
+            extraTop = Style:Snap(extraTop)
+        else
+            extraTop = math.floor(extraTop + 0.5)
+        end
+    end
+
+    selection:ClearAllPoints()
+    selection:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, extraTop)
+    selection:SetPoint("BOTTOMRIGHT", self.container, "BOTTOMRIGHT", 0, 0)
+end
+
+function PartyFrames:HideLeaderActionButtons()
+    if self.leaderActionBar then
+        self.leaderActionBar:Hide()
+    end
+    self:RefreshLeaderActionSelectionBounds()
+end
+
+function PartyFrames:RefreshLeaderActionButtons(runtimeState, frameHeight, inAnyGroup, inAnyRaid)
+    local actionBar = self:CreateLeaderActionButtons()
+    if not actionBar then
+        return
+    end
+
+    local state = runtimeState or buildPartyRuntimeState(self)
+    local grouped = type(inAnyGroup) == "boolean" and inAnyGroup
+        or (isInGroupCategory(PARTY_CATEGORY_HOME) or isInGroupCategory(PARTY_CATEGORY_INSTANCE))
+    local raided = type(inAnyRaid) == "boolean" and inAnyRaid
+        or (isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE))
+    local showEditModeSample = self.editModeActive == true
+    local shouldShowLive = state
+        and state.previewMode ~= true
+        and state.addonEnabled ~= false
+        and state.partyConfig
+        and state.partyConfig.enabled ~= false
+        and grouped
+        and not raided
+        and isPlayerGroupLeader()
+    local shouldShow = showEditModeSample or shouldShowLive
+
+    if not shouldShow then
+        actionBar:Hide()
+        self:RefreshLeaderActionSelectionBounds()
+        return
+    end
+
+    local pixelPerfect = Style:IsPixelPerfectEnabled()
+    local buttonHeight = Util:Clamp(math.floor(((tonumber(frameHeight) or 34) * 0.58) + 0.5), 18, 22)
+    local readyWidth = Util:Clamp(math.floor((buttonHeight * 2.8) + 0.5), 46, 68)
+    local pullWidth = Util:Clamp(math.floor((buttonHeight * 2.4) + 0.5), 40, 60)
+    local gap = LEADER_ACTION_BUTTON_GAP
+    local offsetY = LEADER_ACTION_BUTTON_OFFSET_Y
+
+    if pixelPerfect then
+        buttonHeight = Style:Snap(buttonHeight)
+        readyWidth = Style:Snap(readyWidth)
+        pullWidth = Style:Snap(pullWidth)
+        gap = Style:Snap(gap)
+        offsetY = Style:Snap(offsetY)
+    else
+        buttonHeight = math.floor(buttonHeight + 0.5)
+        readyWidth = math.floor(readyWidth + 0.5)
+        pullWidth = math.floor(pullWidth + 0.5)
+        gap = math.floor(gap + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    actionBar:ClearAllPoints()
+    actionBar:SetPoint("BOTTOMLEFT", self.container, "TOPLEFT", 0, offsetY)
+    actionBar:SetSize(readyWidth + gap + pullWidth, buttonHeight)
+    actionBar._mummuOffsetY = offsetY
+
+    actionBar.ReadyButton:ClearAllPoints()
+    actionBar.ReadyButton:SetPoint("LEFT", actionBar, "LEFT", 0, 0)
+    actionBar.ReadyButton:SetSize(readyWidth, buttonHeight)
+
+    actionBar.PullButton:ClearAllPoints()
+    actionBar.PullButton:SetPoint("LEFT", actionBar.ReadyButton, "RIGHT", gap, 0)
+    actionBar.PullButton:SetSize(pullWidth, buttonHeight)
+
+    if actionBar.ReadyButton.Label then
+        Style:ApplyFont(actionBar.ReadyButton.Label, math.max(10, math.floor((buttonHeight * 0.54) + 0.5)), "OUTLINE")
+    end
+    if actionBar.PullButton.Label then
+        Style:ApplyFont(actionBar.PullButton.Label, math.max(10, math.floor((buttonHeight * 0.54) + 0.5)), "OUTLINE")
+    end
+
+    if type(actionBar.ReadyButton.EnableMouse) == "function" then
+        actionBar.ReadyButton:EnableMouse(not showEditModeSample)
+    end
+    if type(actionBar.PullButton.EnableMouse) == "function" then
+        actionBar.PullButton:EnableMouse(not showEditModeSample)
+    end
+    actionBar:SetAlpha(showEditModeSample and 0.96 or 1)
+
+    actionBar:Show()
+    self:RefreshLeaderActionSelectionBounds()
+end
+
 function PartyFrames:ApplyBlizzardPartyFrameVisibility(runtimeState)
     local state = runtimeState or buildPartyRuntimeState(self)
     if not state then
@@ -1040,6 +1396,9 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "READY_CHECK", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_CONFIRM", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_FINISHED", self.OnReadyCheckChanged)
     ns.EventRouter:Register(self, "PLAYER_ROLES_ASSIGNED", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "ROLE_CHANGED_INFORM", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
@@ -1090,6 +1449,7 @@ function PartyFrames:EnsureEditModeSelection()
     if selection and selection.Label and selection.Label.SetText then
         selection.Label:SetText((L and L.CONFIG_TAB_PARTY) or "Party")
     end
+    self:RefreshLeaderActionSelectionBounds()
 end
 
 -- Handle EditMode entering; show selection UI and refresh frames.
@@ -1137,6 +1497,32 @@ end
 -- Re-apply the secure header ordering when party role assignments change.
 function PartyFrames:OnRoleAssignmentChanged()
     self:HandleLayoutAffectingChange("role_changed")
+end
+
+-- Refresh only the ready-check overlay state for active party frames.
+function PartyFrames:RefreshReadyCheckIndicators(eventName, runtimeState)
+    if not self.globalFrames or type(self.globalFrames.RefreshReadyCheckIndicator) ~= "function" then
+        return
+    end
+
+    local state = runtimeState or buildPartyRuntimeState(self)
+    if not state then
+        return
+    end
+
+    local previewMode = state.previewMode == true or state.testMode == true
+    for index = 1, #(self.frames or {}) do
+        local frame = self.frames[index]
+        if frame then
+            local displayedUnit = getCurrentPartyFrameDisplayedUnit(frame) or frame.displayedUnit or frame.unit
+            self.globalFrames:RefreshReadyCheckIndicator(frame, displayedUnit, eventName, previewMode)
+        end
+    end
+end
+
+-- Handle ready-check events without forcing aura re-renders.
+function PartyFrames:OnReadyCheckChanged(eventName)
+    self:RefreshReadyCheckIndicators(eventName)
 end
 
 -- Handle player's current target changing; refresh target highlight.
@@ -1858,6 +2244,9 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRole
         frame.LeaderIcon:SetPoint("CENTER", frame, "LEFT", border, 0)
         frame.LeaderIcon:SetSize(roleIconSize, roleIconSize)
     end
+    if frame.ReadyCheckIndicator and self.globalFrames and type(self.globalFrames.LayoutReadyCheckIndicator) == "function" then
+        self.globalFrames:LayoutReadyCheckIndicator(frame, height)
+    end
 
     frame.NameText:ClearAllPoints()
     frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)
@@ -2234,6 +2623,9 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
                 frame.LeaderIcon:Hide()
             end
         end
+        if self.globalFrames and type(self.globalFrames.RefreshReadyCheckIndicator) == "function" then
+            self.globalFrames:RefreshReadyCheckIndicator(frame, unitToken, nil, previewMode or testMode)
+        end
 
         frame.NameText:SetText(name)
         local healthPercent = 0
@@ -2361,6 +2753,7 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
         ns.activeMummuPartyFrames = {}
+        self:HideLeaderActionButtons()
         self:StopTestTicker()
         if inCombat then
             self.pendingLayoutRefresh = true
@@ -2410,6 +2803,7 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
     -- -----------------------------------------------------------------------
     if previewMode then
         self:StopTestTicker()
+        self:HideLeaderActionButtons()
         -- Do not transition secure frame visibility/layout in combat.
         -- Defer preview/test presentation until PLAYER_REGEN_ENABLED.
         if inCombat then
@@ -2482,6 +2876,7 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
         self._frameByDisplayedUnit = frameByDisplayedUnit
         self._displayedUnitByGUID = displayedUnitByGUID
         self.container:Show()
+        self:RefreshLeaderActionButtons(state, height, inAnyGroup, inAnyRaid)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
@@ -2495,6 +2890,7 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
         self._displayedUnitByGUID = {}
         self.frames = {}
         ns.activeMummuPartyFrames = {}
+        self:HideLeaderActionButtons()
         self:StopTestTicker()
         self._testMemberStateByUnit = nil
 
@@ -2674,10 +3070,12 @@ function PartyFrames:RefreshAll(forceLayout, runtimeState)
     if not inCombat then
         self.header:Show()
         self.container:Show()
+        self:RefreshLeaderActionButtons(state, height, inAnyGroup, inAnyRaid)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
     else
+        self:RefreshLeaderActionButtons(state, height, inAnyGroup, inAnyRaid)
         self.pendingLayoutRefresh = true
     end
     recordPerfCounters(self, "RefreshAll", perfStartedAt)

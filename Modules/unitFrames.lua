@@ -1562,6 +1562,9 @@ function UnitFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_UPDATE_RESTING", self.OnPlayerStatusChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnPlayerStatusChanged)
     ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnPlayerStatusChanged)
+    ns.EventRouter:Register(self, "READY_CHECK", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_CONFIRM", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_FINISHED", self.OnReadyCheckChanged)
     ns.EventRouter:Register(self, "PLAYER_TARGET_CHANGED", self.OnTargetChanged)
     ns.EventRouter:Register(self, "PLAYER_FOCUS_CHANGED", self.OnFocusChanged)
     ns.EventRouter:Register(self, "PLAYER_STARTED_MOVING", self.OnPlayerMovement)
@@ -1750,6 +1753,23 @@ end
 -- Handle player status changed event. Nothing exploded yet.
 function UnitFrames:OnPlayerStatusChanged(eventName)
     self:RefreshFrame("player")
+end
+
+-- Refresh centered ready-check marks without forcing full unit refresh work.
+function UnitFrames:OnReadyCheckChanged(eventName)
+    if not self.globalFrames or type(self.globalFrames.RefreshReadyCheckIndicator) ~= "function" then
+        return
+    end
+
+    local profile = self.dataHandle and self.dataHandle:GetProfile() or nil
+    local previewMode = self.editModeActive or (profile and profile.testMode == true)
+    for index = 1, #FRAME_ORDER do
+        local unitToken = FRAME_ORDER[index]
+        local frame = self.frames and self.frames[unitToken] or nil
+        if frame then
+            self.globalFrames:RefreshReadyCheckIndicator(frame, unitToken, eventName, previewMode)
+        end
+    end
 end
 
 -- Handle target changed event.
@@ -2364,7 +2384,11 @@ function UnitFrames:SetFrameVisibility(frame, shouldShow, forceManualVisibility)
 end
 
 -- Refresh player status icons.
-function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
+function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken, previewMode)
+    if self.globalFrames and type(self.globalFrames.RefreshReadyCheckIndicator) == "function" then
+        self.globalFrames:RefreshReadyCheckIndicator(frame, unitToken, nil, previewMode)
+    end
+
     if not frame or not frame.StatusIcons or not frame.StatusIconContainer then
         return
     end
@@ -2402,7 +2426,7 @@ function UnitFrames:RefreshPlayerStatusIcons(frame, unitToken)
         frame.StatusIcons.Combat:Show()
     end
 
-frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
+    frame.StatusIconContainer:SetShown(showResting or showLeader or showCombat)
 end
 
 -- Hide the primary power bar and its edit-mode affordance.
@@ -3910,7 +3934,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
     end
 
     if options.statusIcons then
-        self:RefreshPlayerStatusIcons(frame, unitToken)
+        self:RefreshPlayerStatusIcons(frame, unitToken, previewMode)
     end
     if options.secondaryPower then
         self:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)

@@ -45,6 +45,7 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 }
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
+local buildRaidRuntimeState
 
 -- Show a tooltip for the unit currently assigned to the raid frame.
 local function showUnitTooltip(frame)
@@ -696,6 +697,9 @@ function RaidFrames:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnCombatEnded)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PARTY_LEADER_CHANGED", self.OnWorldEvent)
+    ns.EventRouter:Register(self, "READY_CHECK", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_CONFIRM", self.OnReadyCheckChanged)
+    ns.EventRouter:Register(self, "READY_CHECK_FINISHED", self.OnReadyCheckChanged)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
 end
@@ -774,6 +778,32 @@ function RaidFrames:OnWorldEvent()
     end
     self:RefreshAll(true)
     self:RebuildDisplayedUnitMap(false)
+end
+
+-- Refresh only the ready-check overlay state for active raid frames.
+function RaidFrames:RefreshReadyCheckIndicators(eventName, runtimeState)
+    if not self.globalFrames or type(self.globalFrames.RefreshReadyCheckIndicator) ~= "function" then
+        return
+    end
+
+    local state = runtimeState or buildRaidRuntimeState(self)
+    if not state then
+        return
+    end
+
+    local previewMode = state.previewMode == true or state.testMode == true
+    for index = 1, #(self.frames or {}) do
+        local frame = self.frames[index]
+        if frame then
+            local displayedUnit = getCurrentRaidFrameDisplayedUnit(frame) or frame.displayedUnit or frame.unit
+            self.globalFrames:RefreshReadyCheckIndicator(frame, displayedUnit, eventName, previewMode)
+        end
+    end
+end
+
+-- Handle ready-check events without forcing aura re-renders.
+function RaidFrames:OnReadyCheckChanged(eventName)
+    self:RefreshReadyCheckIndicators(eventName)
 end
 
 -- Freeze layout churn while combat lockdown is active.
@@ -878,7 +908,7 @@ local function copyPerfCounters(counters)
     return copy
 end
 
-local function buildRaidRuntimeState(self, profileOverride, raidConfigOverride)
+buildRaidRuntimeState = function(self, profileOverride, raidConfigOverride)
     if not self or not self.dataHandle then
         return nil
     end
@@ -1025,6 +1055,9 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame.LeaderIcon = frame.StatusIconOverlay:CreateTexture(nil, "OVERLAY")
     frame.LeaderIcon:SetAlpha(0.95)
     frame.LeaderIcon:Hide()
+    if self.globalFrames and type(self.globalFrames.CreateReadyCheckIndicator) == "function" then
+        self.globalFrames:CreateReadyCheckIndicator(frame, frame.StatusIconOverlay)
+    end
 
     frame.AbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
     frame.AbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
@@ -1116,6 +1149,9 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig, runtimeState)
         frame.LeaderIcon:ClearAllPoints()
         frame.LeaderIcon:SetPoint("CENTER", frame, "LEFT", border, 0)
         frame.LeaderIcon:SetSize(leaderIconSize, leaderIconSize)
+    end
+    if frame.ReadyCheckIndicator and self.globalFrames and type(self.globalFrames.LayoutReadyCheckIndicator) == "function" then
+        self.globalFrames:LayoutReadyCheckIndicator(frame, height)
     end
 
     frame.DispelOverlay:SetAllPoints(frame.HealthBar)
@@ -1293,6 +1329,9 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             else
                 frame.LeaderIcon:Hide()
             end
+        end
+        if self.globalFrames and type(self.globalFrames.RefreshReadyCheckIndicator) == "function" then
+            self.globalFrames:RefreshReadyCheckIndicator(frame, unitToken, nil, previewMode)
         end
 
         frame.NameText:SetText(name)
