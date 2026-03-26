@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.6.0 - 2026-03-26
+- Fixed group range evaluation so party and raid frames treat checkable `UnitInRange` misses as truly out of range instead of silently failing open.
+- Bumped addon metadata to `2.6.0`.
+
 ## 2.5.1 - 2026-03-26
 - Fixed party and raid out-of-range fading after the event-driven range rewrite by handling `UNIT_IN_RANGE_UPDATE` refreshes even when Midnight does not provide a stable unit token payload.
 - Hardened unit-frame font fallback so outlined text stays consistent even when the preferred font path cannot be assigned directly.
