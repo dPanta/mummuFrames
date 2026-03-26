@@ -1435,6 +1435,17 @@ local function getModuleForOwner(addonRef, ownerKey)
     return addonRef:GetModule("partyFrames")
 end
 
+-- Refresh all displayed range alpha states for one group owner.
+local function refreshDisplayedRangeStatesForOwner(addonRef, ownerKey)
+    local module = getModuleForOwner(addonRef, ownerKey)
+    if not module or type(module.RefreshAllDisplayedRangeStates) ~= "function" then
+        return false
+    end
+
+    module:RefreshAllDisplayedRangeStates()
+    return true
+end
+
 -- Collects all Blizzard compact unit frames into a flat array.
 local function getAllBlizzardCompactUnitFrames()
     local frames = {}
@@ -4087,6 +4098,18 @@ end
 function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
     local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    if eventName == "UNIT_IN_RANGE_UPDATE" and not normalizedUnit then
+        -- Midnight can fire UNIT_IN_RANGE_UPDATE without a stable unit token.
+        -- Fall back to recomputing currently displayed group-frame range state
+        -- instead of dropping the update entirely.
+        local addon = self:GetAddon()
+        if addon then
+            refreshDisplayedRangeStatesForOwner(addon, "party")
+            refreshDisplayedRangeStatesForOwner(addon, "raid")
+        end
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
+    end
+
     if not normalizedUnit then
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
@@ -4135,27 +4158,44 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
-    local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
-    if not frame or not module then
-        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-    end
-
     if eventName == "UNIT_IN_RANGE_UPDATE" then
+        local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
+
         -- Range churn only affects alpha, so prefer the dedicated light-weight
         -- path instead of re-running a full vitals refresh.
         local normalizedInRange = nil
         if Util and type(Util.NormalizeBooleanLike) == "function" then
             normalizedInRange = Util:NormalizeBooleanLike(eventPayload)
         end
-        if type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
+        if frame and module and type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
             module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit, normalizedInRange)
             return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
 
-        if type(module.RefreshDisplayedUnitRangeState) == "function" then
+        if frame and module and type(module.RefreshDisplayedUnitRangeState) == "function" then
             module:RefreshDisplayedUnitRangeState(resolvedUnit, normalizedInRange)
             return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
         end
+
+        local addon = self:GetAddon()
+        if addon then
+            local refreshedAny = false
+            if type(ownerKey) == "string" and ownerKey ~= "" then
+                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, ownerKey)
+            end
+            if not refreshedAny then
+                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, "party") or refreshedAny
+                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, "raid") or refreshedAny
+            end
+            if refreshedAny then
+                return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
+            end
+        end
+    end
+
+    local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
+    if not frame or not module then
+        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
 
     if shouldSkipGroupVitalsRefresh(ownerKey, eventName) then

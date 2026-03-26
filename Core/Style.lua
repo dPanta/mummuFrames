@@ -474,9 +474,51 @@ function Style:ApplyFont(fontString, size, flags)
         return false
     end
 
+    local function trySetFontFromObject(fontObject)
+        if type(fontObject) ~= "table" or type(fontObject.GetFont) ~= "function" then
+            return false
+        end
+
+        local okFontInfo, objectPath, _, objectFlags = pcall(fontObject.GetFont, fontObject)
+        if not okFontInfo or type(objectPath) ~= "string" or objectPath == "" then
+            return false
+        end
+
+        if trySetFontWithFallbackFlags(objectPath) then
+            return true
+        end
+
+        if type(objectFlags) == "string" and objectFlags ~= "" and objectFlags ~= resolvedFlags then
+            if trySetFont(objectPath, objectFlags) then
+                return true
+            end
+            if trySetFont(objectPath, "") then
+                return true
+            end
+        end
+
+        return false
+    end
+
     if not trySetFontWithFallbackFlags(self:GetFontPath()) then
         if not trySetFontWithFallbackFlags(STANDARD_TEXT_FONT) then
             trySetFontWithFallbackFlags("Fonts\\FRIZQT__.TTF")
+        end
+    end
+
+    if not hasFontAssigned() then
+        local fallbackFontObjects = {
+            GameFontNormal,
+            GameFontNormalSmall,
+            GameFontHighlightSmall,
+            SystemFont_Shadow_Med1,
+            SystemFont_Med1,
+        }
+
+        for index = 1, #fallbackFontObjects do
+            if trySetFontFromObject(fallbackFontObjects[index]) then
+                break
+            end
         end
     end
 

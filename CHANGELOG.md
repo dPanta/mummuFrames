@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.5.1 - 2026-03-26
+- Fixed party and raid out-of-range fading after the event-driven range rewrite by handling `UNIT_IN_RANGE_UPDATE` refreshes even when Midnight does not provide a stable unit token payload.
+- Hardened unit-frame font fallback so outlined text stays consistent even when the preferred font path cannot be assigned directly.
+- Bumped addon metadata to `2.5.1`.
+
 ## 2.5.0 - 2026-03-25
 - Added centered Blizzard ready-check indicators to unit, party, and raid frames.
 - Added leader-only `Ready` and `Pull` action buttons above the party frame, with `Pull` starting `/pull 9` and falling back to the Blizzard countdown API when needed.
