@@ -267,9 +267,9 @@ end
 
 -- Return whether a party or raid unit should be considered in range.
 -- Prefer event-provided range state when available, then fall back to
--- UnitInRange. Retail can report an out-of-range-but-checkable unit as
--- (nil, true), so treat that as explicitly out of range. Truly unknown states
--- still fail open so secure group frames never dim from ambiguous results.
+-- UnitInRange. Explicit group range event payloads are authoritative, while
+-- direct UnitInRange misses still fail open unless the API reports a usable
+-- boolean result from a real range check.
 function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
     if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
         return true
@@ -284,18 +284,22 @@ function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
         return normalizedProvidedInRange
     end
 
+    local normalizedDirectInRange = nil
+    local normalizedCanCheckRange = nil
     if type(UnitInRange) == "function" then
         local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
         if okInRange then
-            local normalizedDirectInRange = normalizeBooleanLike(inRange)
-            if normalizedDirectInRange ~= nil then
-                return normalizedDirectInRange
-            end
+            normalizedDirectInRange = normalizeBooleanLike(inRange)
+            normalizedCanCheckRange = normalizeBooleanLike(checkedRange)
 
-            if normalizeBooleanLike(checkedRange) == true then
-                return false
+            if normalizedDirectInRange == true then
+                return true
             end
         end
+    end
+
+    if normalizedCanCheckRange ~= false and normalizedDirectInRange ~= nil then
+        return normalizedDirectInRange
     end
 
     return nil

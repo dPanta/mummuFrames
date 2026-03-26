@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.6.1 - 2026-03-26
+- Fixed the post-`2.6.0` range regression so explicit group range events drive party/raid fading again without forcing observed unit frames permanently out of range.
+- Bumped addon metadata to `2.6.1`.
+
 ## 2.6.0 - 2026-03-26
 - Fixed group range evaluation so party and raid frames treat checkable `UnitInRange` misses as truly out of range instead of silently failing open.
 - Bumped addon metadata to `2.6.0`.

@@ -639,11 +639,11 @@ local function getObservedUnitInRange(unitToken, providedInRange)
         if okRange then
             local canCheckRange = normalizeBooleanLike(checkedRange)
             local normalizedInRange = normalizeBooleanLike(inRange)
-            if normalizedInRange ~= nil then
+            if canCheckRange ~= false and normalizedInRange ~= nil then
                 return normalizedInRange
             end
-            if canCheckRange == true then
-                return false
+            if normalizedInRange == true then
+                return true
             end
         end
     end
