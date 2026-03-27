@@ -23,6 +23,20 @@ local SECONDARY_POWER_MAX_ICONS = 10
 local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
 local TERTIARY_POWER_HEIGHT_BONUS = 5
 local READY_CHECK_FINISHED_HOLD_SECONDS = 6
+local BAG_ESCAPE_CONTAINER_FRAME_FALLBACK_COUNT = 20
+local BAG_ESCAPE_BUTTON_NAME = "mummuFramesBagEscapeButton"
+local BAG_ESCAPE_EXTERNAL_BAG_FRAMES = {
+    "vesperToolsBagsWindow",
+}
+local BAG_ESCAPE_EXTERNAL_BANK_FRAMES = {
+    "vesperToolsBankWindow",
+}
+local BAG_ESCAPE_EXTERNAL_WINDOW_FRAMES = {
+    "vesperToolsFrame",
+    "vesperToolsPortalFrame",
+    "vesperToolsConfigWindow",
+    "vesperToolsVaultWindow",
+}
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
 local RESTING_ICON_ASPECT = 424 / 793
@@ -63,6 +77,228 @@ local function isProtectedFrame(frame)
     end
     local okProtected, protected = pcall(frame.IsProtected, frame)
     return okProtected and protected == true
+end
+
+local function isNamedFrameShown(frameName)
+    if type(frameName) ~= "string" or frameName == "" then
+        return false
+    end
+
+    local frame = _G[frameName]
+    if not frame or type(frame.IsShown) ~= "function" then
+        return false
+    end
+
+    return frame:IsShown()
+end
+
+local function isAnyNamedFrameShown(frameNames)
+    if type(frameNames) ~= "table" then
+        return false
+    end
+
+    for index = 1, #frameNames do
+        if isNamedFrameShown(frameNames[index]) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function hideNamedFrame(frameName)
+    if type(frameName) ~= "string" or frameName == "" then
+        return false
+    end
+
+    local frame = _G[frameName]
+    if not frame or type(frame.Hide) ~= "function" then
+        return false
+    end
+
+    if type(frame.IsShown) == "function" and not frame:IsShown() then
+        return false
+    end
+
+    frame:Hide()
+    return true
+end
+
+local function hideAnyNamedFrame(frameNames)
+    if type(frameNames) ~= "table" then
+        return false
+    end
+
+    local didHideFrame = false
+    for index = 1, #frameNames do
+        didHideFrame = hideNamedFrame(frameNames[index]) or didHideFrame
+    end
+
+    return didHideFrame
+end
+
+local function getVesperToolsModule(moduleName)
+    if type(moduleName) ~= "string" or moduleName == "" then
+        return nil
+    end
+
+    local vesperToolsAddon = _G.vesperTools
+    if type(vesperToolsAddon) ~= "table" or type(vesperToolsAddon.GetModule) ~= "function" then
+        return nil
+    end
+
+    local ok, module = pcall(vesperToolsAddon.GetModule, vesperToolsAddon, moduleName, true)
+    if ok then
+        return module
+    end
+
+    return nil
+end
+
+local function closeVesperToolsBagsWindow()
+    local bagsWindow = getVesperToolsModule("BagsWindow")
+    local frame = bagsWindow and bagsWindow.frame or _G.vesperToolsBagsWindow
+    if not frame or type(frame.Hide) ~= "function" then
+        return hideAnyNamedFrame(BAG_ESCAPE_EXTERNAL_BAG_FRAMES)
+    end
+
+    if type(frame.IsShown) == "function" and not frame:IsShown() then
+        return false
+    end
+
+    frame:Hide()
+    return true
+end
+
+local function closeVesperToolsBankWindow()
+    local bankWindow = getVesperToolsModule("BankWindow")
+    if bankWindow and bankWindow.frame and type(bankWindow.frame.IsShown) == "function" and bankWindow.frame:IsShown() then
+        if type(bankWindow.HandleCloseRequest) == "function" then
+            bankWindow:HandleCloseRequest()
+            return true
+        end
+        if type(bankWindow.frame.Hide) == "function" then
+            bankWindow.frame:Hide()
+            return true
+        end
+    end
+
+    local bagsBridge = getVesperToolsModule("BagsBridge")
+    if bagsBridge and isAnyNamedFrameShown(BAG_ESCAPE_EXTERNAL_BANK_FRAMES) then
+        if type(bagsBridge.CloseBankReplacementWindow) == "function" then
+            bagsBridge:CloseBankReplacementWindow()
+            return true
+        end
+        if type(bagsBridge.HideBankReplacementWindow) == "function" then
+            bagsBridge:HideBankReplacementWindow()
+            return true
+        end
+    end
+
+    return hideAnyNamedFrame(BAG_ESCAPE_EXTERNAL_BANK_FRAMES)
+end
+
+local function closeVesperToolsRosterWindow()
+    local roster = getVesperToolsModule("Roster")
+    local frame = roster and roster.frame or _G.vesperToolsFrame
+    if roster and frame and type(frame.IsShown) == "function" and frame:IsShown() and type(roster.Toggle) == "function" then
+        roster:Toggle()
+        return true
+    end
+
+    return hideNamedFrame("vesperToolsFrame")
+end
+
+local function closeVesperToolsPortalsWindow()
+    local portals = getVesperToolsModule("Portals")
+    local frame = portals and portals.VesperPortalsUI or _G.vesperToolsPortalFrame
+    if not frame or type(frame.Hide) ~= "function" then
+        return hideNamedFrame("vesperToolsPortalFrame")
+    end
+
+    if type(frame.IsShown) == "function" and not frame:IsShown() then
+        return false
+    end
+
+    if portals and type(portals.HideToyFlyout) == "function" then
+        portals:HideToyFlyout()
+    end
+    frame:Hide()
+    return true
+end
+
+local function closeVesperToolsConfigWindow()
+    local configuration = getVesperToolsModule("Configuration")
+    local panel = configuration and configuration.panel or _G.vesperToolsConfigWindow
+    if not panel or type(panel.Hide) ~= "function" then
+        return false
+    end
+
+    if type(panel.IsShown) == "function" and not panel:IsShown() then
+        return false
+    end
+
+    panel:Hide()
+    return true
+end
+
+local function closeVesperToolsVaultWindow()
+    local vaultWindow = getVesperToolsModule("VaultWindow")
+    local frame = vaultWindow and vaultWindow.frame or _G.vesperToolsVaultWindow
+    if vaultWindow and frame and type(frame.IsShown) == "function" and frame:IsShown() and type(vaultWindow.Toggle) == "function" then
+        vaultWindow:Toggle()
+        return true
+    end
+
+    return hideNamedFrame("vesperToolsVaultWindow")
+end
+
+local function areAnyTrackedAddonWindowsShown()
+    return isAnyNamedFrameShown(BAG_ESCAPE_EXTERNAL_WINDOW_FRAMES)
+end
+
+local function closeTrackedAddonWindows()
+    local didCloseWindow = false
+    didCloseWindow = closeVesperToolsRosterWindow() or didCloseWindow
+    didCloseWindow = closeVesperToolsPortalsWindow() or didCloseWindow
+    didCloseWindow = closeVesperToolsConfigWindow() or didCloseWindow
+    didCloseWindow = closeVesperToolsVaultWindow() or didCloseWindow
+    return didCloseWindow
+end
+
+local function areAnyContainerFramesShown()
+    if type(ContainerFrameUtil_EnumerateContainerFrames) == "function" then
+        for maybeIndex, maybeFrame in ContainerFrameUtil_EnumerateContainerFrames() do
+            local frame = maybeFrame or maybeIndex
+            if frame and type(frame.IsShown) == "function" and frame:IsShown() then
+                return true
+            end
+        end
+    end
+
+    if isNamedFrameShown("ContainerFrameCombinedBags") or isNamedFrameShown("ContainerFrameCombinedBank") then
+        return true
+    end
+    if isAnyNamedFrameShown(BAG_ESCAPE_EXTERNAL_BAG_FRAMES) then
+        return true
+    end
+
+    local frameCount = tonumber(_G.NUM_CONTAINER_FRAMES) or BAG_ESCAPE_CONTAINER_FRAME_FALLBACK_COUNT
+    for index = 1, frameCount do
+        if isNamedFrameShown("ContainerFrame" .. tostring(index)) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function areAnyBankFramesShown()
+    return isNamedFrameShown("BankFrame")
+        or isNamedFrameShown("BankPanel")
+        or isNamedFrameShown("AccountBankPanel")
+        or isNamedFrameShown("ContainerFrameCombinedBank")
+        or isAnyNamedFrameShown(BAG_ESCAPE_EXTERNAL_BANK_FRAMES)
 end
 
 -- Show the unit tooltip for a reusable frame built by this module.
@@ -241,6 +477,16 @@ function GlobalFrames:Constructor()
     self.addon = nil
     self.clickCastFrames = setmetatable({}, { __mode = "k" })
     self.pendingStyleByFrame = setmetatable({}, { __mode = "k" })
+    self.bagEscapeBankOpen = false
+    self.bagEscapeButton = nil
+    self.bagEscapeClosing = false
+    self.bagEscapeGameMenuHookInstalled = false
+    self.bagEscapeHooksInstalled = false
+    self.bagEscapeKeyCatcher = nil
+    self.bagEscapeNamedFrameHooks = {}
+    self.bagEscapeRefreshNeedsApply = false
+    self.bagEscapeRefreshScheduled = false
+    self.bagEscapeVesperHooksInstalled = false
 end
 
 -- Initialize global frames module.
@@ -251,23 +497,416 @@ end
 -- Enable global frames module.
 function GlobalFrames:OnEnable()
     ns.EventRouter:Register(self, "ADDON_LOADED", self.OnAddonLoaded)
+    ns.EventRouter:Register(self, "BAG_OPEN", self.OnBagWindowStateChanged)
+    ns.EventRouter:Register(self, "BAG_CLOSED", self.OnBagWindowStateChanged)
+    ns.EventRouter:Register(self, "BANKFRAME_OPENED", self.OnBankFrameOpened)
+    ns.EventRouter:Register(self, "BANKFRAME_CLOSED", self.OnBankFrameClosed)
+    ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnBagWindowStateChanged)
     ns.EventRouter:Register(self, "PLAYER_REGEN_ENABLED", self.OnPlayerRegenEnabled)
+    self:SetupBagEscapeButton()
+    self:SetupBagEscapeKeyCatcher()
+    self:InstallExternalInventoryHooks()
     self:RegisterAllClickCastFrames()
+    self:RefreshBagEscapeBinding()
 end
 
 -- Disable global frames module.
 function GlobalFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self.pendingStyleByFrame = setmetatable({}, { __mode = "k" })
+    if self.bagEscapeButton and type(ClearOverrideBindings) == "function" and not InCombatLockdown() then
+        ClearOverrideBindings(self.bagEscapeButton)
+    end
+    self.bagEscapeRefreshNeedsApply = false
+    self.bagEscapeRefreshScheduled = false
 end
 
 -- Handle addon loaded event.
 function GlobalFrames:OnAddonLoaded(_, loadedAddonName)
+    if loadedAddonName == "vesperTools" then
+        self:InstallExternalInventoryHooks()
+    end
+    self:ScheduleBagEscapeBindingRefresh()
     if loadedAddonName ~= "Clique" then
         return
     end
 
     self:RegisterAllClickCastFrames()
+end
+
+function GlobalFrames:SetupBagEscapeButton()
+    if self.bagEscapeButton then
+        return
+    end
+
+    local button = CreateFrame("Button", BAG_ESCAPE_BUTTON_NAME, UIParent)
+    button:SetSize(1, 1)
+    button:RegisterForClicks("AnyUp", "AnyDown")
+    button:SetScript("OnClick", function()
+        self:TryCloseInventoryWindows()
+    end)
+    button:Hide()
+    self.bagEscapeButton = button
+
+    self:InstallBagEscapeHooks()
+end
+
+function GlobalFrames:SetupBagEscapeKeyCatcher()
+    if self.bagEscapeKeyCatcher then
+        return
+    end
+
+    local catcher = CreateFrame("Frame", nil, UIParent)
+    catcher:SetAllPoints(UIParent)
+    catcher:EnableKeyboard(true)
+    catcher:SetPropagateKeyboardInput(true)
+    catcher:SetScript("OnKeyDown", function(frame, key)
+        if key == "ESCAPE" and self:ShouldBindEscapeToInventoryClose() then
+            frame:SetPropagateKeyboardInput(false)
+            self:TryCloseInventoryWindows()
+            return
+        end
+        frame:SetPropagateKeyboardInput(true)
+    end)
+    catcher:HookScript("OnHide", function(frame)
+        frame:SetPropagateKeyboardInput(true)
+    end)
+    catcher:Hide()
+    self.bagEscapeKeyCatcher = catcher
+end
+
+function GlobalFrames:InstallBagEscapeHooks()
+    if self.bagEscapeHooksInstalled then
+        return
+    end
+
+    local functionNames = {
+        "OpenAllBags",
+        "CloseAllBags",
+        "ToggleAllBags",
+        "OpenBackpack",
+        "CloseBackpack",
+        "ToggleBackpack",
+        "OpenBag",
+        "CloseBag",
+        "ToggleBag",
+    }
+
+    for _, functionName in ipairs(functionNames) do
+        if type(_G[functionName]) == "function" then
+            hooksecurefunc(functionName, function()
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    if C_Bank and type(C_Bank.CloseBankFrame) == "function" then
+        hooksecurefunc(C_Bank, "CloseBankFrame", function()
+            self:ScheduleBagEscapeBindingRefresh()
+        end)
+    end
+
+    self:InstallBagEscapeGameMenuHook()
+
+    self.bagEscapeHooksInstalled = true
+end
+
+function GlobalFrames:HookExternalInventoryFrame(frameName)
+    if type(frameName) ~= "string" or frameName == "" then
+        return false
+    end
+
+    local frame = _G[frameName]
+    if not frame or type(frame.HookScript) ~= "function" then
+        return false
+    end
+    if self.bagEscapeNamedFrameHooks[frameName] == frame then
+        return false
+    end
+
+    frame:HookScript("OnShow", function()
+        self:ScheduleBagEscapeBindingRefresh()
+    end)
+    frame:HookScript("OnHide", function()
+        self:ScheduleBagEscapeBindingRefresh()
+    end)
+    self.bagEscapeNamedFrameHooks[frameName] = frame
+    return true
+end
+
+function GlobalFrames:InstallExternalInventoryHooks()
+    for index = 1, #BAG_ESCAPE_EXTERNAL_BAG_FRAMES do
+        self:HookExternalInventoryFrame(BAG_ESCAPE_EXTERNAL_BAG_FRAMES[index])
+    end
+    for index = 1, #BAG_ESCAPE_EXTERNAL_BANK_FRAMES do
+        self:HookExternalInventoryFrame(BAG_ESCAPE_EXTERNAL_BANK_FRAMES[index])
+    end
+    for index = 1, #BAG_ESCAPE_EXTERNAL_WINDOW_FRAMES do
+        self:HookExternalInventoryFrame(BAG_ESCAPE_EXTERNAL_WINDOW_FRAMES[index])
+    end
+
+    if self.bagEscapeVesperHooksInstalled or type(hooksecurefunc) ~= "function" then
+        return
+    end
+
+    local bagsWindow = getVesperToolsModule("BagsWindow")
+    if bagsWindow then
+        if type(bagsWindow.ShowWindow) == "function" then
+            hooksecurefunc(bagsWindow, "ShowWindow", function()
+                self:HookExternalInventoryFrame("vesperToolsBagsWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(bagsWindow.Toggle) == "function" then
+            hooksecurefunc(bagsWindow, "Toggle", function()
+                self:HookExternalInventoryFrame("vesperToolsBagsWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    local bankWindow = getVesperToolsModule("BankWindow")
+    if bankWindow then
+        if type(bankWindow.ShowWindow) == "function" then
+            hooksecurefunc(bankWindow, "ShowWindow", function()
+                self:HookExternalInventoryFrame("vesperToolsBankWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(bankWindow.Toggle) == "function" then
+            hooksecurefunc(bankWindow, "Toggle", function()
+                self:HookExternalInventoryFrame("vesperToolsBankWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(bankWindow.HandleCloseRequest) == "function" then
+            hooksecurefunc(bankWindow, "HandleCloseRequest", function()
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    local bagsBridge = getVesperToolsModule("BagsBridge")
+    if bagsBridge and type(bagsBridge.CloseBankReplacementWindow) == "function" then
+        hooksecurefunc(bagsBridge, "CloseBankReplacementWindow", function()
+            self:ScheduleBagEscapeBindingRefresh()
+        end)
+    end
+
+    local roster = getVesperToolsModule("Roster")
+    if roster then
+        if type(roster.ShowRoster) == "function" then
+            hooksecurefunc(roster, "ShowRoster", function()
+                self:HookExternalInventoryFrame("vesperToolsFrame")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(roster.Toggle) == "function" then
+            hooksecurefunc(roster, "Toggle", function()
+                self:HookExternalInventoryFrame("vesperToolsFrame")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    local portals = getVesperToolsModule("Portals")
+    if portals then
+        if type(portals.CreatePortalFrame) == "function" then
+            hooksecurefunc(portals, "CreatePortalFrame", function()
+                self:HookExternalInventoryFrame("vesperToolsPortalFrame")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(portals.Toggle) == "function" then
+            hooksecurefunc(portals, "Toggle", function()
+                self:HookExternalInventoryFrame("vesperToolsPortalFrame")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    local configuration = getVesperToolsModule("Configuration")
+    if configuration then
+        if type(configuration.BuildPanel) == "function" then
+            hooksecurefunc(configuration, "BuildPanel", function()
+                self:HookExternalInventoryFrame("vesperToolsConfigWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(configuration.OpenConfig) == "function" then
+            hooksecurefunc(configuration, "OpenConfig", function()
+                self:HookExternalInventoryFrame("vesperToolsConfigWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    local vaultWindow = getVesperToolsModule("VaultWindow")
+    if vaultWindow then
+        if type(vaultWindow.ShowWindow) == "function" then
+            hooksecurefunc(vaultWindow, "ShowWindow", function()
+                self:HookExternalInventoryFrame("vesperToolsVaultWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+        if type(vaultWindow.Toggle) == "function" then
+            hooksecurefunc(vaultWindow, "Toggle", function()
+                self:HookExternalInventoryFrame("vesperToolsVaultWindow")
+                self:ScheduleBagEscapeBindingRefresh()
+            end)
+        end
+    end
+
+    self.bagEscapeVesperHooksInstalled = true
+end
+
+function GlobalFrames:InstallBagEscapeGameMenuHook()
+    if self.bagEscapeGameMenuHookInstalled or type(hooksecurefunc) ~= "function" or type(ToggleGameMenu) ~= "function" then
+        return
+    end
+
+    hooksecurefunc("ToggleGameMenu", function()
+        if not self:ShouldBindEscapeToInventoryClose() then
+            return
+        end
+        if not self:TryCloseInventoryWindows() then
+            return
+        end
+        if GameMenuFrame and type(GameMenuFrame.IsShown) == "function" and GameMenuFrame:IsShown() then
+            if type(HideUIPanel) == "function" then
+                HideUIPanel(GameMenuFrame)
+            elseif type(GameMenuFrame.Hide) == "function" then
+                GameMenuFrame:Hide()
+            end
+        end
+    end)
+
+    self.bagEscapeGameMenuHookInstalled = true
+end
+
+function GlobalFrames:ShouldBindEscapeToInventoryClose()
+    return self.bagEscapeBankOpen
+        or areAnyBankFramesShown()
+        or areAnyContainerFramesShown()
+        or areAnyTrackedAddonWindowsShown()
+end
+
+function GlobalFrames:ScheduleBagEscapeBindingRefresh()
+    self.bagEscapeRefreshNeedsApply = true
+    if self.bagEscapeRefreshScheduled then
+        return
+    end
+
+    self.bagEscapeRefreshScheduled = true
+    if C_Timer and type(C_Timer.After) == "function" then
+        C_Timer.After(0, function()
+            self.bagEscapeRefreshScheduled = false
+            if self.bagEscapeRefreshNeedsApply then
+                self:RefreshBagEscapeBinding()
+            end
+        end)
+        return
+    end
+
+    self.bagEscapeRefreshScheduled = false
+    self:RefreshBagEscapeBinding()
+end
+
+function GlobalFrames:RefreshBagEscapeBinding()
+    self:InstallExternalInventoryHooks()
+
+    local button = self.bagEscapeButton
+    local catcher = self.bagEscapeKeyCatcher
+    if not button then
+        return
+    end
+
+    local shouldCatch = self:ShouldBindEscapeToInventoryClose()
+    if catcher then
+        catcher:SetShown(shouldCatch)
+    end
+
+    if InCombatLockdown() then
+        return
+    end
+
+    self.bagEscapeRefreshNeedsApply = false
+
+    if type(ClearOverrideBindings) == "function" then
+        ClearOverrideBindings(button)
+    end
+
+    if shouldCatch and type(SetOverrideBindingClick) == "function" then
+        SetOverrideBindingClick(button, true, "ESCAPE", button:GetName())
+    end
+end
+
+function GlobalFrames:CloseInventoryWindows()
+    if self.bagEscapeClosing then
+        return false
+    end
+
+    self.bagEscapeClosing = true
+
+    if type(CloseAllBags) == "function" then
+        CloseAllBags()
+    end
+    closeVesperToolsBagsWindow()
+
+    if C_Bank and type(C_Bank.CloseBankFrame) == "function" then
+        C_Bank.CloseBankFrame()
+    elseif type(CloseBankFrame) == "function" then
+        CloseBankFrame()
+    elseif type(HideUIPanel) == "function" then
+        local bankFrame = _G.BankFrame or _G.BankPanel or _G.AccountBankPanel
+        if bankFrame then
+            HideUIPanel(bankFrame)
+        end
+    else
+        local bankFrame = _G.BankFrame or _G.BankPanel or _G.AccountBankPanel
+        if bankFrame and type(bankFrame.Hide) == "function" then
+            bankFrame:Hide()
+        end
+    end
+    closeVesperToolsBankWindow()
+    closeTrackedAddonWindows()
+
+    if C_Timer and type(C_Timer.After) == "function" then
+        C_Timer.After(0, function()
+            self.bagEscapeClosing = false
+            self:ScheduleBagEscapeBindingRefresh()
+        end)
+        return true
+    end
+
+    self.bagEscapeClosing = false
+    self:ScheduleBagEscapeBindingRefresh()
+    return true
+end
+
+function GlobalFrames:TryCloseInventoryWindows()
+    local hadContainers = areAnyContainerFramesShown()
+    local hadBank = self.bagEscapeBankOpen or areAnyBankFramesShown()
+    local hadAddonWindows = areAnyTrackedAddonWindowsShown()
+    if not hadContainers and not hadBank and not hadAddonWindows then
+        return false
+    end
+
+    return self:CloseInventoryWindows()
+end
+
+function GlobalFrames:OnBankFrameOpened()
+    self.bagEscapeBankOpen = true
+    self:ScheduleBagEscapeBindingRefresh()
+end
+
+function GlobalFrames:OnBankFrameClosed()
+    self.bagEscapeBankOpen = false
+    self:ScheduleBagEscapeBindingRefresh()
+end
+
+function GlobalFrames:OnBagWindowStateChanged()
+    self:ScheduleBagEscapeBindingRefresh()
 end
 
 -- Queue style refresh for post-combat application.
@@ -299,6 +938,9 @@ end
 function GlobalFrames:OnPlayerRegenEnabled()
     self:RegisterAllClickCastFrames()
     self:FlushQueuedStyles()
+    if self.bagEscapeRefreshNeedsApply then
+        self:RefreshBagEscapeBinding()
+    end
 end
 
 -- Register one frame for click-cast integrations.

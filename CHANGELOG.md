@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 2.7.0 - 2026-03-27
+- Added Escape handling for tracked `vesperTools` windows so `ESC` closes bags, bank, roster, portals, config, and vault before falling through to the game menu.
+- Bumped addon metadata to `2.7.0`.
+
 ## 2.6.1 - 2026-03-26
 - Fixed the post-`2.6.0` range regression so explicit group range events drive party/raid fading again without forcing observed unit frames permanently out of range.
 - Bumped addon metadata to `2.6.1`.

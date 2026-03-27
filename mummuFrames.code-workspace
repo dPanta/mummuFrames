@@ -99,7 +99,15 @@
 			"CVarCallbackRegistry",
 			"CooldownFrame_Set",
 			"TextureKitConstants",
-			"GetIconForRole"
+			"GetIconForRole",
+			"DEFAULT_CHAT_FRAME",
+			"ChatEdit_ParseText",
+			"ChatFrameUtil",
+			"ChatFrame_OpenChat",
+			"CloseAllBags",
+			"ContainerFrameUtil_EnumerateContainerFrames",
+			"GameMenuFrame",
+			"ToggleGameMenu"
 		],
 		"Lua.type.weakUnionCheck": true
 	}
