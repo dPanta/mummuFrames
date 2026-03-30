@@ -295,12 +295,6 @@ local DEFAULT_PROFILE = {
             },
         },
     },
-    -- Shared aura tracking configuration for party/raid frames.
-    auras = {
-        enabled = true,
-        size = (Util and type(Util.GetTrackedAuraDefaultSize) == "function" and Util:GetTrackedAuraDefaultSize()) or 14,
-        entries = {},
-    },
 }
 
 -- Baseline SavedVariables structure applied on first load and during migrations.
@@ -490,6 +484,8 @@ local TRACKED_AURA_ICON_SLOT_SET = {
     ICON3 = true,
     ICON4 = true,
 }
+local TRACKED_AURA_ENTRY_OFFSET_MIN = -80
+local TRACKED_AURA_ENTRY_OFFSET_MAX = 80
 
 local function sanitizeTrackedAuraColor(value)
     if type(value) ~= "table" then
@@ -533,6 +529,21 @@ local function normalizeTrackedAuraSlot(display, value)
     return nil
 end
 
+local function normalizeTrackedAuraOffset(value)
+    local numeric = tonumber(value)
+    if type(numeric) ~= "number" then
+        return nil
+    end
+
+    if numeric >= 0 then
+        numeric = math.floor(numeric + 0.5)
+    else
+        numeric = math.ceil(numeric - 0.5)
+    end
+
+    return Util:Clamp(numeric, TRACKED_AURA_ENTRY_OFFSET_MIN, TRACKED_AURA_ENTRY_OFFSET_MAX)
+end
+
 local function sanitizeTrackedAuraEntry(value)
     if type(value) ~= "table" then
         return nil
@@ -559,6 +570,16 @@ local function sanitizeTrackedAuraEntry(value)
     local size = tonumber(value.size)
     if type(size) == "number" then
         entry.size = Util:Clamp(math.floor(size + 0.5), 4, 48)
+    end
+
+    local offsetX = normalizeTrackedAuraOffset(value.x)
+    if type(offsetX) == "number" and offsetX ~= 0 then
+        entry.x = offsetX
+    end
+
+    local offsetY = normalizeTrackedAuraOffset(value.y)
+    if type(offsetY) == "number" and offsetY ~= 0 then
+        entry.y = offsetY
     end
 
     local color = sanitizeTrackedAuraColor(value.color)
@@ -631,6 +652,38 @@ local function buildTrackedAuraSpellListFromEntries(entries)
     return spellNames
 end
 
+local function maintainTrackedAurasConfig(config)
+    if type(config) ~= "table" then
+        config = {}
+    end
+
+    if config.enabled == nil then
+        config.enabled = true
+    end
+    config.size = Util:Clamp(tonumber(config.size) or getDefaultTrackedAuraSize(), 6, 48)
+
+    local entries = sanitizeTrackedAuraEntries(config.entries)
+    local allowedSpells = sanitizeAuraSpellList(config.allowedSpells)
+    if entries == nil or #entries == 0 then
+        if allowedSpells ~= nil and #allowedSpells > 0 then
+            entries = buildLegacyTrackedAuraEntries(allowedSpells)
+        else
+            entries = getDefaultTrackedAuraEntries()
+        end
+    end
+
+    if allowedSpells == nil or #allowedSpells == 0 then
+        allowedSpells = buildTrackedAuraSpellListFromEntries(entries)
+        if #allowedSpells == 0 then
+            allowedSpells = getDefaultTrackedAuraNames()
+        end
+    end
+
+    config.entries = entries
+    config.allowedSpells = allowedSpells
+    return config
+end
+
 -- Copy only supported profile keys and value types from imported data.
 local function sanitizeImportedProfile(value, defaults, path)
     if type(defaults) ~= "table" then
@@ -684,6 +737,7 @@ local function buildProfileSnapshot(profile, defaultFontPath)
     end
 
     local snapshot = deepCopy(profile)
+    snapshot.auras = nil
     maintainProfile(snapshot, defaultFontPath)
     return snapshot
 end
@@ -819,6 +873,62 @@ local function newDefaultProfiles(defaultFontPath)
     }
 end
 
+local function getLegacyTrackedAurasSource(db, charSettings)
+    if type(charSettings) ~= "table" then
+        return nil
+    end
+
+    local profiles = type(charSettings.profiles) == "table" and charSettings.profiles or nil
+    local activeProfileName = normalizeProfileName(charSettings.activeProfile) or "Default"
+    if type(profiles) == "table" then
+        local activeProfile = profiles[activeProfileName]
+        if type(activeProfile) == "table" and type(activeProfile.auras) == "table" then
+            return activeProfile.auras
+        end
+
+        local defaultProfile = profiles.Default
+        if activeProfileName ~= "Default" and type(defaultProfile) == "table" and type(defaultProfile.auras) == "table" then
+            return defaultProfile.auras
+        end
+
+        for _, profileName in ipairs(getSortedKeys(profiles)) do
+            local profile = profiles[profileName]
+            if type(profile) == "table" and type(profile.auras) == "table" then
+                return profile.auras
+            end
+        end
+    end
+
+    if type(db) ~= "table" then
+        return nil
+    end
+
+    if type(db.auras) == "table" then
+        return db.auras
+    end
+
+    local globalSettings = db.global
+    if type(globalSettings) == "table" and type(globalSettings.auras) == "table" then
+        return globalSettings.auras
+    end
+
+    return nil
+end
+
+local function ensureCharacterTrackedAurasConfig(db, charSettings)
+    if type(charSettings) ~= "table" then
+        return charSettings
+    end
+
+    if type(charSettings.auras) ~= "table" then
+        local legacySource = getLegacyTrackedAurasSource(db, charSettings)
+        charSettings.auras = type(legacySource) == "table" and deepCopy(legacySource) or {}
+    end
+
+    charSettings.auras = maintainTrackedAurasConfig(charSettings.auras)
+    return charSettings
+end
+
 -- Return a cache key scoped to one character/profile pair.
 local function getProfileCacheKey(charKey, profileName)
     return string.format("%s::%s", tostring(charKey or "UnknownCharacter"), tostring(profileName or "Default"))
@@ -872,32 +982,6 @@ maintainProfile = function(profile, defaultFontPath)
     if profile.style.darkMode == nil then
         profile.style.darkMode = false
     end
-
-    profile.auras = profile.auras or {}
-    if profile.auras.enabled == nil then
-        profile.auras.enabled = true
-    end
-    profile.auras.size = Util:Clamp(tonumber(profile.auras.size) or getDefaultTrackedAuraSize(), 6, 48)
-
-    local entries = sanitizeTrackedAuraEntries(profile.auras.entries)
-    local allowedSpells = sanitizeAuraSpellList(profile.auras.allowedSpells)
-    if entries == nil or #entries == 0 then
-        if allowedSpells ~= nil and #allowedSpells > 0 then
-            entries = buildLegacyTrackedAuraEntries(allowedSpells)
-        else
-            entries = getDefaultTrackedAuraEntries()
-        end
-    end
-
-    if allowedSpells == nil or #allowedSpells == 0 then
-        allowedSpells = buildTrackedAuraSpellListFromEntries(entries)
-        if #allowedSpells == 0 then
-            allowedSpells = getDefaultTrackedAuraNames()
-        end
-    end
-
-    profile.auras.entries = entries
-    profile.auras.allowedSpells = allowedSpells
 
     if type(profile.units) == "table" then
         sanitizeGroupDebuffFilterConfig(profile.units.party)
@@ -1021,6 +1105,7 @@ local function resolveCharacterSettings(self, sourceProfiles)
     if (tonumber(charSettings.bundledDefaultProfileVersion) or 0) < BUNDLED_DEFAULT_PROFILE_VERSION then
         charSettings = ensureBundledDefaultProfileSeedApplied(charSettings, defaultFontPath)
     end
+    charSettings = ensureCharacterTrackedAurasConfig(self.db, charSettings)
 
     self.db.char[charKey] = charSettings
     return charSettings, charKey
@@ -1135,6 +1220,14 @@ function DataHandle:GetCharacterSettings()
     local perfStartedAt = startPerfCounters(self)
     local charSettings = resolveCharacterSettings(self)
     return finishPerfCounters(self, "GetCharacterSettings", perfStartedAt, charSettings)
+end
+
+-- Return the character-scoped tracked aura configuration table.
+function DataHandle:GetTrackedAurasConfig()
+    local perfStartedAt = startPerfCounters(self)
+    local charSettings = resolveCharacterSettings(self)
+    local auras = charSettings and charSettings.auras or nil
+    return finishPerfCounters(self, "GetTrackedAurasConfig", perfStartedAt, auras)
 end
 
 -- Return current profile table.

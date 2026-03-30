@@ -669,6 +669,29 @@ local function getSafeTrackedAuraColor(colorData)
     return red, green, blue, alpha
 end
 
+local function getTrackedAuraEntryOffsets(entry)
+    local offsetX = Util:Clamp(tonumber(type(entry) == "table" and entry.x or nil) or 0, -80, 80)
+    local offsetY = Util:Clamp(tonumber(type(entry) == "table" and entry.y or nil) or 0, -80, 80)
+
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        offsetX = Style:Snap(offsetX)
+        offsetY = Style:Snap(offsetY)
+    else
+        if offsetX >= 0 then
+            offsetX = math.floor(offsetX + 0.5)
+        else
+            offsetX = math.ceil(offsetX - 0.5)
+        end
+        if offsetY >= 0 then
+            offsetY = math.floor(offsetY + 0.5)
+        else
+            offsetY = math.ceil(offsetY - 0.5)
+        end
+    end
+
+    return offsetX, offsetY
+end
+
 local function getTrackedAuraEntrySize(entry, config)
     local configuredSize = type(entry) == "table" and tonumber(entry.size) or nil
     if type(configuredSize) == "number" then
@@ -700,6 +723,8 @@ local function copyTrackedAuraEntries(entries)
                 slot = normalizeTrackedAuraSlot(entry.display, entry.slot),
                 ownOnly = entry.ownOnly ~= false,
                 size = tonumber(entry.size),
+                x = tonumber(entry.x),
+                y = tonumber(entry.y),
             }
             if type(entry.color) == "table" then
                 copiedEntry.color = {
@@ -1740,19 +1765,20 @@ local function hideUnusedTrackerElements(frame, usedByKey)
     end
 end
 
-local function layoutTrackerIconElement(frame, element, slotIndex, size)
+local function layoutTrackerIconElement(frame, element, slotIndex, size, entry)
     if type(frame) ~= "table" or type(element) ~= "table" then
         return
     end
 
     local resolvedSize = Util:Clamp(math.floor((tonumber(size) or DEFAULT_TRACKER_SIZE) + 0.5), 6, 48)
+    local offsetX, offsetY = getTrackedAuraEntryOffsets(entry)
     if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
         resolvedSize = Style:Snap(resolvedSize)
     end
 
     element:SetSize(resolvedSize, resolvedSize)
     element:ClearAllPoints()
-    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(slotIndex - 1) * (resolvedSize + 2), 0)
+    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", (-(slotIndex - 1) * (resolvedSize + 2)) + offsetX, offsetY)
 end
 
 local function ensureTrackerSquareElement(frame, slotKey)
@@ -1803,13 +1829,14 @@ local function ensureTrackerSquareElement(frame, slotKey)
     return element
 end
 
-local function layoutTrackerSquareElement(frame, element, slotKey, size)
+local function layoutTrackerSquareElement(frame, element, slotKey, size, entry)
     if type(frame) ~= "table" or type(element) ~= "table" then
         return
     end
 
     local parent = frame.HealthBar or frame
     local resolvedSize = Util:Clamp(math.floor((tonumber(size) or DEFAULT_TRACKER_SQUARE_SIZE) + 0.5), MIN_TRACKER_SQUARE_SIZE, MAX_TRACKER_SQUARE_SIZE)
+    local offsetX, offsetY = getTrackedAuraEntryOffsets(entry)
     local offset = 1
     if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
         resolvedSize = Style:Snap(resolvedSize)
@@ -1819,13 +1846,13 @@ local function layoutTrackerSquareElement(frame, element, slotKey, size)
     element:SetSize(resolvedSize, resolvedSize)
     element:ClearAllPoints()
     if slotKey == "TOPRIGHT" then
-        element:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -offset, -offset)
+        element:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -offset + offsetX, -offset + offsetY)
     elseif slotKey == "BOTTOMLEFT" then
-        element:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", offset, offset)
+        element:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", offset + offsetX, offset + offsetY)
     elseif slotKey == "BOTTOMRIGHT" then
-        element:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -offset, offset)
+        element:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -offset + offsetX, offset + offsetY)
     else
-        element:SetPoint("TOPLEFT", parent, "TOPLEFT", offset, -offset)
+        element:SetPoint("TOPLEFT", parent, "TOPLEFT", offset + offsetX, -offset + offsetY)
     end
 end
 
@@ -2608,6 +2635,8 @@ local function buildTrackedAuraRequests(entries)
                 slot = normalizeTrackedAuraSlot(entry.display, entry.slot),
                 ownOnly = entry.ownOnly ~= false,
                 size = tonumber(entry.size),
+                x = tonumber(entry.x),
+                y = tonumber(entry.y),
                 color = entry.color,
                 matchedAura = nil,
             }
@@ -3608,7 +3637,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
 
         local element = ensureTrackerElement(frame, slotIndex)
         local size = getTrackedAuraEntrySize(request and request.entry or request, config)
-        layoutTrackerIconElement(frame, element, slotIndex, size)
+        layoutTrackerIconElement(frame, element, slotIndex, size, request and request.entry or request)
         if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(request and request.spellName or nil, request and request.trackedSpellInfo or nil, auraData)) then
             safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
         end
@@ -3631,7 +3660,13 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
                     local slotKey = normalizeTrackedAuraSlot("square", request.slot)
                     if usedSquareSlots[slotKey] ~= true then
                         local element = ensureTrackerSquareElement(frame, slotKey)
-                        layoutTrackerSquareElement(frame, element, slotKey, getTrackedAuraEntrySize(request.entry or request, config))
+                        layoutTrackerSquareElement(
+                            frame,
+                            element,
+                            slotKey,
+                            getTrackedAuraEntrySize(request.entry or request, config),
+                            request.entry or request
+                        )
                         setTrackerSquareColor(element, request.color or (request.entry and request.entry.color) or nil)
                         element:Show()
                         usedSquareSlots[slotKey] = true
@@ -4344,59 +4379,29 @@ function AuraHandle:RebuildSpellIconCache()
     end
 end
 
--- Writes all missing defaults into profile.auras exactly once (before combat).
+-- Ensures the character-scoped tracked aura config exists and is normalized.
 -- Safe to call multiple times; re-entrancy guarded by nil checks.
 function AuraHandle:InitializeAurasDefaults()
     local dataHandle = self:GetDataHandle()
-    if not dataHandle or type(dataHandle.GetProfile) ~= "function" then
+    if not dataHandle or type(dataHandle.GetTrackedAurasConfig) ~= "function" then
         return
     end
-    local profile = dataHandle:GetProfile()
-    if type(profile) ~= "table" then
+    local config = dataHandle:GetTrackedAurasConfig()
+    if type(config) ~= "table" then
         return
-    end
-
-    profile.auras = profile.auras or {}
-    local config  = profile.auras
-
-    if config.enabled == nil then
-        config.enabled = true
-    end
-    if config.size == nil then
-        config.size = DEFAULT_TRACKER_SIZE
-    end
-    if type(config.entries) ~= "table" or #config.entries == 0 then
-        if type(config.allowedSpells) == "table" and #config.allowedSpells > 0 then
-            config.entries = getConfiguredTrackedAuraEntries(config)
-        else
-            config.entries = self:GetClassDefaultAuraEntries()
-        end
-    end
-    if config.allowedSpells == nil then
-        config.allowedSpells = self:GetClassDefaultAuraNames()
     end
     self:RebuildSpellIconCache()
 end
 
--- Returns the raw auras config table (profile.auras) for reading.
+-- Returns the raw character-scoped tracked auras config table for reading.
 -- Does NOT mutate config values — call InitializeAurasDefaults first.
 function AuraHandle:GetAurasConfig()
     local dataHandle = self:GetDataHandle()
-    if not dataHandle or type(dataHandle.GetProfile) ~= "function" then
+    if not dataHandle or type(dataHandle.GetTrackedAurasConfig) ~= "function" then
         return nil
     end
 
-    local profile = dataHandle:GetProfile()
-    if type(profile) ~= "table" then
-        return nil
-    end
-
-    -- Ensure the sub-table exists (first-boot guard; normally done by InitializeAurasDefaults).
-    if type(profile.auras) ~= "table" then
-        self:InitializeAurasDefaults()
-    end
-
-    return profile.auras
+    return dataHandle:GetTrackedAurasConfig()
 end
 
 -- Returns the default spell-name list for the current player class.

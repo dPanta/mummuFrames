@@ -2266,13 +2266,23 @@ end
 
 -- Create a prominent section header with supporting copy and divider.
 function Configuration:CreateSectionHeader(parent, title, description, anchor, topSpacing)
+    if anchor == nil and (type(topSpacing) == "table" or type(topSpacing) == "userdata") then
+        anchor = topSpacing
+        topSpacing = nil
+    end
+
+    if anchor == nil then
+        anchor = parent
+    end
+
+    local spacing = tonumber(topSpacing) or 24
     local titleText = parent:CreateFontString(nil, "ARTWORK")
     if anchor == parent then
         titleText:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -6)
     else
         -- Reset each section to the parent's left edge so nested controls do not
         -- push later sections further to the right as the page continues.
-        titleText:SetPoint("TOP", anchor, "BOTTOM", 0, -(topSpacing or 24))
+        titleText:SetPoint("TOP", anchor, "BOTTOM", 0, -spacing)
         titleText:SetPoint("LEFT", parent, "LEFT", 0, 0)
     end
     titleText:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
@@ -2838,15 +2848,11 @@ function Configuration:BuildProfilesPage(page)
 
         self._profilesSelectedName = importedName
         local importedIntoActiveProfile = importedName == dataHandle:GetActiveProfileName()
-        if importedIntoActiveProfile and ns.AuraHandle and type(ns.AuraHandle.InitializeAurasDefaults) == "function" then
-            ns.AuraHandle:InitializeAurasDefaults()
-        end
         if importedIntoActiveProfile then
             self:UpdateMinimapButtonPosition()
         end
         self:RefreshConfigWidgets()
         if importedIntoActiveProfile then
-            self:RequestUnitFrameRefresh(REFRESH_INTENT_DATA, "trackedAuras", true)
             self:RequestUnitFrameRefresh(REFRESH_INTENT_LAYOUT, "global", true)
         end
         self:SetProfilesStatus(
@@ -3110,6 +3116,19 @@ function Configuration:BuildAurasPage(page)
         return Util:Clamp(math.floor(numeric + 0.5), 0, 100)
     end
 
+    local function normalizeEntryOffset(value)
+        local numeric = tonumber(value)
+        if type(numeric) ~= "number" then
+            numeric = 0
+        end
+        if numeric >= 0 then
+            numeric = math.floor(numeric + 0.5)
+        else
+            numeric = math.ceil(numeric - 0.5)
+        end
+        return Util:Clamp(numeric, -80, 80)
+    end
+
     local function getAuraDisplayLabel(display)
         local resolvedDisplay = normalizeEntryDisplay(display)
         for index = 1, #displayOptions do
@@ -3164,6 +3183,8 @@ function Configuration:BuildAurasPage(page)
             slot = normalizeEditorSlot(resolvedDisplay, nil),
             ownOnly = true,
             size = normalizeEntrySize(resolvedDisplay, nil, baseSize),
+            x = 0,
+            y = 0,
             color = {
                 r = 25,
                 g = 95,
@@ -3182,6 +3203,8 @@ function Configuration:BuildAurasPage(page)
             slot = normalizeEditorSlot(resolvedDisplay, entry and entry.slot or nil),
             ownOnly = entry and entry.ownOnly ~= false or true,
             size = normalizeEntrySize(resolvedDisplay, entry and entry.size or nil, config and config.size or 14),
+            x = normalizeEntryOffset(entry and entry.x or nil),
+            y = normalizeEntryOffset(entry and entry.y or nil),
             colorR = normalizeColorPercent(entry and entry.color and entry.color.r and (tonumber(entry.color.r) * 100) or nil, 25),
             colorG = normalizeColorPercent(entry and entry.color and entry.color.g and (tonumber(entry.color.g) * 100) or nil, 95),
             colorB = normalizeColorPercent(entry and entry.color and entry.color.b and (tonumber(entry.color.b) * 100) or nil, 35),
@@ -3200,6 +3223,8 @@ function Configuration:BuildAurasPage(page)
             and snapshot.slot == current.slot
             and snapshot.ownOnly == current.ownOnly
             and snapshot.size == current.size
+            and snapshot.x == current.x
+            and snapshot.y == current.y
             and snapshot.colorR == current.colorR
             and snapshot.colorG == current.colorG
             and snapshot.colorB == current.colorB
@@ -3212,6 +3237,8 @@ function Configuration:BuildAurasPage(page)
     local slotDropdown
     local ownOnly
     local entrySizeControl
+    local entryXControl
+    local entryYControl
     local colorRedControl
     local colorGreenControl
     local colorBlueControl
@@ -3274,6 +3301,8 @@ function Configuration:BuildAurasPage(page)
             slot = snapshot.slot,
             ownOnly = snapshot.ownOnly,
             size = snapshot.size,
+            x = snapshot.x,
+            y = snapshot.y,
             color = {
                 r = snapshot.colorR,
                 g = snapshot.colorG,
@@ -3288,6 +3317,8 @@ function Configuration:BuildAurasPage(page)
     local function commitEditorNumericInputs()
         local controls = {
             entrySizeControl,
+            entryXControl,
+            entryYControl,
             colorRedControl,
             colorGreenControl,
             colorBlueControl,
@@ -3316,6 +3347,8 @@ function Configuration:BuildAurasPage(page)
         local size = normalizeEntrySize(display, editorState.size, globalSize)
         local defaultSize = normalizeEntrySize(display, globalSize, globalSize)
         local slot = normalizeEditorSlot(display, editorState.slot)
+        local offsetX = normalizeEntryOffset(editorState.x)
+        local offsetY = normalizeEntryOffset(editorState.y)
         local entry = {
             spell = spellName,
             display = display,
@@ -3336,6 +3369,12 @@ function Configuration:BuildAurasPage(page)
 
         if size ~= defaultSize then
             entry.size = size
+        end
+        if offsetX ~= 0 then
+            entry.x = offsetX
+        end
+        if offsetY ~= 0 then
+            entry.y = offsetY
         end
 
         return entry
@@ -3416,8 +3455,8 @@ function Configuration:BuildAurasPage(page)
         L.CONFIG_AURAS_SECTION_ENTRIES or "Tracked entries",
         L.CONFIG_AURAS_SECTION_ENTRIES_HELP
             or "Each entry can render as an icon strip slot or a colored corner square.",
-        nil,
-        sizeControl.slider
+        sizeControl.slider,
+        20
     )
 
     local listContainer = CreateFrame("Frame", "mummuFramesConfigAurasListContainer", page)
@@ -3640,7 +3679,6 @@ function Configuration:BuildAurasPage(page)
         L.CONFIG_AURAS_SECTION_EDITOR or "Entry editor",
         L.CONFIG_AURAS_SECTION_EDITOR_HELP
             or "Squares use fixed corner slots so the indicators stay combat-safe on party and raid frames.",
-        nil,
         listContainer,
         20
     )
@@ -3820,7 +3858,7 @@ function Configuration:BuildAurasPage(page)
         100,
         1,
         colorRedControl.slider,
-        20
+        0
     )
     self:BindNumericControl(colorGreenControl, function(value)
         editorState.color = editorState.color or {}
@@ -3843,7 +3881,7 @@ function Configuration:BuildAurasPage(page)
         100,
         1,
         colorGreenControl.slider,
-        20
+        0
     )
     self:BindNumericControl(colorBlueControl, function(value)
         editorState.color = editorState.color or {}
@@ -3856,6 +3894,34 @@ function Configuration:BuildAurasPage(page)
                 0.95
             )
         end
+    end)
+
+    entryXControl = self:CreateNumericControl(
+        page,
+        "AurasEntryOffsetX",
+        L.CONFIG_AURAS_ENTRY_X or "X offset",
+        -80,
+        80,
+        1,
+        colorBlueControl.slider,
+        0
+    )
+    self:BindNumericControl(entryXControl, function(value)
+        editorState.x = normalizeEntryOffset(value)
+    end)
+
+    entryYControl = self:CreateNumericControl(
+        page,
+        "AurasEntryOffsetY",
+        L.CONFIG_AURAS_ENTRY_Y or "Y offset",
+        -80,
+        80,
+        1,
+        entryXControl.slider,
+        0
+    )
+    self:BindNumericControl(entryYControl, function(value)
+        editorState.y = normalizeEntryOffset(value)
     end)
 
     local function refreshEditor()
@@ -3877,6 +3943,8 @@ function Configuration:BuildAurasPage(page)
             entrySizeControl,
             normalizeEntrySize(editorState.display, editorState.size, config and config.size or 14)
         )
+        self:SetNumericControlValue(entryXControl, normalizeEntryOffset(editorState.x))
+        self:SetNumericControlValue(entryYControl, normalizeEntryOffset(editorState.y))
         self:SetNumericControlValue(colorRedControl, normalizeColorPercent(editorState.color and editorState.color.r or nil, 25))
         self:SetNumericControlValue(colorGreenControl, normalizeColorPercent(editorState.color and editorState.color.g or nil, 95))
         self:SetNumericControlValue(colorBlueControl, normalizeColorPercent(editorState.color and editorState.color.b or nil, 35))
@@ -3985,7 +4053,7 @@ function Configuration:BuildAurasPage(page)
 
     saveButton = CreateFrame("Button", "mummuFramesConfigAurasSaveButton", page, "UIPanelButtonTemplate")
     saveButton:SetSize(110, 22)
-    saveButton:SetPoint("TOPLEFT", colorBlueControl.slider, "BOTTOMLEFT", 0, -12)
+    saveButton:SetPoint("TOPLEFT", entryYControl.slider, "BOTTOMLEFT", 0, -12)
     saveButton:SetText(L.CONFIG_AURAS_SAVE_SELECTED or "Save selected")
     saveButton:SetScript("OnClick", saveSelectedEntry)
 

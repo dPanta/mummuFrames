@@ -45,6 +45,18 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 }
 local PARTY_CATEGORY_HOME = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Home) or 1
 local PARTY_CATEGORY_INSTANCE = (_G.Enum and _G.Enum.PartyCategory and _G.Enum.PartyCategory.Instance) or 2
+local LEADER_ACTION_BUTTON_GAP = 4
+local LEADER_ACTION_BUTTON_OFFSET_Y = 4
+local PULL_ACTION_COMMAND = "/pull 9"
+local LEADER_ACTION_TEXT_COLOR = { 0.96, 0.98, 1.00, 1.00 }
+local LEADER_ACTION_BACKGROUND_COLOR = { 0.08, 0.09, 0.11, 0.96 }
+local LEADER_ACTION_BACKGROUND_HOVER_COLOR = { 0.11, 0.13, 0.16, 0.98 }
+local LEADER_ACTION_BACKGROUND_PRESSED_COLOR = { 0.16, 0.18, 0.22, 1.00 }
+local LEADER_ACTION_BORDER_COLOR = { 1.00, 1.00, 1.00, 0.12 }
+local LEADER_ACTION_BORDER_HOVER_COLOR = { 1.00, 1.00, 1.00, 0.20 }
+local LEADER_ACTION_BORDER_PRESSED_COLOR = { 1.00, 1.00, 1.00, 0.26 }
+local LEADER_ACTION_READY_ACCENT_COLOR = { 0.25, 0.88, 0.64, 0.95 }
+local LEADER_ACTION_PULL_ACCENT_COLOR = { 1.00, 0.76, 0.28, 0.95 }
 local buildRaidRuntimeState
 
 -- Show a tooltip for the unit currently assigned to the raid frame.
@@ -378,6 +390,216 @@ local function isInRaidCategory(category)
     return false
 end
 
+local function isPlayerGroupLeader()
+    if type(UnitIsGroupLeader) ~= "function" then
+        return false
+    end
+
+    local okLeader, isLeader = pcall(UnitIsGroupLeader, "player")
+    if not okLeader then
+        return false
+    end
+
+    return Util:SafeBoolean(isLeader, false)
+end
+
+local function canPlayerUseRaidLeaderActions()
+    if isPlayerGroupLeader() then
+        return true
+    end
+    if type(UnitIsGroupAssistant) ~= "function" then
+        return false
+    end
+
+    local okAssist, isAssist = pcall(UnitIsGroupAssistant, "player")
+    if okAssist and Util:SafeBoolean(isAssist, false) then
+        return true
+    end
+
+    local okHomeAssist, homeAssist = pcall(UnitIsGroupAssistant, "player", PARTY_CATEGORY_HOME)
+    if okHomeAssist and Util:SafeBoolean(homeAssist, false) then
+        return true
+    end
+
+    local okInstanceAssist, instanceAssist = pcall(UnitIsGroupAssistant, "player", PARTY_CATEGORY_INSTANCE)
+    if okInstanceAssist and Util:SafeBoolean(instanceAssist, false) then
+        return true
+    end
+
+    return false
+end
+
+local function getChatParseTextFunction()
+    if type(ChatEdit_ParseText) == "function" then
+        return ChatEdit_ParseText
+    end
+    if ChatFrameEditBoxMixin and type(ChatFrameEditBoxMixin.ParseText) == "function" then
+        return function(editBox, send)
+            return ChatFrameEditBoxMixin.ParseText(editBox, send)
+        end
+    end
+    return nil
+end
+
+local function openChatEditBox(initialText)
+    local text = type(initialText) == "string" and initialText or ""
+    local chatFrame = DEFAULT_CHAT_FRAME or nil
+
+    if type(ChatFrame_OpenChat) == "function" then
+        local okOpen, editBox = pcall(ChatFrame_OpenChat, text, chatFrame)
+        if okOpen and editBox then
+            return editBox
+        end
+    end
+    if ChatFrameUtil and type(ChatFrameUtil.OpenChat) == "function" then
+        local okOpen, editBox = pcall(ChatFrameUtil.OpenChat, text, chatFrame)
+        if okOpen and editBox then
+            return editBox
+        end
+    end
+
+    return nil
+end
+
+local function executeSlashCommand(commandText)
+    if type(commandText) ~= "string" or commandText == "" then
+        return false
+    end
+
+    local parseText = getChatParseTextFunction()
+    if not parseText then
+        return false
+    end
+
+    local editBox = openChatEditBox(commandText)
+    if not editBox or type(editBox.SetText) ~= "function" then
+        return false
+    end
+
+    local okSetText = pcall(editBox.SetText, editBox, commandText)
+    if not okSetText then
+        return false
+    end
+
+    local okParse = pcall(parseText, editBox, 1)
+    return okParse == true
+end
+
+local function setLeaderActionButtonVisualState(button, state)
+    if type(button) ~= "table" then
+        return
+    end
+
+    local backgroundColor = LEADER_ACTION_BACKGROUND_COLOR
+    local borderColor = LEADER_ACTION_BORDER_COLOR
+    local highlightAlpha = 0
+    if state == "pressed" then
+        backgroundColor = LEADER_ACTION_BACKGROUND_PRESSED_COLOR
+        borderColor = LEADER_ACTION_BORDER_PRESSED_COLOR
+        highlightAlpha = 0.10
+    elseif state == "hover" then
+        backgroundColor = LEADER_ACTION_BACKGROUND_HOVER_COLOR
+        borderColor = LEADER_ACTION_BORDER_HOVER_COLOR
+        highlightAlpha = 0.06
+    end
+
+    if button.Background then
+        button.Background:SetColorTexture(
+            backgroundColor[1],
+            backgroundColor[2],
+            backgroundColor[3],
+            backgroundColor[4]
+        )
+    end
+    if button.HighlightFill then
+        button.HighlightFill:SetAlpha(highlightAlpha)
+    end
+    if button.BorderTop then
+        button.BorderTop:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderBottom:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderLeft:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+        button.BorderRight:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+    end
+end
+
+local function createLeaderActionButton(parent, labelText, accentColor)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetFrameStrata(parent:GetFrameStrata())
+    button:SetFrameLevel(parent:GetFrameLevel() + 1)
+
+    button.Background = button:CreateTexture(nil, "BACKGROUND")
+    button.Background:SetAllPoints()
+
+    button.HighlightFill = button:CreateTexture(nil, "ARTWORK")
+    button.HighlightFill:SetAllPoints()
+    button.HighlightFill:SetColorTexture(1, 1, 1, 1)
+    button.HighlightFill:SetAlpha(0)
+
+    button.Accent = button:CreateTexture(nil, "BORDER")
+    button.Accent:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.Accent:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.Accent:SetHeight(2)
+    button.Accent:SetColorTexture(accentColor[1], accentColor[2], accentColor[3], accentColor[4])
+
+    button.BorderTop = button:CreateTexture(nil, "BORDER")
+    button.BorderTop:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.BorderTop:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.BorderTop:SetHeight(1)
+
+    button.BorderBottom = button:CreateTexture(nil, "BORDER")
+    button.BorderBottom:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    button.BorderBottom:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    button.BorderBottom:SetHeight(1)
+
+    button.BorderLeft = button:CreateTexture(nil, "BORDER")
+    button.BorderLeft:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    button.BorderLeft:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    button.BorderLeft:SetWidth(1)
+
+    button.BorderRight = button:CreateTexture(nil, "BORDER")
+    button.BorderRight:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    button.BorderRight:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    button.BorderRight:SetWidth(1)
+
+    button.Label = button:CreateFontString(nil, "OVERLAY")
+    button.Label:SetPoint("CENTER", button, "CENTER", 0, 0)
+    Style:ApplyFont(button.Label, 11, "OUTLINE")
+    if not button.Label:GetFont() and GameFontNormalSmall then
+        button.Label:SetFontObject(GameFontNormalSmall)
+    end
+    button.Label:SetTextColor(
+        LEADER_ACTION_TEXT_COLOR[1],
+        LEADER_ACTION_TEXT_COLOR[2],
+        LEADER_ACTION_TEXT_COLOR[3],
+        LEADER_ACTION_TEXT_COLOR[4]
+    )
+    button.Label:SetText(labelText)
+
+    button:SetScript("OnEnter", function(selfButton)
+        if selfButton:IsMouseEnabled() then
+            setLeaderActionButtonVisualState(selfButton, "hover")
+        end
+    end)
+    button:SetScript("OnLeave", function(selfButton)
+        setLeaderActionButtonVisualState(selfButton, "normal")
+    end)
+    button:SetScript("OnMouseDown", function(selfButton)
+        if selfButton:IsMouseEnabled() then
+            setLeaderActionButtonVisualState(selfButton, "pressed")
+        end
+    end)
+    button:SetScript("OnMouseUp", function(selfButton)
+        if selfButton:IsMouseEnabled() and selfButton:IsMouseOver() then
+            setLeaderActionButtonVisualState(selfButton, "hover")
+        else
+            setLeaderActionButtonVisualState(selfButton, "normal")
+        end
+    end)
+
+    setLeaderActionButtonVisualState(button, "normal")
+    return button
+end
+
 local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode, inRangeState)
     if previewMode or not exists then
         return 1
@@ -648,6 +870,7 @@ function RaidFrames:Constructor()
     self._displayedUnitByGUID = {}
     self._perfCountersEnabled = false
     self._perfCounters = {}
+    self.leaderActionBar = nil
 end
 
 -- Store addon references needed by the module.
@@ -744,6 +967,7 @@ function RaidFrames:EnsureEditModeSelection()
     if selection and selection.Label and selection.Label.SetText then
         selection.Label:SetText((L and L.CONFIG_TAB_RAID) or "Raid")
     end
+    self:RefreshLeaderActionSelectionBounds()
 end
 
 -- Show edit-mode affordances and switch to preview presentation.
@@ -925,6 +1149,158 @@ buildRaidRuntimeState = function(self, profileOverride, raidConfigOverride)
         previewMode = previewMode,
         addonEnabled = profile and profile.enabled ~= false,
     }
+end
+
+function RaidFrames:CreateLeaderActionButtons()
+    if not self.container then
+        return nil
+    end
+    if self.leaderActionBar then
+        return self.leaderActionBar
+    end
+
+    local actionBar = CreateFrame("Frame", nil, self.container)
+    actionBar:SetFrameStrata("MEDIUM")
+    actionBar:SetFrameLevel(self.container:GetFrameLevel() + 60)
+    actionBar:Hide()
+
+    local readyButton = createLeaderActionButton(actionBar, "Ready", LEADER_ACTION_READY_ACCENT_COLOR)
+    readyButton:SetScript("OnClick", function()
+        if not canPlayerUseRaidLeaderActions() or type(DoReadyCheck) ~= "function" then
+            return
+        end
+        pcall(DoReadyCheck)
+    end)
+
+    local pullButton = createLeaderActionButton(actionBar, "Pull", LEADER_ACTION_PULL_ACCENT_COLOR)
+    pullButton:SetScript("OnClick", function()
+        if not canPlayerUseRaidLeaderActions() then
+            return
+        end
+        if executeSlashCommand(PULL_ACTION_COMMAND) then
+            return
+        end
+        if C_PartyInfo and type(C_PartyInfo.DoCountdown) == "function" then
+            local okCountdown = pcall(C_PartyInfo.DoCountdown, 9)
+            if okCountdown then
+                return
+            end
+        end
+        Util:Print("Unable to start /pull 9.")
+    end)
+
+    actionBar.ReadyButton = readyButton
+    actionBar.PullButton = pullButton
+    self.leaderActionBar = actionBar
+    return actionBar
+end
+
+function RaidFrames:RefreshLeaderActionSelectionBounds()
+    if not self.container or not self.container.EditModeSelection then
+        return
+    end
+
+    local selection = self.container.EditModeSelection
+    local extraTop = 0
+    if self.leaderActionBar and self.leaderActionBar:IsShown() then
+        local actionBarHeight = self.leaderActionBar:GetHeight() or 0
+        local actionBarOffset = tonumber(self.leaderActionBar._mummuOffsetY) or LEADER_ACTION_BUTTON_OFFSET_Y
+        extraTop = actionBarHeight + actionBarOffset
+        if Style:IsPixelPerfectEnabled() then
+            extraTop = Style:Snap(extraTop)
+        else
+            extraTop = math.floor(extraTop + 0.5)
+        end
+    end
+
+    selection:ClearAllPoints()
+    selection:SetPoint("TOPLEFT", self.container, "TOPLEFT", 0, extraTop)
+    selection:SetPoint("BOTTOMRIGHT", self.container, "BOTTOMRIGHT", 0, 0)
+end
+
+function RaidFrames:HideLeaderActionButtons()
+    if self.leaderActionBar then
+        self.leaderActionBar:Hide()
+    end
+    self:RefreshLeaderActionSelectionBounds()
+end
+
+function RaidFrames:RefreshLeaderActionButtons(runtimeState, frameHeight, inAnyRaid)
+    local actionBar = self:CreateLeaderActionButtons()
+    if not actionBar then
+        return
+    end
+
+    local state = runtimeState or buildRaidRuntimeState(self)
+    local raided = type(inAnyRaid) == "boolean" and inAnyRaid
+        or (isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE))
+    local showEditModeSample = self.editModeActive == true
+    local shouldShowLive = state
+        and state.previewMode ~= true
+        and state.addonEnabled ~= false
+        and state.raidConfig
+        and state.raidConfig.enabled ~= false
+        and raided
+        and canPlayerUseRaidLeaderActions()
+    local shouldShow = showEditModeSample or shouldShowLive
+
+    if not shouldShow then
+        actionBar:Hide()
+        self:RefreshLeaderActionSelectionBounds()
+        return
+    end
+
+    local pixelPerfect = Style:IsPixelPerfectEnabled()
+    local buttonHeight = Util:Clamp(math.floor(((tonumber(frameHeight) or 28) * 0.7) + 0.5), 18, 22)
+    local readyWidth = Util:Clamp(math.floor((buttonHeight * 2.8) + 0.5), 46, 68)
+    local pullWidth = Util:Clamp(math.floor((buttonHeight * 2.4) + 0.5), 40, 60)
+    local gap = LEADER_ACTION_BUTTON_GAP
+    local offsetY = LEADER_ACTION_BUTTON_OFFSET_Y
+
+    if pixelPerfect then
+        buttonHeight = Style:Snap(buttonHeight)
+        readyWidth = Style:Snap(readyWidth)
+        pullWidth = Style:Snap(pullWidth)
+        gap = Style:Snap(gap)
+        offsetY = Style:Snap(offsetY)
+    else
+        buttonHeight = math.floor(buttonHeight + 0.5)
+        readyWidth = math.floor(readyWidth + 0.5)
+        pullWidth = math.floor(pullWidth + 0.5)
+        gap = math.floor(gap + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    actionBar:ClearAllPoints()
+    actionBar:SetPoint("BOTTOMLEFT", self.container, "TOPLEFT", 0, offsetY)
+    actionBar:SetSize(readyWidth + gap + pullWidth, buttonHeight)
+    actionBar._mummuOffsetY = offsetY
+
+    actionBar.ReadyButton:ClearAllPoints()
+    actionBar.ReadyButton:SetPoint("LEFT", actionBar, "LEFT", 0, 0)
+    actionBar.ReadyButton:SetSize(readyWidth, buttonHeight)
+
+    actionBar.PullButton:ClearAllPoints()
+    actionBar.PullButton:SetPoint("LEFT", actionBar.ReadyButton, "RIGHT", gap, 0)
+    actionBar.PullButton:SetSize(pullWidth, buttonHeight)
+
+    if actionBar.ReadyButton.Label then
+        Style:ApplyFont(actionBar.ReadyButton.Label, math.max(10, math.floor((buttonHeight * 0.54) + 0.5)), "OUTLINE")
+    end
+    if actionBar.PullButton.Label then
+        Style:ApplyFont(actionBar.PullButton.Label, math.max(10, math.floor((buttonHeight * 0.54) + 0.5)), "OUTLINE")
+    end
+
+    if type(actionBar.ReadyButton.EnableMouse) == "function" then
+        actionBar.ReadyButton:EnableMouse(not showEditModeSample)
+    end
+    if type(actionBar.PullButton.EnableMouse) == "function" then
+        actionBar.PullButton:EnableMouse(not showEditModeSample)
+    end
+    actionBar:SetAlpha(showEditModeSample and 0.96 or 1)
+
+    actionBar:Show()
+    self:RefreshLeaderActionSelectionBounds()
 end
 
 function RaidFrames:ApplyBlizzardRaidFrameVisibility(runtimeState)
@@ -1217,6 +1593,7 @@ function RaidFrames:HideAll()
     if self.container then
         self.container:Hide()
     end
+    self:HideLeaderActionButtons()
     for index = 1, #self.liveFrames do
         local frame = self.liveFrames[index]
         if frame then
@@ -1759,6 +2136,7 @@ function RaidFrames:RefreshAll(forceLayout, runtimeState)
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
         ns.activeMummuRaidFrames = {}
+        self:HideLeaderActionButtons()
         if inCombat then
             self.pendingLayoutRefresh = true
         else
@@ -1778,6 +2156,7 @@ function RaidFrames:RefreshAll(forceLayout, runtimeState)
     local sortBy = (raidConfig.sortBy == "name" or raidConfig.sortBy == "role") and raidConfig.sortBy or "group"
     local sortDirection = (raidConfig.sortDirection == "desc") and "desc" or "asc"
     local pixelPerfect = Style:IsPixelPerfectEnabled()
+    local inAnyRaid = isInRaidCategory(PARTY_CATEGORY_HOME) or isInRaidCategory(PARTY_CATEGORY_INSTANCE)
 
     if pixelPerfect then
         width = Style:Snap(width)
@@ -1929,6 +2308,7 @@ function RaidFrames:RefreshAll(forceLayout, runtimeState)
         self._displayedUnitByGUID = displayedUnitByGUID
         ns.activeMummuRaidFrames = activeFrames
         self.container:Show()
+        self:RefreshLeaderActionButtons(state, height, inAnyRaid)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
@@ -1941,6 +2321,7 @@ function RaidFrames:RefreshAll(forceLayout, runtimeState)
         self._frameByDisplayedUnit = {}
         self._displayedUnitByGUID = {}
         ns.activeMummuRaidFrames = {}
+        self:HideLeaderActionButtons()
         if inCombat then
             self.pendingLayoutRefresh = true
         else
@@ -2093,10 +2474,12 @@ function RaidFrames:RefreshAll(forceLayout, runtimeState)
 
     if not inCombat then
         self.container:Show()
+        self:RefreshLeaderActionButtons(state, height, inAnyRaid)
         if shouldApplyLayout then
             self.layoutInitialized = true
         end
     else
+        self:RefreshLeaderActionButtons(state, height, inAnyRaid)
         self.pendingLayoutRefresh = true
     end
     recordPerfCounters(self, "RefreshAll", perfStartedAt)
