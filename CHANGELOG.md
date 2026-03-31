@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.1.1 - 2026-04-01
+- Fixed Vengeance Demon Hunter soul-fragment icons by treating fragments as the current secret-value custom resource, restoring the correct 6-pip display and live refresh behavior.
+- Bumped addon metadata to `3.1.1`.
+
 ## 3.1.0 - 2026-03-31
 - Made tracked-aura configuration character-specific instead of storing it with profile snapshots, and stopped profile import/export from carrying tracked aura entries.
 - Added per-entry tracked-aura X/Y offset controls and applied those offsets to both icon-strip and square indicators.
@@ -55,7 +59,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Removed the live party and raid range polling tickers in favor of Midnight's event-driven group range updates so group frames no longer rely on protected fallback polling during combat.
 - Added and updated the related English configuration strings for the new config sections and debuff filter controls.
 - Bumped addon metadata to `2.3.0`.
-
-## 2.2.5 - 2026-03-18
-- Fixed shared group-event health dispatch so party and raid frames refresh live healthbars correctly again during combat.
-- Bumped addon metadata to `2.2.5`.

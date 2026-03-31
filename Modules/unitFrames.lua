@@ -33,6 +33,9 @@ local UnitFrames = ns.Object:Extend()
 ---@field displayMaxIcons number?
 ---@field overflowTexture string?
 ---@field allowedSpecIDs table<number, boolean>?
+---@field usesSpellCastCountAPI boolean?
+---@field spellCastCountSpellID number?
+---@field usesPolling boolean?
 
 -- Fixed display order for unit-frame creation and refresh.
 local FRAME_ORDER = {
@@ -117,6 +120,17 @@ local function getSafeBooleanValue(value, fallback)
     return fallback
 end
 
+-- Return true when Blizzard marks a value as secret/tainted on Retail.
+local function isSecretValue(value)
+    local secretCheck = _G.issecretvalue
+    if type(secretCheck) ~= "function" then
+        return false
+    end
+
+    local okSecret, secret = pcall(secretCheck, value)
+    return okSecret and secret == true
+end
+
 local CASTBAR_COLOR_NORMAL = { 0.29, 0.52, 0.90 }
 local CASTBAR_COLOR_NOINTERRUPT = { 0.63, 0.63, 0.63 }
 local CASTBAR_MODE_NONE = "none"
@@ -134,6 +148,7 @@ local OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID = 4945
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
+local SECONDARY_POWER_POLL_INTERVAL = 0.1
 local BLOOD_SPEC_ID = 250
 local FROST_DK_SPEC_ID = 251
 local UNHOLY_SPEC_ID = 252
@@ -142,7 +157,9 @@ local GUARDIAN_SPEC_ID = 104
 local BREWMASTER_SPEC_ID = 268
 local WINDWALKER_SPEC_ID = 269
 local ENHANCEMENT_SPEC_ID = 263
+local VENGEANCE_DH_SPEC_ID = 581
 local MAELSTROM_WEAPON_SPELL_ID = 344179
+local DEMON_HUNTER_SOUL_FRAGMENTS_SPELL_ID = 228477
 local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
 local IRONFUR_BASE_DURATION = 7
 local SPELL_AURA_SCAN_MAX = 255
@@ -392,8 +409,15 @@ local SECONDARY_POWER_BY_CLASS = {
     },
     DEMONHUNTER = {
         powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
-        maxIcons = 5,
+        maxIcons = 6,
+        powerCap = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "dh_soul_fragments.png",
+        usesSpellCastCountAPI = true,
+        spellCastCountSpellID = DEMON_HUNTER_SOUL_FRAGMENTS_SPELL_ID,
+        usesPolling = true,
+        allowedSpecIDs = {
+            [VENGEANCE_DH_SPEC_ID] = true,
+        },
     },
     SHAMAN = {
         maxIcons = 5,
@@ -2446,12 +2470,102 @@ local function hideSecondaryPowerBar(bar)
         return
     end
 
+    if type(bar.SecretFillBars) == "table" then
+        for i = 1, #bar.SecretFillBars do
+            local fillBar = bar.SecretFillBars[i]
+            if fillBar then
+                fillBar:Hide()
+            end
+        end
+    end
+    if bar._secondaryPowerPollerActive then
+        bar:SetScript("OnUpdate", nil)
+        bar._secondaryPowerPollerActive = false
+        bar._secondaryPowerPollerElapsed = 0
+    end
     if bar.Icons then
         for i = 1, #bar.Icons do
             bar.Icons[i]:Hide()
         end
     end
     bar:Hide()
+end
+
+-- Return one reusable StatusBar overlay for secret-value secondary pips.
+local function ensureSecondaryPowerSecretFillBar(bar, index)
+    if not bar or type(index) ~= "number" then
+        return nil
+    end
+
+    bar.SecretFillBars = bar.SecretFillBars or {}
+    local fillBar = bar.SecretFillBars[index]
+    if fillBar then
+        return fillBar
+    end
+
+    fillBar = CreateFrame("StatusBar", nil, bar)
+    fillBar:SetFrameStrata(bar:GetFrameStrata())
+    fillBar:SetFrameLevel(bar:GetFrameLevel() + 1)
+    fillBar:SetMinMaxValues(0, 1)
+    fillBar:SetValue(0)
+    fillBar:SetStatusBarColor(1, 1, 1, 1)
+    fillBar:SetStatusBarTexture(DEFAULT_AURA_TEXTURE)
+    fillBar:Hide()
+    bar.SecretFillBars[index] = fillBar
+    return fillBar
+end
+
+-- Hide every secret-value overlay pip attached to one secondary power bar.
+local function hideSecondaryPowerSecretFillBars(bar)
+    if not bar or type(bar.SecretFillBars) ~= "table" then
+        return
+    end
+
+    for i = 1, #bar.SecretFillBars do
+        local fillBar = bar.SecretFillBars[i]
+        if fillBar then
+            fillBar:Hide()
+        end
+    end
+end
+
+-- Start or stop the lightweight poll needed by secret-value secondary resources.
+local function updateSecondaryPowerBarPoller(owner, bar, shouldPoll)
+    if not bar then
+        return
+    end
+
+    if shouldPoll ~= true then
+        if bar._secondaryPowerPollerActive then
+            bar:SetScript("OnUpdate", nil)
+            bar._secondaryPowerPollerActive = false
+            bar._secondaryPowerPollerElapsed = 0
+        end
+        return
+    end
+
+    if bar._secondaryPowerPollerActive then
+        return
+    end
+
+    bar._secondaryPowerPollerActive = true
+    bar._secondaryPowerPollerElapsed = 0
+    bar:SetScript("OnUpdate", function(pollBar, elapsed)
+        if not owner or not owner.frames or not owner.frames.player then
+            return
+        end
+        if not pollBar:IsShown() then
+            return
+        end
+
+        pollBar._secondaryPowerPollerElapsed = (pollBar._secondaryPowerPollerElapsed or 0) + (elapsed or 0)
+        if pollBar._secondaryPowerPollerElapsed < SECONDARY_POWER_POLL_INTERVAL then
+            return
+        end
+        pollBar._secondaryPowerPollerElapsed = 0
+
+        owner:RefreshFrame("player", false, REFRESH_OPTIONS_SECONDARY_POWER)
+    end)
 end
 
 -- Stop the OnUpdate timer driving tertiary-power animations.
@@ -2600,6 +2714,20 @@ local function getRunePowerState()
     end
 
     return readyRunes, maxRunes
+end
+
+-- Return the raw spell cast count used by secret-value secondary resources.
+local function getSpellCastCountSafe(spellID)
+    if type(spellID) ~= "number" or not (_G.C_Spell and type(_G.C_Spell.GetSpellCastCount) == "function") then
+        return nil
+    end
+
+    local okCount, count = pcall(_G.C_Spell.GetSpellCastCount, spellID)
+    if not okCount then
+        return nil
+    end
+
+    return count
 end
 
 -- Coerce numeric-like values without trusting protected payloads.
@@ -2979,6 +3107,8 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         return
     end
 
+    updateSecondaryPowerBarPoller(self, bar, exists and not previewMode and resource.usesPolling == true)
+
     local maxIcons = Util:Clamp(resource.maxIcons or 5, 1, SECONDARY_POWER_MAX_ICONS)
     local powerCap = Util:Clamp(resource.powerCap or maxIcons, 1, SECONDARY_POWER_MAX_ICONS)
     local current = 0
@@ -2991,6 +3121,13 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         else
             current = UnitPower("player", resource.powerType) or 0
             maxPower = UnitPowerMax("player", resource.powerType) or 0
+        end
+    elseif exists and resource.usesSpellCastCountAPI == true and type(resource.spellCastCountSpellID) == "number" then
+        current = getSpellCastCountSafe(resource.spellCastCountSpellID)
+        maxPower = resource.powerCap or maxIcons
+        if current == nil and resource.powerType ~= nil then
+            current = UnitPower("player", resource.powerType) or 0
+            maxPower = UnitPowerMax("player", resource.powerType) or maxPower
         end
     elseif exists and resource.usesAuraStacks == true and type(resource.auraSpellID) == "number" then
         local auraStacks = 0
@@ -3015,23 +3152,31 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
 
     local fallbackMaxPower = bar._lastSecondaryPowerMax or powerCap
     local fallbackCurrent = bar._lastSecondaryPowerCurrent or 0
+    local secretCurrent = isSecretValue(current)
+    if isSecretValue(maxPower) then
+        maxPower = fallbackMaxPower
+    end
     maxPower = getSafeNumericValue(maxPower, fallbackMaxPower)
-    current = getSafeNumericValue(current, fallbackCurrent)
 
     if maxPower <= 0 then
         maxPower = powerCap
     end
 
-    if previewMode then
-        if current <= 0 then
+    if previewMode and not secretCurrent then
+        local previewCurrent = getSafeNumericValue(current, 0) or 0
+        if previewCurrent <= 0 then
             current = math.min(3, maxPower)
         end
     end
 
     maxPower = Util:Clamp(math.floor((maxPower or 0) + 0.0001), 0, powerCap)
-    current = Util:Clamp(math.floor((current or 0) + 0.0001), 0, maxPower)
     bar._lastSecondaryPowerMax = maxPower
-    bar._lastSecondaryPowerCurrent = current
+
+    if not secretCurrent then
+        current = getSafeNumericValue(current, fallbackCurrent)
+        current = Util:Clamp(math.floor((current or 0) + 0.0001), 0, maxPower)
+        bar._lastSecondaryPowerCurrent = current
+    end
 
     local displayMaxPower = maxPower
     if type(resource.displayMaxIcons) == "number" then
@@ -3040,9 +3185,9 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         displayMaxPower = Util:Clamp(displayMaxPower, 1, maxIcons)
     end
 
-    local displayCurrent = Util:Clamp(current, 0, displayMaxPower)
+    local displayCurrent = secretCurrent and 0 or Util:Clamp(current, 0, displayMaxPower)
     local overflowCount = 0
-    if resource.overflowTexture and current > displayMaxPower then
+    if not secretCurrent and resource.overflowTexture and current > displayMaxPower then
         overflowCount = Util:Clamp(current - displayMaxPower, 0, displayMaxPower)
     end
 
@@ -3068,6 +3213,46 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
 
     local texturePath = getSecondaryPowerTexturePath(resource, specID)
     local overflowTexturePath = resource.overflowTexture
+    if secretCurrent then
+        for i = 1, #bar.Icons do
+            local icon = bar.Icons[i]
+            local fillBar = ensureSecondaryPowerSecretFillBar(bar, i)
+            if i <= displayMaxPower then
+                icon:SetTexture(texturePath)
+                icon:SetAlpha(SECONDARY_POWER_EMPTY_ALPHA)
+                icon:SetSize(iconSize, iconSize)
+                icon:ClearAllPoints()
+                icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
+                icon:Show()
+
+                if fillBar then
+                    fillBar:ClearAllPoints()
+                    fillBar:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+                    fillBar:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+                    fillBar:SetMinMaxValues(i - 1, i)
+                    fillBar:SetValue(current)
+                    fillBar:SetStatusBarTexture(texturePath)
+                    fillBar:SetStatusBarColor(1, 1, 1, 1)
+
+                    local statusTexture = fillBar:GetStatusBarTexture()
+                    if statusTexture then
+                        statusTexture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                    end
+                    fillBar:Show()
+                end
+            else
+                icon:Hide()
+                if fillBar then
+                    fillBar:Hide()
+                end
+            end
+        end
+
+        bar:Show()
+        return
+    end
+
+    hideSecondaryPowerSecretFillBars(bar)
     for i = 1, #bar.Icons do
         local icon = bar.Icons[i]
         if i <= displayMaxPower then
