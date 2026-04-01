@@ -152,6 +152,7 @@ local SECONDARY_POWER_POLL_INTERVAL = 0.1
 local BLOOD_SPEC_ID = 250
 local FROST_DK_SPEC_ID = 251
 local UNHOLY_SPEC_ID = 252
+local FERAL_SPEC_ID = 103
 local IRONFUR_SPELL_ID = 192081
 local GUARDIAN_SPEC_ID = 104
 local BREWMASTER_SPEC_ID = 268
@@ -386,6 +387,15 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
         maxIcons = 8,
         texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
+    },
+    DRUID = {
+        powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
+        maxIcons = 8,
+        texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
+        -- Only Feral displays combo points as a secondary resource bar.
+        allowedSpecIDs = {
+            [FERAL_SPEC_ID] = true,
+        },
     },
     PALADIN = {
         powerType = resolvePowerTypeConstant("HolyPower", "SPELL_POWER_HOLY_POWER", 9),

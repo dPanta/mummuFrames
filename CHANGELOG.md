@@ -5,6 +5,10 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.1.2 - 2026-04-02
+- Added feral druid combo points to the secondary power bar so druids now get the same combo-point pip bar support as rogues.
+- Bumped addon metadata to `3.1.2`.
+
 ## 3.1.1 - 2026-04-01
 - Fixed Vengeance Demon Hunter soul-fragment icons by treating fragments as the current secret-value custom resource, restoring the correct 6-pip display and live refresh behavior.
 - Bumped addon metadata to `3.1.1`.
@@ -52,10 +56,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Hid live party frames automatically while the player is in a raid group so raid frames are the only active group presentation in raid content.
 - Added and updated the related English configuration strings for tracked-aura entry management.
 - Bumped addon metadata to `2.4.0`.
-
-## 2.3.0 - 2026-03-19
-- Reworked the configuration window so the Frames tab keeps every unit's settings on one page, groups target-related units together, and aligns section headers and subsections cleanly instead of letting the layout drift farther right as you scroll.
-- Added party and raid debuff declutter filters with options to hide permanent debuffs, hide long-duration debuffs, and configure the duration threshold, including default-profile and profile-maintenance support for the new settings.
-- Removed the live party and raid range polling tickers in favor of Midnight's event-driven group range updates so group frames no longer rely on protected fallback polling during combat.
-- Added and updated the related English configuration strings for the new config sections and debuff filter controls.
-- Bumped addon metadata to `2.3.0`.
