@@ -265,52 +265,6 @@ function Util:GetUnitGUIDSafe(unitToken)
     return nil
 end
 
--- Return whether a party or raid unit should be considered in range.
--- Prefer event-provided range state when available, then fall back to
--- UnitInRange. Explicit group range event payloads are authoritative, while
--- direct UnitInRange misses still fail open unless the API reports a usable
--- boolean result from a real range check.
-function Util:GetGroupUnitInRangeState(unitToken, providedInRange)
-    if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
-        return true
-    end
-
-    if type(UnitExists) == "function" and not UnitExists(unitToken) then
-        return nil
-    end
-
-    local normalizedProvidedInRange = normalizeBooleanLike(providedInRange)
-    if normalizedProvidedInRange ~= nil then
-        return normalizedProvidedInRange
-    end
-
-    local normalizedDirectInRange = nil
-    local normalizedCanCheckRange = nil
-    if type(UnitInRange) == "function" then
-        local okInRange, inRange, checkedRange = pcall(UnitInRange, unitToken)
-        if okInRange then
-            normalizedDirectInRange = normalizeBooleanLike(inRange)
-            normalizedCanCheckRange = normalizeBooleanLike(checkedRange)
-
-            if normalizedDirectInRange == true then
-                return true
-            end
-        end
-    end
-
-    if normalizedCanCheckRange ~= false and normalizedDirectInRange ~= nil then
-        return normalizedDirectInRange
-    end
-
-    return nil
-end
-
--- Return whether a party or raid unit should be considered out of range.
--- Unknown range states are treated as in range to avoid false dimming.
-function Util:IsGroupUnitOutOfRange(unitToken, providedInRange)
-    return self:GetGroupUnitInRangeState(unitToken, providedInRange) == false
-end
-
 -- Format a number using Blizzard formatting, then fall back to compact suffixes.
 function Util:FormatNumber(value)
     if BreakUpLargeNumbers then

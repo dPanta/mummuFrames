@@ -150,7 +150,6 @@ local GROUP_EVENT_NAMES = {
     "UNIT_DISPLAYPOWER",
     "UNIT_NAME_UPDATE",
     "UNIT_CONNECTION",
-    "UNIT_IN_RANGE_UPDATE",
     "UNIT_FLAGS",
     "UNIT_ABSORB_AMOUNT_CHANGED",
     "UNIT_HEAL_ABSORB_AMOUNT_CHANGED",
@@ -166,7 +165,6 @@ local UNIT_FILTERED_GROUP_EVENT_NAMES = {
     UNIT_DISPLAYPOWER = true,
     UNIT_NAME_UPDATE = true,
     UNIT_CONNECTION = true,
-    UNIT_IN_RANGE_UPDATE = true,
     UNIT_FLAGS = true,
     UNIT_ABSORB_AMOUNT_CHANGED = true,
     UNIT_HEAL_ABSORB_AMOUNT_CHANGED = true,
@@ -1458,17 +1456,6 @@ local function getModuleForOwner(addonRef, ownerKey)
         return addonRef:GetModule("raidFrames")
     end
     return addonRef:GetModule("partyFrames")
-end
-
--- Refresh all displayed range alpha states for one group owner.
-local function refreshDisplayedRangeStatesForOwner(addonRef, ownerKey)
-    local module = getModuleForOwner(addonRef, ownerKey)
-    if not module or type(module.RefreshAllDisplayedRangeStates) ~= "function" then
-        return false
-    end
-
-    module:RefreshAllDisplayedRangeStates()
-    return true
 end
 
 -- Collects all Blizzard compact unit frames into a flat array.
@@ -4133,18 +4120,6 @@ end
 function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
     local perfStartedAt = startPerfCounters(self)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
-    if eventName == "UNIT_IN_RANGE_UPDATE" and not normalizedUnit then
-        -- Midnight can fire UNIT_IN_RANGE_UPDATE without a stable unit token.
-        -- Fall back to recomputing currently displayed group-frame range state
-        -- instead of dropping the update entirely.
-        local addon = self:GetAddon()
-        if addon then
-            refreshDisplayedRangeStatesForOwner(addon, "party")
-            refreshDisplayedRangeStatesForOwner(addon, "raid")
-        end
-        return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-    end
-
     if not normalizedUnit then
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
     end
@@ -4191,41 +4166,6 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
             end
         end
         return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-    end
-
-    if eventName == "UNIT_IN_RANGE_UPDATE" then
-        local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)
-
-        -- Range churn only affects alpha, so prefer the dedicated light-weight
-        -- path instead of re-running a full vitals refresh.
-        local normalizedInRange = nil
-        if Util and type(Util.NormalizeBooleanLike) == "function" then
-            normalizedInRange = Util:NormalizeBooleanLike(eventPayload)
-        end
-        if frame and module and type(module.RefreshDisplayedMappedFrameRangeState) == "function" then
-            module:RefreshDisplayedMappedFrameRangeState(frame, resolvedUnit, normalizedInRange)
-            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-        end
-
-        if frame and module and type(module.RefreshDisplayedUnitRangeState) == "function" then
-            module:RefreshDisplayedUnitRangeState(resolvedUnit, normalizedInRange)
-            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-        end
-
-        local addon = self:GetAddon()
-        if addon then
-            local refreshedAny = false
-            if type(ownerKey) == "string" and ownerKey ~= "" then
-                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, ownerKey)
-            end
-            if not refreshedAny then
-                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, "party") or refreshedAny
-                refreshedAny = refreshDisplayedRangeStatesForOwner(addon, "raid") or refreshedAny
-            end
-            if refreshedAny then
-                return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
-            end
-        end
     end
 
     local frame, resolvedUnit, module, ownerKey = self:ResolveGroupDispatchTarget(normalizedUnit, eventName)

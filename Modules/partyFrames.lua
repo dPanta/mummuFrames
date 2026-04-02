@@ -57,8 +57,6 @@ local MEMBER_REFRESH_AURAS_ONLY = {
 local MEMBER_REFRESH_SPELL_TARGET_ONLY = {
     spellTarget = true,
 }
-local OUT_OF_RANGE_ALPHA = 0.55
-local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local OFFLINE_POWER_COLOR = { r = 0.34, g = 0.34, b = 0.34 }
 local DISCONNECTED_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\disconnected.png"
@@ -554,24 +552,8 @@ local function hasIncomingSummonPending(unitToken)
     return false
 end
 
-local function resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode, inRangeState)
-    if previewMode or testMode or not exists then
-        return 1
-    end
-
-    if not isConnected then
-        return OFFLINE_FRAME_ALPHA
-    end
-
-    if Util:IsGroupUnitOutOfRange(unitToken, inRangeState) then
-        return OUT_OF_RANGE_ALPHA
-    end
-
-    return 1
-end
-
-local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testMode, inRangeState)
-    if not frame then
+local function refreshPartyMemberRangeState(owner, frame, unitToken, previewMode, testMode, inRangeState)
+    if not owner or not frame then
         return false
     end
 
@@ -581,7 +563,23 @@ local function refreshPartyMemberRangeState(frame, unitToken, previewMode, testM
         isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
     end
 
-    frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode, inRangeState))
+    if owner.rangeHandle and type(owner.rangeHandle.ApplyGroupFrameAlpha) == "function" then
+        return owner.rangeHandle:ApplyGroupFrameAlpha(frame, unitToken, {
+            exists = exists,
+            isConnected = isConnected,
+            previewMode = previewMode,
+            testMode = testMode,
+            rangeValue = inRangeState,
+        })
+    end
+
+    if previewMode or testMode or not exists then
+        frame:SetAlpha(1)
+    elseif not isConnected then
+        frame:SetAlpha(0.7)
+    else
+        frame:SetAlpha(1)
+    end
     return true
 end
 
@@ -675,12 +673,12 @@ function PartyFrames:Constructor()
     self.globalFrames = nil
     self.unitFrames = nil
     self.spellTargetTracker = nil
+    self.rangeHandle = nil
     self.container = nil
     self.leaderActionBar = nil
     self.header = nil          -- SecureGroupHeaderTemplate frame
     self.testFrames = {}       -- fixed pool for preview/test mode only
     self.frames = {}           -- active frame set; populated by RefreshAll
-    self._rangeTicker = nil
     self._testTicker = nil
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
@@ -706,6 +704,7 @@ function PartyFrames:OnEnable()
     self.globalFrames = self.addon:GetModule("globalFrames")
     self.unitFrames = self.addon:GetModule("unitFrames")
     self.spellTargetTracker = self.addon:GetModule("spellTargetTracker")
+    self.rangeHandle = self.addon:GetModule("rangeHandle")
     self:CreatePartyFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
@@ -728,6 +727,7 @@ function PartyFrames:OnDisable()
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
     self.spellTargetTracker = nil
+    self.rangeHandle = nil
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
     self._combatRemapRetryAt = 0
@@ -737,7 +737,6 @@ function PartyFrames:OnDisable()
     self._lastLiveUnitsToShow = nil
     ns.activeMummuPartyFrames = {}
     self:HideLeaderActionButtons()
-    self:StopRangeTicker()
     self:StopTestTicker()
     self:SetBlizzardPartyFramesHidden(false)
     if self.container then
@@ -1403,7 +1402,7 @@ function PartyFrames:RegisterEvents()
     ns.EventRouter:Register(self, "ROLE_CHANGED_INFORM", self.OnRoleAssignmentChanged)
     ns.EventRouter:Register(self, "PLAYER_SPECIALIZATION_CHANGED", self.OnWorldEvent)
     ns.EventRouter:Register(self, "PLAYER_TALENT_UPDATE", self.OnWorldEvent)
-    -- Group unit events are routed centrally by AuraHandle dispatcher.
+    -- Non-range group unit events are routed centrally by AuraHandle.
 end
 
 -- Register for EditMode callbacks (enter/exit events).
@@ -1923,7 +1922,7 @@ function PartyFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inR
         self,
         "RefreshDisplayedMappedFrameRangeState",
         perfStartedAt,
-        refreshPartyMemberRangeState(frame, displayedUnit, false, false, inRangeState)
+        refreshPartyMemberRangeState(self, frame, displayedUnit, false, false, inRangeState)
     )
 end
 
@@ -2099,8 +2098,8 @@ function PartyFrames:RefreshAllVitalsOnly(runtimeState)
 end
 
 -- Refresh alpha-only range state for every currently displayed live party frame.
--- Kept as an explicit sync helper; live updates normally arrive from
--- UNIT_IN_RANGE_UPDATE through AuraHandle's group dispatcher.
+-- RangeHandle owns the actual range cache and simply asks party frames to
+-- re-apply the latest alpha for each displayed unit.
 function PartyFrames:RefreshAllDisplayedRangeStates(runtimeState)
     local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
@@ -2122,7 +2121,7 @@ function PartyFrames:RefreshAllDisplayedRangeStates(runtimeState)
 
     for displayedUnit, frame in pairs(frameByDisplayedUnit) do
         if frame and (type(frame.IsShown) ~= "function" or frame:IsShown()) then
-            refreshPartyMemberRangeState(frame, getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit, false, false)
+            refreshPartyMemberRangeState(self, frame, getCurrentPartyFrameDisplayedUnit(frame) or displayedUnit, false, false)
         end
     end
     recordPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
@@ -2135,21 +2134,6 @@ function PartyFrames:StopTestTicker()
         ticker:Cancel()
     end
     self._testTicker = nil
-end
-
--- Stop any legacy live range ticker if one exists.
-function PartyFrames:StopRangeTicker()
-    local ticker = self._rangeTicker
-    if ticker and type(ticker.Cancel) == "function" then
-        ticker:Cancel()
-    end
-    self._rangeTicker = nil
-end
-
--- Group range is event-driven in Midnight retail; keep this as a no-op so
--- callers do not reintroduce protected range polling during combat.
-function PartyFrames:EnsureRangeTicker()
-    self:StopRangeTicker()
 end
 
 -- Start periodic test mode ticker if not already running.
@@ -2680,7 +2664,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             frame.TargetHighlight:SetShown(exists and UnitIsUnit(unitToken, "target"))
         end
 
-        frame:SetAlpha(resolvePartyMemberFrameAlpha(unitToken, exists, isConnected, previewMode, testMode))
+        refreshPartyMemberRangeState(self, frame, unitToken, previewMode, testMode)
 
         local shouldShowAbsorb = false
         if previewMode then

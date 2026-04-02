@@ -19,8 +19,6 @@ local MAX_RAID_GROUPS = 8
 local MAX_RAID_GROUP_SIZE = 5
 local MAX_RAID_TEST_FRAMES = 40
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
-local OUT_OF_RANGE_ALPHA = 0.55
-local OFFLINE_FRAME_ALPHA = 0.7
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local GROUP_LEADER_ICON_ATLAS = "UI-HUD-UnitFrame-Player-Group-LeaderIcon"
 local RAID_FRAME_STRATA = "MEDIUM"
@@ -600,24 +598,8 @@ local function createLeaderActionButton(parent, labelText, accentColor)
     return button
 end
 
-local function resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode, inRangeState)
-    if previewMode or not exists then
-        return 1
-    end
-
-    if not isConnected then
-        return OFFLINE_FRAME_ALPHA
-    end
-
-    if Util:IsGroupUnitOutOfRange(unitToken, inRangeState) then
-        return OUT_OF_RANGE_ALPHA
-    end
-
-    return 1
-end
-
-local function refreshRaidMemberRangeState(frame, unitToken, previewMode, inRangeState)
-    if not frame then
+local function refreshRaidMemberRangeState(owner, frame, unitToken, previewMode, inRangeState)
+    if not owner or not frame then
         return false
     end
 
@@ -627,7 +609,22 @@ local function refreshRaidMemberRangeState(frame, unitToken, previewMode, inRang
         isConnected = Util:SafeBoolean(UnitIsConnected(unitToken), true)
     end
 
-    frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode, inRangeState))
+    if owner.rangeHandle and type(owner.rangeHandle.ApplyGroupFrameAlpha) == "function" then
+        return owner.rangeHandle:ApplyGroupFrameAlpha(frame, unitToken, {
+            exists = exists,
+            isConnected = isConnected,
+            previewMode = previewMode,
+            rangeValue = inRangeState,
+        })
+    end
+
+    if previewMode or not exists then
+        frame:SetAlpha(1)
+    elseif not isConnected then
+        frame:SetAlpha(0.7)
+    else
+        frame:SetAlpha(1)
+    end
     return true
 end
 
@@ -855,13 +852,13 @@ function RaidFrames:Constructor()
     self.dataHandle = nil
     self.globalFrames = nil
     self.unitFrames = nil
+    self.rangeHandle = nil
     self.container = nil
     self.liveFrames = {}
     self.groupContainers = {}
     self.headers = {}
     self.testFrames = {}
     self.frames = {}
-    self._rangeTicker = nil
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
     self.pendingLayoutRefresh = false
@@ -883,6 +880,7 @@ function RaidFrames:OnEnable()
     self.dataHandle = self.addon:GetModule("dataHandle")
     self.globalFrames = self.addon:GetModule("globalFrames")
     self.unitFrames = self.addon:GetModule("unitFrames")
+    self.rangeHandle = self.addon:GetModule("rangeHandle")
     self:CreateRaidFrames()
     self:RegisterEvents()
     self:RegisterEditModeCallbacks()
@@ -902,9 +900,9 @@ function RaidFrames:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:UnregisterEditModeCallbacks()
     self.editModeActive = false
+    self.rangeHandle = nil
     self.pendingLayoutRefresh = false
     self.layoutInitialized = false
-    self:StopRangeTicker()
     self.frames = {}
     self._frameByDisplayedUnit = {}
     self._displayedUnitByGUID = {}
@@ -1741,7 +1739,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             frame.HealthText:SetTextColor(1, 1, 1, 1)
         end
 
-        frame:SetAlpha(resolveRaidMemberFrameAlpha(unitToken, exists, isConnected, previewMode))
+        refreshRaidMemberRangeState(self, frame, unitToken, previewMode)
     end
 
     if refreshAuras and ns.AuraHandle and type(ns.AuraHandle.RefreshGroupAuras) == "function" then
@@ -2056,13 +2054,13 @@ function RaidFrames:RefreshDisplayedMappedFrameRangeState(frame, unitToken, inRa
         self,
         "RefreshDisplayedMappedFrameRangeState",
         perfStartedAt,
-        refreshRaidMemberRangeState(frame, displayedUnit, false, inRangeState)
+        refreshRaidMemberRangeState(self, frame, displayedUnit, false, inRangeState)
     )
 end
 
 -- Refresh alpha-only range state for every currently displayed live raid frame.
--- Kept as an explicit sync helper; live updates normally arrive from
--- UNIT_IN_RANGE_UPDATE through AuraHandle's group dispatcher.
+-- RangeHandle owns the actual range cache and asks the raid module to reapply
+-- the current alpha to each displayed unit.
 function RaidFrames:RefreshAllDisplayedRangeStates(runtimeState)
     local perfStartedAt = startPerfCounters(self)
     if not self.dataHandle or not self.container then
@@ -2084,25 +2082,10 @@ function RaidFrames:RefreshAllDisplayedRangeStates(runtimeState)
 
     for displayedUnit, frame in pairs(frameByDisplayedUnit) do
         if frame and (type(frame.IsShown) ~= "function" or frame:IsShown()) then
-            refreshRaidMemberRangeState(frame, getCurrentRaidFrameDisplayedUnit(frame) or displayedUnit, false)
+            refreshRaidMemberRangeState(self, frame, getCurrentRaidFrameDisplayedUnit(frame) or displayedUnit, false)
         end
     end
     recordPerfCounters(self, "RefreshAllDisplayedRangeStates", perfStartedAt)
-end
-
--- Stop any legacy live range ticker if one exists.
-function RaidFrames:StopRangeTicker()
-    local ticker = self._rangeTicker
-    if ticker and type(ticker.Cancel) == "function" then
-        ticker:Cancel()
-    end
-    self._rangeTicker = nil
-end
-
--- Group range is event-driven in Midnight retail; keep this as a no-op so
--- callers do not reintroduce protected range polling during combat.
-function RaidFrames:EnsureRangeTicker()
-    self:StopRangeTicker()
 end
 
 -- Refresh every raid frame in live mode or preview mode.

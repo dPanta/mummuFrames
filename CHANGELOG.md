@@ -5,6 +5,12 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.2.0 - 2026-04-02
+- Rebuilt party and raid out-of-range handling around a new dedicated `rangeHandle` module that owns cached range state and frame alpha application.
+- Added spell-aware friendly/dead range probing, phase/visibility/offline gating, short-lived `UNIT_IN_RANGE_UPDATE` hints, and a lightweight polling safety net for group frames.
+- Removed the old scattered group-range helpers and AuraHandle-driven range dispatch so party and raid frames now consume one centralized range pipeline.
+- Bumped addon metadata to `3.2.0`.
+
 ## 3.1.2 - 2026-04-02
 - Added feral druid combo points to the secondary power bar so druids now get the same combo-point pip bar support as rogues.
 - Bumped addon metadata to `3.1.2`.
