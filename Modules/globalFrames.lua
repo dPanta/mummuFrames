@@ -23,6 +23,8 @@ local SECONDARY_POWER_MAX_ICONS = 10
 local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
 local TERTIARY_POWER_HEIGHT_BONUS = 5
 local READY_CHECK_FINISHED_HOLD_SECONDS = 6
+local DISPEL_ICON_BACKGROUND_COLOR = { 0.03, 0.05, 0.08, 0.94 }
+local DISPEL_ICON_BORDER_COLOR = { 1.00, 1.00, 1.00, 0.16 }
 local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.9130859375 } -- 260,684,142,935
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
 local RESTING_ICON_ASPECT = 424 / 793
@@ -135,6 +137,67 @@ local function registerFrameForClickCasting(frame)
     end
 
     return true
+end
+
+local function setFrameEdgeThickness(frame, thickness)
+    if type(frame) ~= "table" or type(thickness) ~= "number" then
+        return
+    end
+
+    if frame.Top then
+        frame.Top:SetHeight(thickness)
+    end
+    if frame.Bottom then
+        frame.Bottom:SetHeight(thickness)
+    end
+    if frame.Left then
+        frame.Left:SetWidth(thickness)
+    end
+    if frame.Right then
+        frame.Right:SetWidth(thickness)
+    end
+end
+
+local function setFrameEdgeColor(frame, red, green, blue, alpha)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    local textures = {
+        frame.Top,
+        frame.Bottom,
+        frame.Left,
+        frame.Right,
+    }
+    for index = 1, #textures do
+        local texture = textures[index]
+        if texture and type(texture.SetColorTexture) == "function" then
+            texture:SetColorTexture(red, green, blue, alpha)
+        end
+    end
+end
+
+local function createFrameEdgeSet(parent, drawLayer)
+    local edgeFrame = CreateFrame("Frame", nil, parent)
+    edgeFrame:SetAllPoints(parent)
+
+    edgeFrame.Top = edgeFrame:CreateTexture(nil, drawLayer or "OVERLAY")
+    edgeFrame.Top:SetPoint("TOPLEFT", edgeFrame, "TOPLEFT", 0, 0)
+    edgeFrame.Top:SetPoint("TOPRIGHT", edgeFrame, "TOPRIGHT", 0, 0)
+
+    edgeFrame.Bottom = edgeFrame:CreateTexture(nil, drawLayer or "OVERLAY")
+    edgeFrame.Bottom:SetPoint("BOTTOMLEFT", edgeFrame, "BOTTOMLEFT", 0, 0)
+    edgeFrame.Bottom:SetPoint("BOTTOMRIGHT", edgeFrame, "BOTTOMRIGHT", 0, 0)
+
+    edgeFrame.Left = edgeFrame:CreateTexture(nil, drawLayer or "OVERLAY")
+    edgeFrame.Left:SetPoint("TOPLEFT", edgeFrame, "TOPLEFT", 0, 0)
+    edgeFrame.Left:SetPoint("BOTTOMLEFT", edgeFrame, "BOTTOMLEFT", 0, 0)
+
+    edgeFrame.Right = edgeFrame:CreateTexture(nil, drawLayer or "OVERLAY")
+    edgeFrame.Right:SetPoint("TOPRIGHT", edgeFrame, "TOPRIGHT", 0, 0)
+    edgeFrame.Right:SetPoint("BOTTOMRIGHT", edgeFrame, "BOTTOMRIGHT", 0, 0)
+
+    return edgeFrame
 end
 
 -- Create an optional overlay border that can be toggled for detached bar elements.
@@ -360,9 +423,76 @@ function GlobalFrames:CreateReadyCheckIndicator(frame, overlayParent)
     return indicator
 end
 
+-- Create the dispel fill, border accent, and corner icon shared by party/raid frames.
+function GlobalFrames:CreateGroupDispelIndicator(frame, overlayParent)
+    if not frame then
+        return nil
+    end
+    if frame.DispelOverlay then
+        return frame.DispelOverlay
+    end
+
+    local overlayTarget = overlayParent or frame
+    local overlay = overlayTarget:CreateTexture(nil, "OVERLAY")
+    overlay:SetAllPoints(overlayTarget)
+    overlay:Hide()
+    frame.DispelOverlay = overlay
+
+    local border = createFrameEdgeSet(frame, "OVERLAY")
+    border:SetFrameStrata(frame:GetFrameStrata())
+    border:SetFrameLevel(frame:GetFrameLevel() + 34)
+    if type(border.SetIgnoreParentAlpha) == "function" then
+        border:SetIgnoreParentAlpha(true)
+    end
+    setFrameEdgeColor(border, 1, 1, 1, 0)
+    border:Hide()
+    frame.DispelBorder = border
+
+    local iconFrame = createFrameEdgeSet(frame, "OVERLAY")
+    iconFrame:SetFrameStrata(frame:GetFrameStrata())
+    iconFrame:SetFrameLevel(frame:GetFrameLevel() + 35)
+    if type(iconFrame.SetIgnoreParentAlpha) == "function" then
+        iconFrame:SetIgnoreParentAlpha(true)
+    end
+
+    iconFrame.Background = iconFrame:CreateTexture(nil, "BACKGROUND")
+    iconFrame.Background:SetAllPoints(iconFrame)
+    iconFrame.Background:SetColorTexture(
+        DISPEL_ICON_BACKGROUND_COLOR[1],
+        DISPEL_ICON_BACKGROUND_COLOR[2],
+        DISPEL_ICON_BACKGROUND_COLOR[3],
+        DISPEL_ICON_BACKGROUND_COLOR[4]
+    )
+
+    iconFrame.Icon = iconFrame:CreateTexture(nil, "ARTWORK")
+    iconFrame.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    setFrameEdgeColor(
+        iconFrame,
+        DISPEL_ICON_BORDER_COLOR[1],
+        DISPEL_ICON_BORDER_COLOR[2],
+        DISPEL_ICON_BORDER_COLOR[3],
+        DISPEL_ICON_BORDER_COLOR[4]
+    )
+    iconFrame:Hide()
+
+    frame.DispelIconFrame = iconFrame
+    frame.DispelIcon = iconFrame.Icon
+    return overlay
+end
+
 -- Return a frame-height-derived size so the ready-check mark stays readable.
 function GlobalFrames:GetReadyCheckIndicatorSize(frameHeight)
     local size = Util:Clamp(math.floor(((tonumber(frameHeight) or 24) * 0.62) + 0.5), 12, 36)
+    if Style:IsPixelPerfectEnabled() then
+        size = Style:Snap(size)
+    end
+    return size
+end
+
+-- Return the icon size used by party/raid dispel corner markers.
+function GlobalFrames:GetGroupDispelIndicatorSize(frameHeight)
+    local size = Util:Clamp(math.floor(((tonumber(frameHeight) or 24) * 0.46) + 0.5), 10, 20)
     if Style:IsPixelPerfectEnabled() then
         size = Style:Snap(size)
     end
@@ -385,6 +515,46 @@ function GlobalFrames:LayoutReadyCheckIndicator(frame, frameHeight)
     frame.ReadyCheckIndicator:ClearAllPoints()
     frame.ReadyCheckIndicator:SetPoint("CENTER", frame, "CENTER", 0, 0)
     frame.ReadyCheckIndicator:SetSize(size, size)
+end
+
+-- Re-anchor and resize the group dispel overlay pieces for the current frame size.
+function GlobalFrames:LayoutGroupDispelIndicator(frame, frameHeight)
+    if not frame or not frame.DispelOverlay then
+        return
+    end
+
+    local pixelPerfect = Style:IsPixelPerfectEnabled()
+    local pixelSize = pixelPerfect and Style:GetPixelSize() or 1
+    local edgeThickness = pixelPerfect and pixelSize or 2
+    local iconEdgeThickness = pixelPerfect and pixelSize or 1
+    local iconInset = pixelPerfect and Style:Snap(2) or 2
+    local iconPadding = pixelPerfect and pixelSize or 1
+    local iconSize = self:GetGroupDispelIndicatorSize(frameHeight)
+    local overlayTarget = frame.HealthBar or frame
+
+    frame.DispelOverlay:SetAllPoints(overlayTarget)
+
+    if frame.DispelBorder then
+        frame.DispelBorder:SetAllPoints(frame)
+        frame.DispelBorder:SetFrameStrata(frame:GetFrameStrata())
+        frame.DispelBorder:SetFrameLevel(frame:GetFrameLevel() + 34)
+        setFrameEdgeThickness(frame.DispelBorder, edgeThickness)
+    end
+
+    if frame.DispelIconFrame then
+        frame.DispelIconFrame:SetFrameStrata(frame:GetFrameStrata())
+        frame.DispelIconFrame:SetFrameLevel(frame:GetFrameLevel() + 35)
+        frame.DispelIconFrame:ClearAllPoints()
+        frame.DispelIconFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -iconInset, iconInset)
+        frame.DispelIconFrame:SetSize(iconSize, iconSize)
+        setFrameEdgeThickness(frame.DispelIconFrame, iconEdgeThickness)
+
+        if frame.DispelIcon then
+            frame.DispelIcon:ClearAllPoints()
+            frame.DispelIcon:SetPoint("TOPLEFT", frame.DispelIconFrame, "TOPLEFT", iconPadding, -iconPadding)
+            frame.DispelIcon:SetPoint("BOTTOMRIGHT", frame.DispelIconFrame, "BOTTOMRIGHT", -iconPadding, iconPadding)
+        end
+    end
 end
 
 -- Refresh one frame's ready-check state, including the post-finish hold window.

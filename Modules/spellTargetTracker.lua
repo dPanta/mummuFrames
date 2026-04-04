@@ -19,8 +19,10 @@ local Object = ns.Object
 local AuraSafety = ns.AuraSafety
 local Util = ns.Util
 
+-- Tracks hostile casts and exposes a per-party-unit highlight state for PartyFrames.
 local SpellTargetTracker = Object:Extend()
 
+-- PartyFrames only paints player and party units, so highlights are normalized to this set.
 local PARTY_UNIT_TOKENS = {
     "player",
     "party1",
@@ -29,6 +31,7 @@ local PARTY_UNIT_TOKENS = {
     "party4",
 }
 
+-- Candidate hostile unit tokens scanned while resolving a caster GUID back into a live unit token.
 local SOURCE_SCAN_UNITS = {
     "boss1", "boss2", "boss3", "boss4", "boss5",
     "nameplate1", "nameplate2", "nameplate3", "nameplate4", "nameplate5",
@@ -63,6 +66,7 @@ local STOP_CAST_EVENTS = {
     UNIT_SPELLCAST_EMPOWER_STOP = true,
 }
 
+-- Curated spell list. Each entry describes which unit event starts tracking and how long scans should run.
 local TRACKED_SPELLS = {
     [1214032] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 5.0 }, -- Magisters Terrace / Arcanotron Custos / Ethereal Shackles
     [1215087] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 5.0 }, -- Magisters Terrace / Degentrius / Unstable Void Essence
@@ -95,6 +99,7 @@ local TRACKED_SPELLS = {
     [468429] = { trigger = "SPELL_CAST_START", scanWindow = 0.8, retryDelay = 0.05, lifetime = 4.0 }, -- Windrunner Spire / Restless Heart / Bullseye Windblast
 }
 
+-- Evaluate a value safely and collapse it into a boolean with a fallback.
 local function safeBoolean(value, fallback)
     if Util and type(Util.SafeBoolean) == "function" then
         return Util:SafeBoolean(value, fallback)
@@ -112,6 +117,7 @@ local function safeBoolean(value, fallback)
     return fallback == true
 end
 
+-- Run a Blizzard API behind pcall and normalize the result into a plain boolean.
 local function safeCallBoolean(apiFn, fallback, ...)
     if type(apiFn) ~= "function" then
         return fallback == true
@@ -125,6 +131,7 @@ local function safeCallBoolean(apiFn, fallback, ...)
     return safeBoolean(value, fallback)
 end
 
+-- Produce a debug-safe string even when tostring() would fail on protected values.
 local function safeToString(value)
     if value == nil then
         return "nil"
@@ -138,6 +145,7 @@ local function safeToString(value)
     return "<?>"
 end
 
+-- Shared GUID helper kept local so the module can degrade cleanly when Util is unavailable.
 local function getUnitGUIDSafe(unitToken)
     if Util and type(Util.GetUnitGUIDSafe) == "function" then
         return Util:GetUnitGUIDSafe(unitToken)
@@ -146,6 +154,7 @@ local function getUnitGUIDSafe(unitToken)
     return nil
 end
 
+-- Safe wrappers around frequently used unit APIs.
 local function safeUnitExists(unit)
     return safeCallBoolean(UnitExists, false, unit)
 end
@@ -166,6 +175,7 @@ local function safeUnitIsUnit(unitA, unitB)
     return safeCallBoolean(UnitIsUnit, false, unitA, unitB)
 end
 
+-- Compare unit tokens without trusting either token to still be stable.
 local function unitsMatch(unitA, unitB)
     if type(unitA) ~= "string" or unitA == "" or type(unitB) ~= "string" or unitB == "" then
         return false
@@ -177,6 +187,7 @@ local function unitsMatch(unitA, unitB)
     return safeUnitIsUnit(unitA, unitB)
 end
 
+-- Prefer boss and nameplate tokens because their target information updates more reliably.
 local function isStableSourceUnit(unit)
     if type(unit) ~= "string" or unit == "" then
         return false
@@ -186,6 +197,7 @@ local function isStableSourceUnit(unit)
         or string.match(unit, "^nameplate%d+$") ~= nil
 end
 
+-- Normalize any matched party token into the small set used by PartyFrames highlight refreshes.
 local function normalizePartyUnitToken(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return nil
@@ -201,6 +213,7 @@ local function normalizePartyUnitToken(unitToken)
     return nil
 end
 
+-- Restrict tracking to hostile NPC units; player-controlled enemies are intentionally ignored.
 local function isHostileNpcUnit(unit)
     if type(unit) ~= "string" or unit == "" then
         return false
@@ -221,6 +234,7 @@ local function isHostileNpcUnit(unit)
     return true
 end
 
+-- Normalize a spell ID and attach default scan timing for tracked mechanics.
 local function getSpellConfig(spellId)
     local normalizedSpellId = nil
     if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
@@ -260,6 +274,7 @@ local function getSpellConfig(spellId)
     return config, normalizedSpellId
 end
 
+-- Normalize a spell ID even when the spell is not in the curated table.
 local function normalizeSpellId(spellId)
     local _, normalizedSpellId = getSpellConfig(spellId)
     if normalizedSpellId then
@@ -287,6 +302,7 @@ local function normalizeSpellId(spellId)
     return normalizedSpellId
 end
 
+-- Match a unit event against the configured trigger style for the tracked spell.
 local function unitEventMatchesTrigger(eventName, spellInfo)
     if type(eventName) ~= "string" or not spellInfo then
         return false
@@ -299,6 +315,7 @@ local function unitEventMatchesTrigger(eventName, spellInfo)
     return START_CAST_EVENTS[eventName] == true
 end
 
+-- Initialize cast tracking, source resolution, and highlight bookkeeping state.
 function SpellTargetTracker:Constructor()
     self.addon = nil
     self.activeCasts = {}
@@ -308,10 +325,12 @@ function SpellTargetTracker:Constructor()
     self.scanTicker = nil
 end
 
+-- Store the addon reference supplied by the module loader.
 function SpellTargetTracker:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
+-- Reset all runtime state and start listening for cast and target changes.
 function SpellTargetTracker:OnEnable()
     self.activeCasts = {}
     self.activeCastKeyBySourceSpell = {}
@@ -320,12 +339,14 @@ function SpellTargetTracker:OnEnable()
     self:RegisterEvents()
 end
 
+-- Tear down ticker state and clear any outstanding highlights.
 function SpellTargetTracker:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:StopScanTicker()
     self:ClearAllState()
 end
 
+-- Register only unit-driven events so the tracker stays compatible with Midnight restrictions.
 function SpellTargetTracker:RegisterEvents()
     -- Midnight-safe path: piggyback on the shared router events that unitFrames,
     -- partyFrames, and raidFrames already keep registered on their persistent
@@ -346,6 +367,7 @@ function SpellTargetTracker:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_EMPOWER_STOP", self.OnUnitSpellcastStop)
 end
 
+-- Start the periodic scan loop only while unresolved or active casts exist.
 function SpellTargetTracker:EnsureScanTicker()
     if self.scanTicker or not C_Timer or type(C_Timer.NewTicker) ~= "function" then
         return
@@ -356,6 +378,7 @@ function SpellTargetTracker:EnsureScanTicker()
     end)
 end
 
+-- Stop the periodic cast-target scan loop.
 function SpellTargetTracker:StopScanTicker()
     if not self.scanTicker then
         return
@@ -371,6 +394,7 @@ function SpellTargetTracker:IsDebugEnabled()
     return self.addon and self.addon.debugSpellTargetTracker == true
 end
 
+-- Print lightweight diagnostics for cast tracking and target assignment.
 function SpellTargetTracker:DebugLog(...)
     if not self:IsDebugEnabled() then
         return
@@ -390,6 +414,7 @@ function SpellTargetTracker:DebugLog(...)
     print(message)
 end
 
+-- Force PartyFrames to repaint all possible spell-target indicators after a broad reset.
 function SpellTargetTracker:RefreshAllHighlights()
     local partyFrames = self.addon and self.addon:GetModule("partyFrames") or nil
     if not partyFrames or type(partyFrames.RefreshDisplayedUnitSpellTargetState) ~= "function" then
@@ -401,6 +426,7 @@ function SpellTargetTracker:RefreshAllHighlights()
     end
 end
 
+-- Repaint one party frame after its highlight count changed.
 function SpellTargetTracker:NotifyHighlightForUnit(unitToken)
     local normalizedUnit = normalizePartyUnitToken(unitToken)
     if not normalizedUnit then
@@ -415,6 +441,7 @@ function SpellTargetTracker:NotifyHighlightForUnit(unitToken)
     partyFrames:RefreshDisplayedUnitSpellTargetState(normalizedUnit)
 end
 
+-- Increase the per-unit highlight reference count used by PartyFrames.
 function SpellTargetTracker:IncrementHighlight(unitToken)
     local normalizedUnit = normalizePartyUnitToken(unitToken)
     if not normalizedUnit then
@@ -428,6 +455,7 @@ function SpellTargetTracker:IncrementHighlight(unitToken)
     end
 end
 
+-- Decrease the per-unit highlight reference count and clear the indicator at zero.
 function SpellTargetTracker:DecrementHighlight(unitToken)
     local normalizedUnit = normalizePartyUnitToken(unitToken)
     if not normalizedUnit then
@@ -446,6 +474,7 @@ function SpellTargetTracker:DecrementHighlight(unitToken)
     self.highlightCountsByUnit[normalizedUnit] = previous - 1
 end
 
+-- Drop all cast/source caches and clear visible indicators if any were active.
 function SpellTargetTracker:ClearAllState()
     local hadHighlights = next(self.highlightCountsByUnit) ~= nil
 
@@ -459,6 +488,7 @@ function SpellTargetTracker:ClearAllState()
     end
 end
 
+-- Remember the best live unit token currently representing a hostile caster GUID.
 function SpellTargetTracker:RememberSourceUnit(unit)
     local resolvedUnit = self:ResolveBestSourceUnit(unit)
     if not resolvedUnit then
@@ -474,6 +504,7 @@ function SpellTargetTracker:RememberSourceUnit(unit)
     return sourceGUID, resolvedUnit
 end
 
+-- Prefer stable unit tokens for a hostile source so later target scans keep working.
 function SpellTargetTracker:ResolveBestSourceUnit(unit)
     if not isHostileNpcUnit(unit) then
         return nil
@@ -493,6 +524,7 @@ function SpellTargetTracker:ResolveBestSourceUnit(unit)
     return unit
 end
 
+-- Resolve a remembered or currently visible unit token for a hostile caster GUID.
 function SpellTargetTracker:GetSourceUnit(sourceUnit)
     if type(sourceUnit) ~= "string" or sourceUnit == "" then
         return nil
@@ -532,6 +564,7 @@ function SpellTargetTracker:GetSourceUnit(sourceUnit)
     return nil
 end
 
+-- Return the current party unit targeted by a hostile source unit, if one is visible.
 function SpellTargetTracker:ResolvePartyTargetUnit(sourceUnit)
     if type(sourceUnit) ~= "string" or sourceUnit == "" then
         return nil
@@ -555,10 +588,12 @@ function SpellTargetTracker:ResolvePartyTargetUnit(sourceUnit)
     return nil
 end
 
+-- Tank grace delays early assignment for spells that often snap from the tank to a real target.
 function SpellTargetTracker:IsTankUnit(unitToken)
     return type(unitToken) == "string" and unitToken ~= "" and UnitGroupRolesAssigned(unitToken) == "TANK"
 end
 
+-- Update one cast record's assigned target and keep highlight counts in sync.
 function SpellTargetTracker:SetAssignedTarget(castState, unitToken)
     if not castState or type(unitToken) ~= "string" or unitToken == "" then
         return
@@ -588,6 +623,7 @@ function SpellTargetTracker:SetAssignedTarget(castState, unitToken)
     )
 end
 
+-- Try to resolve the hostile caster's current target into a party member and reschedule the next scan.
 function SpellTargetTracker:AttemptResolveCastTarget(castState, now)
     if not castState then
         return
@@ -630,6 +666,7 @@ function SpellTargetTracker:AttemptResolveCastTarget(castState, now)
     local unitToken = self:ResolvePartyTargetUnit(sourceUnit)
     if unitToken then
         local elapsed = now - castState.startedAt
+        -- Some targeted mechanics briefly point at the tank before the final victim is chosen.
         if castState.spellInfo.tankGrace > 0 and self:IsTankUnit(unitToken) and elapsed < castState.spellInfo.tankGrace then
             castState.nextScanAt = now + (castState.spellInfo.retryDelay or DEFAULT_RETRY_DELAY)
             return
@@ -641,6 +678,7 @@ function SpellTargetTracker:AttemptResolveCastTarget(castState, now)
     castState.nextScanAt = now + (castState.spellInfo.retryDelay or DEFAULT_RETRY_DELAY)
 end
 
+-- Remove one tracked cast, update reverse indexes, and clear its highlight assignment.
 function SpellTargetTracker:ClearCast(castKey, reason)
     local castState = self.activeCasts[castKey]
     if not castState then
@@ -673,6 +711,7 @@ function SpellTargetTracker:ClearCast(castKey, reason)
     return true
 end
 
+-- Clear one cast by source GUID and spell ID.
 function SpellTargetTracker:ClearCastBySourceSpell(sourceGUID, spellId, reason)
     local normalizedSpellId = normalizeSpellId(spellId)
     if type(sourceGUID) ~= "string" or sourceGUID == "" or type(normalizedSpellId) ~= "number" or normalizedSpellId <= 0 then
@@ -688,6 +727,7 @@ function SpellTargetTracker:ClearCastBySourceSpell(sourceGUID, spellId, reason)
     return self:ClearCast(castKey, reason)
 end
 
+-- Clear every active cast associated with one hostile source.
 function SpellTargetTracker:ClearCastsForSource(sourceGUID, reason)
     if type(sourceGUID) ~= "string" or sourceGUID == "" then
         return
@@ -707,6 +747,7 @@ function SpellTargetTracker:ClearCastsForSource(sourceGUID, reason)
     end
 end
 
+-- Resolve the tracked spell definition for a unit event, using live casting info as a fallback.
 function SpellTargetTracker:GetTrackedSpellForUnitEvent(eventName, unitToken, spellId)
     local _, resolvedSpellId = getSpellConfig(spellId)
 
@@ -734,6 +775,7 @@ function SpellTargetTracker:GetTrackedSpellForUnitEvent(eventName, unitToken, sp
     return resolvedSpellId, spellInfo
 end
 
+-- Entry point for unit spellcast events that may start targeted-mechanic tracking.
 function SpellTargetTracker:BeginTrackingFromUnitEvent(eventName, unitToken, spellId)
     local sourceGUID, sourceUnit = self:RememberSourceUnit(unitToken)
     if not sourceGUID then
@@ -748,6 +790,7 @@ function SpellTargetTracker:BeginTrackingFromUnitEvent(eventName, unitToken, spe
     self:BeginCastTracking(sourceGUID, resolvedSpellId, spellInfo, sourceUnit)
 end
 
+-- Create a cast record, start immediate target resolution, and keep only one record per source/spell pair.
 function SpellTargetTracker:BeginCastTracking(sourceGUID, spellId, spellInfo, sourceUnit)
     local resolvedSpellInfo = spellInfo
     local normalizedSpellId = spellId
@@ -769,6 +812,8 @@ function SpellTargetTracker:BeginCastTracking(sourceGUID, spellId, spellInfo, so
         spellId = normalizedSpellId,
         spellInfo = resolvedSpellInfo,
         startedAt = now,
+        -- expiresAt bounds the initial target-resolution window.
+        -- hardExpireAt bounds how long an assigned highlight can remain visible.
         expiresAt = now + (resolvedSpellInfo.scanWindow or DEFAULT_SCAN_WINDOW),
         hardExpireAt = now + (resolvedSpellInfo.lifetime or DEFAULT_LIFETIME),
         nextScanAt = now,
@@ -792,6 +837,7 @@ function SpellTargetTracker:BeginCastTracking(sourceGUID, spellId, spellInfo, so
     self:EnsureScanTicker()
 end
 
+-- Periodically retry unresolved casts and retire casts whose scan windows are over.
 function SpellTargetTracker:OnScanTick()
     local now = GetTime()
     local hasActiveCasts = false
@@ -835,6 +881,7 @@ function SpellTargetTracker:OnScanTick()
     end
 end
 
+-- Query used by PartyFrames while painting the spell-target indicator.
 function SpellTargetTracker:IsUnitSpellTarget(unitToken)
     local normalizedUnit = normalizePartyUnitToken(unitToken)
     if not normalizedUnit then
@@ -844,6 +891,7 @@ function SpellTargetTracker:IsUnitSpellTarget(unitToken)
     return (self.highlightCountsByUnit[normalizedUnit] or 0) > 0
 end
 
+-- Re-scan casts tied to a hostile source after its target may have changed.
 function SpellTargetTracker:RefreshSourceScansForUnit(unit)
     local sourceGUID = self:RememberSourceUnit(unit)
     if not sourceGUID then
@@ -865,28 +913,34 @@ function SpellTargetTracker:RefreshSourceScansForUnit(unit)
     end
 end
 
+-- Broad reset used for world changes and roster changes.
 function SpellTargetTracker:OnResetEvent()
     self:DebugLog("reset")
     self:StopScanTicker()
     self:ClearAllState()
 end
 
+-- UNIT_TARGET can update any visible hostile source token.
 function SpellTargetTracker:OnUnitTarget(_, unit)
     self:RefreshSourceScansForUnit(unit)
 end
 
+-- Target changes expose or replace one of the fallback source tokens.
 function SpellTargetTracker:OnTargetUnitChanged()
     self:RefreshSourceScansForUnit("target")
 end
 
+-- Focus changes expose or replace one of the fallback source tokens.
 function SpellTargetTracker:OnFocusUnitChanged()
     self:RefreshSourceScansForUnit("focus")
 end
 
+-- Start tracking for start-style cast events.
 function SpellTargetTracker:OnUnitSpellcastStart(eventName, unitToken, _, spellId)
     self:BeginTrackingFromUnitEvent(eventName, unitToken, spellId)
 end
 
+-- Success events either begin success-triggered tracking or clean up a finished cast.
 function SpellTargetTracker:OnUnitSpellcastSucceeded(eventName, unitToken, _, spellId)
     local sourceGUID, sourceUnit = self:RememberSourceUnit(unitToken)
     local spellInfo, normalizedSpellId = getSpellConfig(spellId)
@@ -902,6 +956,7 @@ function SpellTargetTracker:OnUnitSpellcastSucceeded(eventName, unitToken, _, sp
     self:ClearCastBySourceSpell(sourceGUID, normalizedSpellId, "succeeded_cleanup")
 end
 
+-- Stop-style cast events clear either the named cast or every cast for that source.
 function SpellTargetTracker:OnUnitSpellcastStop(eventName, unitToken, _, spellId)
     if not STOP_CAST_EVENTS[eventName] then
         return

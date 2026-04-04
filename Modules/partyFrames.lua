@@ -342,60 +342,43 @@ local function isPlayerGroupLeader()
     return Util:SafeBoolean(isLeader, false)
 end
 
-local function getChatParseTextFunction()
-    if type(ChatEdit_ParseText) == "function" then
-        return ChatEdit_ParseText
-    end
-    if ChatFrameEditBoxMixin and type(ChatFrameEditBoxMixin.ParseText) == "function" then
-        return function(editBox, send)
-            return ChatFrameEditBoxMixin.ParseText(editBox, send)
-        end
-    end
-    return nil
-end
-
-local function openChatEditBox(initialText)
-    local text = type(initialText) == "string" and initialText or ""
-    local chatFrame = DEFAULT_CHAT_FRAME or nil
-
-    if type(ChatFrame_OpenChat) == "function" then
-        local okOpen, editBox = pcall(ChatFrame_OpenChat, text, chatFrame)
-        if okOpen and editBox then
-            return editBox
-        end
-    end
-    if ChatFrameUtil and type(ChatFrameUtil.OpenChat) == "function" then
-        local okOpen, editBox = pcall(ChatFrameUtil.OpenChat, text, chatFrame)
-        if okOpen and editBox then
-            return editBox
-        end
-    end
-
-    return nil
-end
-
 local function executeSlashCommand(commandText)
     if type(commandText) ~= "string" or commandText == "" then
         return false
     end
 
-    local parseText = getChatParseTextFunction()
-    if not parseText then
+    local trimmedCommand = string.match(commandText, "^%s*(.-)%s*$")
+    if not trimmedCommand or trimmedCommand == "" then
         return false
     end
 
-    local editBox = openChatEditBox(commandText)
-    if not editBox or type(editBox.SetText) ~= "function" then
+    local slashCommand, arguments = string.match(trimmedCommand, "^(%S+)%s*(.-)%s*$")
+    if type(slashCommand) ~= "string" or string.sub(slashCommand, 1, 1) ~= "/" then
         return false
     end
 
-    local okSetText = pcall(editBox.SetText, editBox, commandText)
-    if not okSetText then
+    local slashHandlers = _G.SlashCmdList
+    if type(slashHandlers) ~= "table" then
         return false
     end
 
-    local okParse = pcall(parseText, editBox, 1)
-    return okParse == true
+    local normalizedCommand = string.lower(slashCommand)
+    for slashKey, handler in pairs(slashHandlers) do
+        if type(slashKey) == "string" and type(handler) == "function" then
+            for aliasIndex = 1, 20 do
+                local alias = _G["SLASH_" .. slashKey .. aliasIndex]
+                if type(alias) ~= "string" then
+                    break
+                end
+                if string.lower(alias) == normalizedCommand then
+                    local okRun = pcall(handler, arguments or "", nil)
+                    return okRun == true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 local function setLeaderActionButtonVisualState(button, state)
@@ -986,9 +969,13 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
 
-    frame.DispelOverlay = frame.HealthBar:CreateTexture(nil, "OVERLAY")
-    frame.DispelOverlay:SetAllPoints(frame.HealthBar)
-    frame.DispelOverlay:Hide()
+    if self.globalFrames and type(self.globalFrames.CreateGroupDispelIndicator) == "function" then
+        self.globalFrames:CreateGroupDispelIndicator(frame, frame.HealthBar)
+    else
+        frame.DispelOverlay = frame.HealthBar:CreateTexture(nil, "OVERLAY")
+        frame.DispelOverlay:SetAllPoints(frame.HealthBar)
+        frame.DispelOverlay:Hide()
+    end
 
     frame.DisconnectedOverlay = CreateFrame("Frame", nil, frame)
     frame.DisconnectedOverlay:SetAllPoints(frame)
@@ -2230,6 +2217,11 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRole
     end
     if frame.ReadyCheckIndicator and self.globalFrames and type(self.globalFrames.LayoutReadyCheckIndicator) == "function" then
         self.globalFrames:LayoutReadyCheckIndicator(frame, height)
+    end
+    if self.globalFrames and type(self.globalFrames.LayoutGroupDispelIndicator) == "function" then
+        self.globalFrames:LayoutGroupDispelIndicator(frame, height)
+    elseif frame.DispelOverlay then
+        frame.DispelOverlay:SetAllPoints(frame.HealthBar)
     end
 
     frame.NameText:ClearAllPoints()

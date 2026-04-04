@@ -15,18 +15,21 @@ local _, ns = ...
 local addon = _G.mummuFrames
 local Util = ns.Util
 
+-- Central range-state coordinator consumed by PartyFrames and RaidFrames.
 local RangeHandle = ns.Object:Extend()
 
 local RANGE_POLL_INTERVAL = 0.35
 local RANGE_EVENT_HINT_TTL = 1.0
 local GROUP_OUT_OF_RANGE_ALPHA = 0.55
 local GROUP_OFFLINE_ALPHA = 0.70
+-- Tokens tracked by the polling loop and event-driven refresh path.
 local GROUP_UNIT_TOKENS = { "player", "party1", "party2", "party3", "party4" }
 
 for raidIndex = 1, 40 do
     GROUP_UNIT_TOKENS[#GROUP_UNIT_TOKENS + 1] = "raid" .. tostring(raidIndex)
 end
 
+-- Candidate helpful spells ordered from preferred probe to fallback probe.
 local FRIENDLY_RANGE_CANDIDATES_BY_CLASS = {
     DRUID = { 774, 8936, 5185 },
     EVOKER = { 355913, 361469 },
@@ -38,6 +41,7 @@ local FRIENDLY_RANGE_CANDIDATES_BY_CLASS = {
     WARRIOR = { 3411 },
 }
 
+-- Spec overrides sharpen the friendly spell choice when a class has multiple good options.
 local FRIENDLY_RANGE_CANDIDATES_BY_SPEC = {
     [105] = { 774, 8936 },
     [256] = { 17, 2061 },
@@ -50,6 +54,7 @@ local FRIENDLY_RANGE_CANDIDATES_BY_SPEC = {
     [1473] = { 355913, 361469 },
 }
 
+-- Dead allies often need a resurrection spell probe because normal range APIs can stop answering.
 local DEAD_RANGE_CANDIDATES_BY_CLASS = {
     DEATHKNIGHT = { 61999 },
     DRUID = { 20484 },
@@ -61,6 +66,7 @@ local DEAD_RANGE_CANDIDATES_BY_CLASS = {
     WARLOCK = { 20707 },
 }
 
+-- Return whether a token belongs to the party/raid set this module is responsible for.
 local function isGroupUnitToken(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return false
@@ -70,6 +76,7 @@ local function isGroupUnitToken(unitToken)
         or string.match(unitToken, "^raid%d+$") ~= nil
 end
 
+-- Map a tracked token to the frame module that paints it.
 local function getOwnerKeyForUnit(unitToken)
     if type(unitToken) ~= "string" then
         return nil
@@ -83,10 +90,12 @@ local function getOwnerKeyForUnit(unitToken)
     return nil
 end
 
+-- Guard comparisons against Blizzard secret payloads returned by protected APIs.
 local function isSecretValue(value)
     return type(issecretvalue) == "function" and issecretvalue(value) == true
 end
 
+-- Convert mixed API return types into true, false, or nil for cache signatures and alpha rules.
 local function normalizeComparableBoolean(value)
     if isSecretValue(value) then
         return nil
@@ -115,6 +124,7 @@ local function normalizeComparableBoolean(value)
     return nil
 end
 
+-- Build the cached state structure used for change detection and frame refresh decisions.
 local function makeStateRecord(rawValue, comparableValue, sourceTag, eventHintComparable)
     local signature = "nil"
     if comparableValue == true then
@@ -135,6 +145,7 @@ local function makeStateRecord(rawValue, comparableValue, sourceTag, eventHintCo
     }
 end
 
+-- Store a short-lived UNIT_IN_RANGE_UPDATE hint until a fuller probe runs.
 local function makeEventHintRecord(rawValue)
     return {
         rawValue = rawValue,
@@ -143,6 +154,7 @@ local function makeEventHintRecord(rawValue)
     }
 end
 
+-- Return the player's class token for spell candidate lookup.
 local function getPlayerClassToken()
     local _, classToken = UnitClass("player")
     if type(classToken) == "string" and classToken ~= "" then
@@ -151,6 +163,7 @@ local function getPlayerClassToken()
     return nil
 end
 
+-- Return the active specialization ID when the specialization APIs are available.
 local function getPlayerSpecID()
     if type(GetSpecialization) ~= "function" or type(GetSpecializationInfo) ~= "function" then
         return nil
@@ -168,6 +181,7 @@ local function getPlayerSpecID()
     return nil
 end
 
+-- Probe several spellbook APIs so range spell discovery survives client API differences.
 local function isSpellKnownSafe(spellID)
     if type(spellID) ~= "number" or spellID <= 0 then
         return false
@@ -197,6 +211,7 @@ local function isSpellKnownSafe(spellID)
     return false
 end
 
+-- Pick the first known spell from a priority-ordered candidate list.
 local function pickKnownSpellID(candidateList)
     if type(candidateList) ~= "table" then
         return nil
@@ -212,6 +227,7 @@ local function pickKnownSpellID(candidateList)
     return nil
 end
 
+-- Ask the spell-range API for a friendly-target answer using a chosen probe spell.
 local function probeSpellRange(spellID, unitToken)
     if type(spellID) ~= "number" or spellID <= 0 then
         return nil, nil
@@ -233,6 +249,7 @@ local function probeSpellRange(spellID, unitToken)
     return nil, nil
 end
 
+-- Sample UnitInRange while keeping both the range answer and the "checked" bit.
 local function probeUnitInRange(unitToken)
     if type(UnitInRange) ~= "function" then
         return nil
@@ -252,6 +269,7 @@ local function probeUnitInRange(unitToken)
     }
 end
 
+-- Fall back to interact distance when spell and UnitInRange probes cannot answer.
 local function probeInteractRange(unitToken)
     if type(CheckInteractDistance) ~= "function" then
         return nil
@@ -265,6 +283,7 @@ local function probeInteractRange(unitToken)
     return normalizeComparableBoolean(rawValue)
 end
 
+-- Initialize runtime-owned state. External module references are resolved during OnEnable.
 function RangeHandle:Constructor()
     self.addon = nil
     self.partyFrames = nil
@@ -278,10 +297,12 @@ function RangeHandle:Constructor()
     self._deadRangeSpellID = nil
 end
 
+-- Store the addon reference supplied by the module loader.
 function RangeHandle:OnInitialize(addonRef)
     self.addon = addonRef
 end
 
+-- Resolve dependencies, pick probe spells, and start live range tracking.
 function RangeHandle:OnEnable()
     self.partyFrames = self.addon:GetModule("partyFrames")
     self.raidFrames = self.addon:GetModule("raidFrames")
@@ -293,6 +314,7 @@ function RangeHandle:OnEnable()
     self:RefreshAllTrackedUnits("enable", true)
 end
 
+-- Tear down listeners, timers, and cached state so stale results cannot leak across disables.
 function RangeHandle:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
     self:StopPollTicker()
@@ -301,6 +323,7 @@ function RangeHandle:OnDisable()
     self:ResetRangeState()
 end
 
+-- Register for broad invalidation events plus per-unit hints that affect range answers.
 function RangeHandle:RegisterEvents()
     ns.EventRouter:Register(self, "PLAYER_ENTERING_WORLD", self.OnWorldChanged)
     ns.EventRouter:Register(self, "GROUP_ROSTER_UPDATE", self.OnWorldChanged)
@@ -315,6 +338,7 @@ function RangeHandle:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_IN_RANGE_UPDATE", self.OnUnitInRangeUpdate)
 end
 
+-- Poll as a safety net because range-related events do not cover every transition reliably.
 function RangeHandle:StartPollTicker()
     self:StopPollTicker()
     if not (C_Timer and type(C_Timer.NewTicker) == "function") then
@@ -326,6 +350,7 @@ function RangeHandle:StartPollTicker()
     end)
 end
 
+-- Stop the safety-net polling ticker.
 function RangeHandle:StopPollTicker()
     local ticker = self._pollTicker
     if ticker and type(ticker.Cancel) == "function" then
@@ -334,11 +359,13 @@ function RangeHandle:StopPollTicker()
     self._pollTicker = nil
 end
 
+-- Clear both the resolved range cache and the short-lived event-hint cache.
 function RangeHandle:ResetRangeState()
     wipe(self._unitStateByToken)
     wipe(self._eventHintByUnit)
 end
 
+-- Cache a raw UNIT_IN_RANGE_UPDATE payload for the next resolution pass.
 function RangeHandle:SetEventHint(unitToken, rawValue)
     if not isGroupUnitToken(unitToken) or rawValue == nil then
         return
@@ -347,6 +374,7 @@ function RangeHandle:SetEventHint(unitToken, rawValue)
     self._eventHintByUnit[unitToken] = makeEventHintRecord(rawValue)
 end
 
+-- Return a non-expired event hint; stale hints are discarded immediately.
 function RangeHandle:GetRecentEventHint(unitToken)
     if not isGroupUnitToken(unitToken) then
         return nil, nil
@@ -366,6 +394,7 @@ function RangeHandle:GetRecentEventHint(unitToken)
     return hintRecord.rawValue, hintRecord.comparableValue
 end
 
+-- Re-evaluate which spell IDs are best suited for live friendly and dead-target probes.
 function RangeHandle:RefreshKnownRangeSpells()
     self._playerClassToken = self._playerClassToken or getPlayerClassToken()
     self._playerSpecID = getPlayerSpecID()
@@ -387,6 +416,7 @@ function RangeHandle:RefreshKnownRangeSpells()
     self._deadRangeSpellID = deadSpellID
 end
 
+-- Resolve the owning frame module for a party or raid token.
 function RangeHandle:GetOwnerModule(ownerKey)
     if ownerKey == "raid" then
         return self.raidFrames
@@ -397,6 +427,7 @@ function RangeHandle:GetOwnerModule(ownerKey)
     return nil
 end
 
+-- Return the cached state table without forcing a fresh probe.
 function RangeHandle:GetCachedUnitState(unitToken)
     if not isGroupUnitToken(unitToken) then
         return nil
@@ -404,6 +435,7 @@ function RangeHandle:GetCachedUnitState(unitToken)
     return self._unitStateByToken[unitToken]
 end
 
+-- Public lookup used by PartyFrames and RaidFrames when alpha needs an immediate answer.
 function RangeHandle:GetUnitRangeValue(unitToken, forceRefresh)
     if not isGroupUnitToken(unitToken) then
         return nil
@@ -415,9 +447,14 @@ function RangeHandle:GetUnitRangeValue(unitToken, forceRefresh)
     end
 
     local state = self._unitStateByToken[unitToken]
-    return state and state.rawValue or nil
+    if state == nil then
+        return nil
+    end
+
+    return state.rawValue
 end
 
+-- Apply preview, offline, and out-of-range alpha rules to one displayed group frame.
 function RangeHandle:ApplyGroupFrameAlpha(frame, unitToken, options)
     if type(frame) ~= "table" then
         return false
@@ -464,6 +501,7 @@ function RangeHandle:ApplyGroupFrameAlpha(frame, unitToken, options)
     return true
 end
 
+-- Ask PartyFrames or RaidFrames to repaint either one entry or the full visible set.
 function RangeHandle:NotifyOwnerUnitRefresh(ownerKey, unitToken, refreshAll)
     local module = self:GetOwnerModule(ownerKey)
     if not module then
@@ -490,6 +528,7 @@ function RangeHandle:NotifyOwnerUnitRefresh(ownerKey, unitToken, refreshAll)
     return false
 end
 
+-- Run the full probe cascade from most meaningful signal to safest fallback.
 function RangeHandle:ResolveRangeState(unitToken)
     if type(unitToken) ~= "string" or unitToken == "" then
         return makeStateRecord(nil, nil, "invalid")
@@ -527,6 +566,7 @@ function RangeHandle:ResolveRangeState(unitToken)
         end
     end
 
+    -- Dead allies often stop answering standard helpful spell probes, so try resurrection range first.
     if self._deadRangeSpellID and type(UnitIsDeadOrGhost) == "function" then
         local okDead, isDeadOrGhost = pcall(UnitIsDeadOrGhost, unitToken)
         if okDead and normalizeComparableBoolean(isDeadOrGhost) == true then
@@ -537,6 +577,7 @@ function RangeHandle:ResolveRangeState(unitToken)
         end
     end
 
+    -- A class/spec-specific helpful spell gives the most semantically correct live answer.
     if self._friendlyRangeSpellID then
         local rawSpellRange, comparableSpellRange = probeSpellRange(self._friendlyRangeSpellID, unitToken)
         if comparableSpellRange ~= nil then
@@ -544,6 +585,7 @@ function RangeHandle:ResolveRangeState(unitToken)
         end
     end
 
+    -- UnitInRange can produce secret or unchecked payloads, so keep those cases separate.
     local directRange = probeUnitInRange(unitToken)
     if directRange then
         if directRange.checkedComparable ~= false and directRange.rawValue ~= nil then
@@ -568,6 +610,7 @@ function RangeHandle:ResolveRangeState(unitToken)
         return makeStateRecord(eventHintRaw, eventHintComparable, "event_hint", eventHintComparable)
     end
 
+    -- Cached non-nil state prevents brief probe gaps from making frames fail open to full alpha.
     if previousState and previousState.signature ~= "nil" then
         return makeStateRecord(
             previousState.rawValue,
@@ -580,6 +623,7 @@ function RangeHandle:ResolveRangeState(unitToken)
     return makeStateRecord(nil, nil, "unknown", eventHintComparable)
 end
 
+-- Refresh one token, update its cache entry, and report whether visible output likely changed.
 function RangeHandle:RefreshUnitState(unitToken, eventHintRaw, sourceTag)
     if not isGroupUnitToken(unitToken) then
         return false, nil
@@ -594,6 +638,7 @@ function RangeHandle:RefreshUnitState(unitToken, eventHintRaw, sourceTag)
     nextState.trigger = sourceTag
     self._unitStateByToken[unitToken] = nextState
 
+    -- Event hints stay only while they remain the best available source of truth.
     if nextState.source ~= "event_hint"
         and nextState.source ~= "range_event_hint"
         and nextState.source ~= "unit_in_range_secret"
@@ -611,6 +656,7 @@ function RangeHandle:RefreshUnitState(unitToken, eventHintRaw, sourceTag)
     return changed, nextState
 end
 
+-- Refresh every tracked token, then batch owner repaints to avoid one callback per unit.
 function RangeHandle:RefreshAllTrackedUnits(sourceTag, refreshOwnersWhenUnchanged)
     local ownerNeedsRefresh = {
         party = refreshOwnersWhenUnchanged == true,
@@ -634,21 +680,25 @@ function RangeHandle:RefreshAllTrackedUnits(sourceTag, refreshOwnersWhenUnchange
     end
 end
 
+-- Periodic safety pass for silent transitions.
 function RangeHandle:OnPollTick()
     self:RefreshAllTrackedUnits("poll")
 end
 
+-- World and roster changes can invalidate both spell picks and cached unit state.
 function RangeHandle:OnWorldChanged()
     self:RefreshKnownRangeSpells()
     self:ResetRangeState()
     self:RefreshAllTrackedUnits("world", true)
 end
 
+-- Combat transitions can change which range APIs answer cleanly.
 function RangeHandle:OnCombatStateChanged()
     self:ResetRangeState()
     self:RefreshAllTrackedUnits("combat", true)
 end
 
+-- Rebuild spell-based probe choices whenever the player's spell access may have changed.
 function RangeHandle:OnSpellbookChanged(eventName, unitToken)
     if eventName == "PLAYER_SPECIALIZATION_CHANGED" and unitToken ~= "player" then
         return
@@ -659,10 +709,12 @@ function RangeHandle:OnSpellbookChanged(eventName, unitToken)
     self:RefreshAllTrackedUnits("spellbook", true)
 end
 
+-- Spec changes follow the same refresh path as any other spellbook change.
 function RangeHandle:OnSpecChanged(eventName, unitToken)
     self:OnSpellbookChanged(eventName, unitToken)
 end
 
+-- Connectivity, flags, or phasing changed for one unit; repaint only the affected owner when possible.
 function RangeHandle:OnRangeRelatedUnitEvent(_, unitToken)
     if not isGroupUnitToken(unitToken) then
         return
@@ -675,6 +727,7 @@ function RangeHandle:OnRangeRelatedUnitEvent(_, unitToken)
     end
 end
 
+-- Consume UNIT_IN_RANGE_UPDATE hints immediately, or fall back to a full sweep when the payload is broad.
 function RangeHandle:OnUnitInRangeUpdate(_, unitToken, eventPayload)
     if not isGroupUnitToken(unitToken) then
         self:RefreshAllTrackedUnits("unit_in_range_broadcast", true)

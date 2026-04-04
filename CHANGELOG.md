@@ -5,6 +5,11 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.2.1 - 2026-04-04
+- Reworked party and raid dispellable-debuff highlighting with brighter overlays, colored frame accents, and new corner icons for Magic, Curse, Poison, and Disease debuffs.
+- Fixed party and raid `Ready` and `Pull` leader actions by dispatching slash commands through registered slash handlers instead of relying on the chat edit box flow.
+- Bumped addon metadata to `3.2.1`.
+
 ## 3.2.0 - 2026-04-02
 - Rebuilt party and raid out-of-range handling around a new dedicated `rangeHandle` module that owns cached range state and frame alpha application.
 - Added spell-aware friendly/dead range probing, phase/visibility/offline gating, short-lived `UNIT_IN_RANGE_UPDATE` hints, and a lightweight polling safety net for group frames.
@@ -49,16 +54,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Fixed the raid ready-check refresh path so it no longer trips a nil-function error during `READY_CHECK`.
 - Fixed custom leader action button label setup so the buttons initialize their font before setting text.
 - Bumped addon metadata to `2.5.0`.
-
-## 2.4.1 - 2026-03-24
-- Fixed raid-frame absorb shields so full-health targets still show a visible shield cue, and hardened the first overlay refresh against unresolved raid health-bar widths.
-- Bumped addon metadata to `2.4.1`.
-
-## 2.4.0 - 2026-03-23
-- Reworked tracked group auras around structured per-entry configuration so healer buffs can render either as configurable icon-strip slots or as colored corner squares on party and raid frames.
-- Added class-based tracked-aura entry defaults, legacy migration from the old spell-name whitelist, and profile maintenance/import sanitization for the new aura entry format.
-- Rebuilt the Tracked Auras configuration page into an entry editor with per-spell display style, slot, own-cast filtering, size, and square color controls.
-- Prebuilt party and raid tracked-aura indicator pools so combat updates stay on the existing `UNIT_AURA` refresh path without creating secure-child visuals mid-fight.
-- Hid live party frames automatically while the player is in a raid group so raid frames are the only active group presentation in raid content.
-- Added and updated the related English configuration strings for tracked-aura entry management.
-- Bumped addon metadata to `2.4.0`.

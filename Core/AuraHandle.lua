@@ -30,7 +30,17 @@ local AuraSafety = ns.AuraSafety
 
 local MAX_AURA_SCAN        = 80
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
-local DISPEL_OVERLAY_ALPHA = 0.32
+local DISPEL_OVERLAY_ALPHA_LIGHT = 0.50
+local DISPEL_OVERLAY_ALPHA_DARK = 0.30
+local DISPEL_BORDER_ALPHA_LIGHT = 0.95
+local DISPEL_BORDER_ALPHA_DARK = 0.82
+local DISPEL_ICON_TINT_ALPHA = 0.24
+local DISPEL_ICON_PATH_BY_TYPE = {
+    Magic = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_magic.png",
+    Curse = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_curse.png",
+    Poison = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_poison.png",
+    Disease = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_disease.png",
+}
 local GROUP_AURA_SLOT_BATCH_SIZE = 16
 local GROUP_AURA_SLOT_SCAN_GUARD = 8
 
@@ -1227,6 +1237,44 @@ local function resolveDispellableAuraColor(unitToken, auraData, fallbackDebuffTy
     end
 
     return nil, nil, nil
+end
+
+local function setFrameEdgeColor(frame, red, green, blue, alpha)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    local textures = {
+        frame.Top,
+        frame.Bottom,
+        frame.Left,
+        frame.Right,
+    }
+    for index = 1, #textures do
+        local texture = textures[index]
+        if texture and type(texture.SetColorTexture) == "function" then
+            texture:SetColorTexture(red, green, blue, alpha)
+        end
+    end
+end
+
+local function hideFrameDispelIndicator(frame)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    if frame.DispelOverlay and type(frame.DispelOverlay.Hide) == "function" then
+        frame.DispelOverlay:Hide()
+    end
+    if frame.DispelBorder and type(frame.DispelBorder.Hide) == "function" then
+        frame.DispelBorder:Hide()
+    end
+    if frame.DispelIconFrame and type(frame.DispelIconFrame.Hide) == "function" then
+        frame.DispelIconFrame:Hide()
+    end
+    if frame.DispelIcon and type(frame.DispelIcon.SetTexture) == "function" then
+        frame.DispelIcon:SetTexture(nil)
+    end
 end
 
 -- Read one aura by slot using pcall so the cache degrades per-aura instead of
@@ -3851,15 +3899,42 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
     local playerDispelTypeSet = getPlayerDispelTypeSet()
     local auraData = normalizedUnit and getFirstDispellableAuraData(normalizedUnit, state, playerDispelTypeSet) or nil
     local debuffType = self:GetUnitDispellableDebuffType(resolvedUnitToken)
+    local dispelType = normalizeDispelType(auraData and auraData.dispelName) or normalizeDispelType(debuffType) or debuffType
     local red, green, blue = resolveDispellableAuraColor(normalizedUnit or resolvedUnitToken, auraData, debuffType)
+    local darkModeEnabled = Style and type(Style.IsDarkModeEnabled) == "function" and Style:IsDarkModeEnabled()
+    local overlayAlpha = darkModeEnabled and DISPEL_OVERLAY_ALPHA_DARK or DISPEL_OVERLAY_ALPHA_LIGHT
+    local borderAlpha = darkModeEnabled and DISPEL_BORDER_ALPHA_DARK or DISPEL_BORDER_ALPHA_LIGHT
+    local iconTexture = dispelType and DISPEL_ICON_PATH_BY_TYPE[dispelType] or nil
 
     if red and green and blue then
         -- Keep opacity centralized here so layout refreshes do not multiply the
         -- tint alpha a second time in frame modules.
-        frame.DispelOverlay:SetColorTexture(red, green, blue, DISPEL_OVERLAY_ALPHA)
+        frame.DispelOverlay:SetColorTexture(red, green, blue, overlayAlpha)
         frame.DispelOverlay:Show()
+
+        if frame.DispelBorder then
+            setFrameEdgeColor(frame.DispelBorder, red, green, blue, borderAlpha)
+            frame.DispelBorder:Show()
+        end
+
+        if frame.DispelIconFrame and frame.DispelIcon and iconTexture then
+            frame.DispelIcon:SetTexture(iconTexture)
+            frame.DispelIcon:SetVertexColor(1, 1, 1, 1)
+            if frame.DispelIconFrame.Background then
+                frame.DispelIconFrame.Background:SetColorTexture(
+                    Util:Clamp((red * DISPEL_ICON_TINT_ALPHA) + 0.04, 0, 1),
+                    Util:Clamp((green * DISPEL_ICON_TINT_ALPHA) + 0.04, 0, 1),
+                    Util:Clamp((blue * DISPEL_ICON_TINT_ALPHA) + 0.05, 0, 1),
+                    0.96
+                )
+            end
+            setFrameEdgeColor(frame.DispelIconFrame, red, green, blue, borderAlpha)
+            frame.DispelIconFrame:Show()
+        elseif frame.DispelIconFrame then
+            frame.DispelIconFrame:Hide()
+        end
     else
-        frame.DispelOverlay:Hide()
+        hideFrameDispelIndicator(frame)
     end
 end
 
@@ -3972,9 +4047,7 @@ function AuraHandle:ClearFrameAuraIndicators(frame)
     hideUnusedTrackerSquareElements(frame, {})
     hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
     hideCenterDefensiveIndicator(frame)
-    if frame.DispelOverlay and type(frame.DispelOverlay.Hide) == "function" then
-        frame.DispelOverlay:Hide()
-    end
+    hideFrameDispelIndicator(frame)
 end
 
 -- Updates aura indicators on a group frame.
