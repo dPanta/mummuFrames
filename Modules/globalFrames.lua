@@ -20,6 +20,8 @@ local READY_CHECK_READY_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-Ready"
 local READY_CHECK_NOT_READY_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-NotReady"
 local READY_CHECK_WAITING_TEXTURE = "Interface\\RaidFrame\\ReadyCheck-Waiting"
 local SECONDARY_POWER_MAX_ICONS = 10
+local SECONDARY_POWER_DISPLAY_MODE_ICONS = "icons"
+local SECONDARY_POWER_DISPLAY_MODE_BAR = "bar"
 local TERTIARY_POWER_MAX_STACK_OVERLAYS = 10
 local TERTIARY_POWER_HEIGHT_BONUS = 5
 local READY_CHECK_FINISHED_HOLD_SECONDS = 6
@@ -254,6 +256,14 @@ local function updateDetachedBarBorder(frame, shown, borderSize)
     border.bottom:SetShown(shown == true)
     border.left:SetShown(shown == true)
     border.right:SetShown(shown == true)
+end
+
+local function getSecondaryPowerDisplayMode(config)
+    local displayMode = type(config) == "table" and config.displayMode or config
+    if displayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
+        return SECONDARY_POWER_DISPLAY_MODE_BAR
+    end
+    return SECONDARY_POWER_DISPLAY_MODE_ICONS
 end
 
 local function invalidateReadyCheckIndicatorHide(indicator)
@@ -492,7 +502,7 @@ end
 
 -- Return the icon size used by party/raid dispel corner markers.
 function GlobalFrames:GetGroupDispelIndicatorSize(frameHeight)
-    local size = Util:Clamp(math.floor(((tonumber(frameHeight) or 24) * 0.46) + 0.5), 10, 20)
+    local size = Util:Clamp(math.floor(((tonumber(frameHeight) or 24) * 0.72) + 0.5), 14, 30)
     if Style:IsPixelPerfectEnabled() then
         size = Style:Snap(size)
     end
@@ -527,7 +537,7 @@ function GlobalFrames:LayoutGroupDispelIndicator(frame, frameHeight)
     local pixelSize = pixelPerfect and Style:GetPixelSize() or 1
     local edgeThickness = pixelPerfect and pixelSize or 2
     local iconEdgeThickness = pixelPerfect and pixelSize or 1
-    local iconInset = pixelPerfect and Style:Snap(2) or 2
+    local iconInset = pixelPerfect and Style:Snap(1) or 1
     local iconPadding = pixelPerfect and pixelSize or 1
     local iconSize = self:GetGroupDispelIndicatorSize(frameHeight)
     local overlayTarget = frame.HealthBar or frame
@@ -643,7 +653,7 @@ function GlobalFrames:CreatePlayerStatusIcons(frame)
     }
 end
 
--- Create the icon strip used for combo points, chi, runes, and similar resources.
+-- Create the secondary-resource container used for icon pips and segmented bars.
 function GlobalFrames:CreateSecondaryPowerBar(frame)
     local bar = CreateFrame("Frame", nil, frame)
     bar:SetFrameStrata("MEDIUM")
@@ -651,6 +661,8 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
     bar:SetSize(120, 16)
     bar:SetClampedToScreen(true)
     bar:Hide()
+    bar.Background = Style:CreateBackground(bar, 0.06, 0.06, 0.07, 0.9)
+    bar.Background:Hide()
 
     bar.Icons = {}
     for i = 1, SECONDARY_POWER_MAX_ICONS do
@@ -658,6 +670,15 @@ function GlobalFrames:CreateSecondaryPowerBar(frame)
         icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         icon:Hide()
         bar.Icons[i] = icon
+    end
+
+    bar.Segments = {}
+    for i = 1, SECONDARY_POWER_MAX_ICONS do
+        local segment = self:CreateStatusBar(bar, "secondaryPower")
+        segment:SetMinMaxValues(0, 1)
+        segment:SetValue(0)
+        segment:Hide()
+        bar.Segments[i] = segment
     end
 
     frame.SecondaryPowerBar = bar
@@ -1117,13 +1138,33 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         local secondaryConfig = unitConfig.secondaryPower or {}
         local spEnabled = unitToken == "player" and secondaryConfig.enabled ~= false
         local spDetached = secondaryConfig.detached == true
+        local spDisplayMode = getSecondaryPowerDisplayMode(secondaryConfig)
         local defaultSpSize = math.floor((fontSize * 1.35) + 0.5)
-        local spHeight = Util:Clamp(math.floor((tonumber(secondaryConfig.size) or defaultSpSize) + 0.5), 8, 60)
-        local defaultSpWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spHeight * 8), 80, 600)
+        local configuredSpSize = tonumber(secondaryConfig.size) or defaultSpSize
+        local spIconSize = Util:Clamp(math.floor(configuredSpSize + 0.5), 8, 60)
+        local defaultSpBarHeight = math.floor((fontSize * 0.75) + 0.5)
+        local configuredSpBarHeight = tonumber(secondaryConfig.height) or defaultSpBarHeight
+        local spBarHeight = Util:Clamp(math.floor(configuredSpBarHeight + 0.5), 4, 40)
+        local spHeight = spDisplayMode == SECONDARY_POWER_DISPLAY_MODE_BAR and spBarHeight or spIconSize
+        local defaultSpWidth = nil
+        if spDisplayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
+            defaultSpWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 600)
+        else
+            defaultSpWidth = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), spIconSize * 8), 80, 600)
+        end
         local configuredSpWidth = tonumber(secondaryConfig.width) or defaultSpWidth
-        -- Preserve enough horizontal space for the chosen icon size.
-        local minSpWidth = Util:Clamp(spHeight * 8, 80, 600)
-        local spWidth = Util:Clamp(math.max(configuredSpWidth, minSpWidth), 80, 600)
+        local spWidth = nil
+        if spDisplayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
+            if spDetached then
+                spWidth = Util:Clamp(configuredSpWidth, 80, 600)
+            else
+                local attachedMaxWidth = Util:Clamp(math.floor((width - (border * 2)) + 0.5), 80, 600)
+                spWidth = Util:Clamp(math.min(configuredSpWidth, attachedMaxWidth), 80, attachedMaxWidth)
+            end
+        else
+            local minSpWidth = Util:Clamp(spIconSize * 8, 80, 600)
+            spWidth = Util:Clamp(math.max(configuredSpWidth, minSpWidth), 80, 600)
+        end
 
         if pixelPerfect then
             spHeight = Style:Snap(spHeight)
@@ -1131,6 +1172,19 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         else
             spHeight = math.floor(spHeight + 0.5)
             spWidth = math.floor(spWidth + 0.5)
+        end
+
+        if frame.SecondaryPowerBar.Segments then
+            for i = 1, #frame.SecondaryPowerBar.Segments do
+                local segment = frame.SecondaryPowerBar.Segments[i]
+                if segment then
+                    Style:ApplyStatusBarTexture(segment)
+                    Style:ApplyStatusBarBacking(segment, "secondaryPower")
+                end
+            end
+        end
+        if frame.SecondaryPowerBar.Background then
+            frame.SecondaryPowerBar.Background:SetShown(spEnabled and spDisplayMode == SECONDARY_POWER_DISPLAY_MODE_BAR)
         end
 
         if allowLayout then
@@ -1148,6 +1202,8 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
                     spY = math.floor(spY + 0.5)
                 end
                 frame.SecondaryPowerBar:SetPoint("CENTER", UIParent, "CENTER", spX, spY)
+            elseif spDisplayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
+                frame.SecondaryPowerBar:SetPoint("TOP", frame.HealthBar, "TOP", 0, -border)
             else
                 local spOffsetY = pixelPerfect and Style:Snap(8) or 8
                 frame.SecondaryPowerBar:SetPoint("BOTTOM", frame, "TOP", 0, spOffsetY)
@@ -1156,6 +1212,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
 
         frame.SecondaryPowerBar._enabled = spEnabled
         frame.SecondaryPowerBar._detached = spDetached
+        frame.SecondaryPowerBar._displayMode = spDisplayMode
     end
 
     if frame.TertiaryPowerBar then

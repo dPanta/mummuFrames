@@ -207,6 +207,10 @@ local RAID_TEST_SIZE_OPTIONS = {
     { key = 30, label = L.CONFIG_RAID_TEST_SIZE_30 or "30" },
     { key = 40, label = L.CONFIG_RAID_TEST_SIZE_40 or "40" },
 }
+local SECONDARY_POWER_DISPLAY_OPTIONS = {
+    { key = "icons", label = L.CONFIG_UNIT_SECONDARY_POWER_DISPLAY_ICONS or "Icons" },
+    { key = "bar", label = L.CONFIG_UNIT_SECONDARY_POWER_DISPLAY_BAR or "Segmented bar" },
+}
 local CONFIG_WINDOW_WIDTH = 960
 local CONFIG_WINDOW_HEIGHT = 720
 local CONFIG_PAGE_MIN_CONTENT_HEIGHT = CONFIG_WINDOW_HEIGHT
@@ -1799,6 +1803,66 @@ function Configuration:InitializeRaidTestSizeDropdown(dropdown)
                 end
             end
             return tostring(numeric)
+        end
+    )
+
+    self:RefreshSelectControlText(dropdown, false)
+end
+
+-- Initialize secondary power display-mode dropdown.
+function Configuration:InitializeSecondaryPowerDisplayDropdown(dropdown, unitToken)
+    if not dropdown then
+        return
+    end
+
+    self:ConfigureSelectControl(
+        dropdown,
+        function()
+            local entries = {}
+            for i = 1, #SECONDARY_POWER_DISPLAY_OPTIONS do
+                local option = SECONDARY_POWER_DISPLAY_OPTIONS[i]
+                entries[#entries + 1] = {
+                    value = option.key,
+                    label = option.label,
+                }
+            end
+            return entries
+        end,
+        function()
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return "icons"
+            end
+
+            local unitConfig = dataHandle:GetUnitConfig(unitToken)
+            local secondaryConfig = type(unitConfig) == "table" and unitConfig.secondaryPower or nil
+            local displayMode = type(secondaryConfig) == "table" and secondaryConfig.displayMode or nil
+            if displayMode == "bar" then
+                return "bar"
+            end
+            return "icons"
+        end,
+        function(option)
+            local dataHandle = self:GetDataHandle()
+            if not dataHandle then
+                return
+            end
+
+            local selectedMode = option.value == "bar" and "bar" or "icons"
+            dataHandle:SetUnitConfig(unitToken, "secondaryPower.displayMode", selectedMode)
+            self:SetSelectControlText(dropdown, option.label, nil)
+            self:RefreshConfigWidgets()
+            self:RequestUnitFrameRefresh(REFRESH_INTENT_LAYOUT, unitToken)
+        end,
+        CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
+        nil,
+        function(value)
+            for i = 1, #SECONDARY_POWER_DISPLAY_OPTIONS do
+                if SECONDARY_POWER_DISPLAY_OPTIONS[i].key == value then
+                    return SECONDARY_POWER_DISPLAY_OPTIONS[i].label
+                end
+            end
+            return SECONDARY_POWER_DISPLAY_OPTIONS[1].label
         end
     )
 
@@ -4808,8 +4872,10 @@ function Configuration:BuildUnitPage(page, unitToken)
     local primaryPowerDetach
     local primaryPowerWidth
     local secondaryPowerEnabled
+    local secondaryPowerDisplayDropdown
     local secondaryPowerDetach
     local secondaryPowerSize
+    local secondaryPowerHeight
     local secondaryPowerWidth
     local tertiaryPowerEnabled
     local tertiaryPowerDetach
@@ -4877,10 +4943,20 @@ function Configuration:BuildUnitPage(page, unitToken)
                 boolValue("secondaryPower.enabled", true),
                 -12
             )
+            local _, secondaryDisplayDropdown = registerDropdown(
+                "SecondaryPowerDisplayMode",
+                L.CONFIG_UNIT_SECONDARY_POWER_DISPLAY_MODE or "Secondary power style",
+                secondaryPowerEnabled,
+                function(configuration, dropdown)
+                    configuration:InitializeSecondaryPowerDisplayDropdown(dropdown, unitToken)
+                end,
+                false
+            )
+            secondaryPowerDisplayDropdown = secondaryDisplayDropdown
             secondaryPowerDetach = registerCheckbox(
                 "SecondaryPowerDetach",
                 L.CONFIG_UNIT_SECONDARY_POWER_DETACH or "Detach secondary power bar",
-                secondaryPowerEnabled,
+                secondaryPowerDisplayDropdown or secondaryPowerEnabled,
                 "secondaryPower.detached",
                 REFRESH_INTENT_LAYOUT,
                 boolValue("secondaryPower.detached", false)
@@ -4898,20 +4974,52 @@ function Configuration:BuildUnitPage(page, unitToken)
                 function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
                 20
             )
+            secondaryPowerHeight = registerNumeric(
+                "SecondaryPowerHeight",
+                L.CONFIG_UNIT_SECONDARY_POWER_HEIGHT or "Secondary power bar height",
+                4,
+                40,
+                1,
+                secondaryPowerSize.slider,
+                "secondaryPower.height",
+                REFRESH_INTENT_LAYOUT,
+                numericValue("secondaryPower.height", 8),
+                function(value) return math.floor((tonumber(value) or 0) + 0.5) end,
+                20
+            )
             secondaryPowerWidth = registerNumeric(
                 "SecondaryPowerWidth",
                 L.CONFIG_UNIT_SECONDARY_POWER_WIDTH or "Secondary power bar width",
                 80,
                 600,
                 1,
-                secondaryPowerSize.slider,
+                secondaryPowerHeight.slider,
                 "secondaryPower.width",
                 REFRESH_INTENT_LAYOUT,
                 function(config)
                     local baseUnitWidth = Util:Clamp(tonumber(config.width) or 220, 100, 600)
-                    local size = Util:Clamp(math.floor((tonumber(getTableValueAtPath(config, "secondaryPower.size")) or 16) + 0.5), 8, 60)
-                    local fallback = Util:Clamp(math.max(math.floor((baseUnitWidth * 0.75) + 0.5), size * 8), 80, 600)
+                    local displayMode = getTableValueAtPath(config, "secondaryPower.displayMode")
+                    local fallback = nil
+                    if displayMode == "bar" then
+                        fallback = Util:Clamp(math.floor((baseUnitWidth - 2) + 0.5), 80, 600)
+                    else
+                        local size = Util:Clamp(
+                            math.floor((tonumber(getTableValueAtPath(config, "secondaryPower.size")) or 16) + 0.5),
+                            8,
+                            60
+                        )
+                        fallback = Util:Clamp(math.max(math.floor((baseUnitWidth * 0.75) + 0.5), size * 8), 80, 600)
+                    end
                     local configured = tonumber(getTableValueAtPath(config, "secondaryPower.width")) or fallback
+                    if displayMode == "bar" then
+                        return Util:Clamp(configured, 80, 600)
+                    end
+
+                    local size = Util:Clamp(
+                        math.floor((tonumber(getTableValueAtPath(config, "secondaryPower.size")) or 16) + 0.5),
+                        8,
+                        60
+                    )
                     return Util:Clamp(math.max(configured, size * 8), 80, 600)
                 end,
                 function(value) return math.floor((tonumber(value) or 0) + 0.5) end
@@ -5101,12 +5209,22 @@ function Configuration:BuildUnitPage(page, unitToken)
 
         if secondaryPowerEnabled then
             local secondaryEnabled = getTableValueAtPath(unitConfig, "secondaryPower.enabled") ~= false
+            local secondaryDisplayMode = getTableValueAtPath(unitConfig, "secondaryPower.displayMode")
+            if secondaryDisplayMode ~= "bar" then
+                secondaryDisplayMode = "icons"
+            end
+            if secondaryPowerDisplayDropdown then
+                self._owner:SetSelectControlEnabled(secondaryPowerDisplayDropdown, secondaryEnabled)
+            end
             if secondaryPowerDetach then
                 self._owner:SetButtonEnabled(secondaryPowerDetach, secondaryEnabled)
                 secondaryPowerDetach:SetAlpha(secondaryEnabled and 1 or 0.55)
             end
             if secondaryPowerSize then
-                self._owner:SetNumericControlEnabled(secondaryPowerSize, secondaryEnabled)
+                self._owner:SetNumericControlEnabled(secondaryPowerSize, secondaryEnabled and secondaryDisplayMode == "icons")
+            end
+            if secondaryPowerHeight then
+                self._owner:SetNumericControlEnabled(secondaryPowerHeight, secondaryEnabled and secondaryDisplayMode == "bar")
             end
             if secondaryPowerWidth then
                 self._owner:SetNumericControlEnabled(secondaryPowerWidth, secondaryEnabled)

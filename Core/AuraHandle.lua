@@ -35,12 +35,13 @@ local DISPEL_OVERLAY_ALPHA_DARK = 0.30
 local DISPEL_BORDER_ALPHA_LIGHT = 0.95
 local DISPEL_BORDER_ALPHA_DARK = 0.82
 local DISPEL_ICON_TINT_ALPHA = 0.24
-local DISPEL_ICON_PATH_BY_TYPE = {
-    Magic = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_magic.png",
-    Curse = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_curse.png",
-    Poison = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_poison.png",
-    Disease = "Interface\\AddOns\\mummuFrames\\Icons\\dispel_disease.png",
+local DISPEL_ICON_SPELL_ID_BY_TYPE = {
+    Magic = 527,      -- Purify
+    Curse = 475,      -- Remove Curse
+    Poison = 213644,  -- Cleanse Toxins
+    Disease = 213634, -- Purify Disease
 }
+local DISPEL_ICON_TEXTURE_BY_TYPE = {}
 local GROUP_AURA_SLOT_BATCH_SIZE = 16
 local GROUP_AURA_SLOT_SCAN_GUARD = 8
 
@@ -513,6 +514,28 @@ local function getResolvedSpellInfo(query)
     return nil
 end
 
+local function getDispelIconTexture(dispelType)
+    if type(dispelType) ~= "string" or dispelType == "" then
+        return nil
+    end
+
+    local cachedTexture = DISPEL_ICON_TEXTURE_BY_TYPE[dispelType]
+    if cachedTexture ~= nil then
+        return cachedTexture or nil
+    end
+
+    local spellID = DISPEL_ICON_SPELL_ID_BY_TYPE[dispelType]
+    if type(spellID) ~= "number" or spellID <= 0 then
+        DISPEL_ICON_TEXTURE_BY_TYPE[dispelType] = false
+        return nil
+    end
+
+    local spellInfo = getResolvedSpellInfo(spellID)
+    local texture = spellInfo and (spellInfo.iconID or spellInfo.originalIconID) or nil
+    DISPEL_ICON_TEXTURE_BY_TYPE[dispelType] = texture or false
+    return texture or nil
+end
+
 -- Build the dispel-color curve expected by C_UnitAuras.GetAuraDispelTypeColor.
 local function getGroupDispelColorCurve()
     if _groupDispelColorCurve ~= nil then
@@ -606,6 +629,17 @@ local function getSafeAuraNumericValue(value, fallback)
         return coerced
     end
     return fallback
+end
+
+local function getSafeDispelColorChannels(red, green, blue)
+    local safeRed = getSafeAuraNumericValue(red, nil)
+    local safeGreen = getSafeAuraNumericValue(green, nil)
+    local safeBlue = getSafeAuraNumericValue(blue, nil)
+    if type(safeRed) ~= "number" or type(safeGreen) ~= "number" or type(safeBlue) ~= "number" then
+        return nil, nil, nil
+    end
+
+    return Util:Clamp(safeRed, 0, 1), Util:Clamp(safeGreen, 0, 1), Util:Clamp(safeBlue, 0, 1)
 end
 
 -- Resolve the most reliable icon texture for a tracked aura.
@@ -1204,7 +1238,7 @@ local function resolveDispellableAuraColor(unitToken, auraData, fallbackDebuffTy
     if type(unitToken) ~= "string" or unitToken == "" or type(auraData) ~= "table" then
         if fallbackDebuffType and DebuffTypeColor and DebuffTypeColor[fallbackDebuffType] then
             local fallbackColor = DebuffTypeColor[fallbackDebuffType]
-            return fallbackColor.r, fallbackColor.g, fallbackColor.b
+            return getSafeDispelColorChannels(fallbackColor.r, fallbackColor.g, fallbackColor.b)
         end
         return nil, nil, nil
     end
@@ -1222,10 +1256,16 @@ local function resolveDispellableAuraColor(unitToken, auraData, fallbackDebuffTy
             if type(colorValue.GetRGBA) == "function" then
                 local okRGBA, r, g, b = pcall(colorValue.GetRGBA, colorValue)
                 if okRGBA then
-                    return r, g, b
+                    local safeRed, safeGreen, safeBlue = getSafeDispelColorChannels(r, g, b)
+                    if safeRed and safeGreen and safeBlue then
+                        return safeRed, safeGreen, safeBlue
+                    end
                 end
             elseif type(colorValue) == "table" and type(colorValue.r) == "number" then
-                return colorValue.r, colorValue.g, colorValue.b
+                local safeRed, safeGreen, safeBlue = getSafeDispelColorChannels(colorValue.r, colorValue.g, colorValue.b)
+                if safeRed and safeGreen and safeBlue then
+                    return safeRed, safeGreen, safeBlue
+                end
             end
         end
     end
@@ -1233,7 +1273,7 @@ local function resolveDispellableAuraColor(unitToken, auraData, fallbackDebuffTy
     local dispelType = normalizeDispelType(auraData.dispelName) or fallbackDebuffType
     if dispelType and DebuffTypeColor and DebuffTypeColor[dispelType] then
         local color = DebuffTypeColor[dispelType]
-        return color.r, color.g, color.b
+        return getSafeDispelColorChannels(color.r, color.g, color.b)
     end
 
     return nil, nil, nil
@@ -3904,7 +3944,7 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
     local darkModeEnabled = Style and type(Style.IsDarkModeEnabled) == "function" and Style:IsDarkModeEnabled()
     local overlayAlpha = darkModeEnabled and DISPEL_OVERLAY_ALPHA_DARK or DISPEL_OVERLAY_ALPHA_LIGHT
     local borderAlpha = darkModeEnabled and DISPEL_BORDER_ALPHA_DARK or DISPEL_BORDER_ALPHA_LIGHT
-    local iconTexture = dispelType and DISPEL_ICON_PATH_BY_TYPE[dispelType] or nil
+    local iconTexture = getDispelIconTexture(dispelType) or DEFAULT_AURA_TEXTURE
 
     if red and green and blue then
         -- Keep opacity centralized here so layout refreshes do not multiply the

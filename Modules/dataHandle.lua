@@ -149,8 +149,10 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
         -- Secondary resource configuration.
         secondaryPower = {
             enabled = true,
+            displayMode = "icons",
             detached = false,
             size = 16,
+            height = 8,
             width = Util:Clamp(math.max(math.floor((width * 0.75) + 0.5), 16 * 8), 80, 600),
             x = 0,
             y = 0,

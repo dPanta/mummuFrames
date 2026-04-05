@@ -36,6 +36,9 @@ local UnitFrames = ns.Object:Extend()
 ---@field usesSpellCastCountAPI boolean?
 ---@field spellCastCountSpellID number?
 ---@field usesPolling boolean?
+---@field barColor number[]?
+---@field barColorBySpecID table<number, number[]>?
+---@field overflowBarColor number[]?
 
 -- Fixed display order for unit-frame creation and refresh.
 local FRAME_ORDER = {
@@ -147,6 +150,8 @@ local OBSERVED_UNIT_FRIENDLY_RANGE_ITEM_ID = 1713
 local OBSERVED_UNIT_HOSTILE_RANGE_ITEM_ID = 4945
 local SECONDARY_POWER_ICON_BASE = "Interface\\AddOns\\mummuFrames\\Icons\\"
 local SECONDARY_POWER_MAX_ICONS = 10
+local SECONDARY_POWER_DISPLAY_MODE_ICONS = "icons"
+local SECONDARY_POWER_DISPLAY_MODE_BAR = "bar"
 local SECONDARY_POWER_EMPTY_ALPHA = 0.22
 local SECONDARY_POWER_POLL_INTERVAL = 0.1
 local BLOOD_SPEC_ID = 250
@@ -367,6 +372,7 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("Chi", "SPELL_POWER_CHI", 12),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "monk_chi.png",
+        barColor = { 0.45, 0.85, 0.62, 0.95 },
         -- Only Windwalker displays Chi as a secondary resource bar.
         allowedSpecIDs = {
             [WINDWALKER_SPEC_ID] = true,
@@ -381,17 +387,24 @@ local SECONDARY_POWER_BY_CLASS = {
             [FROST_DK_SPEC_ID] = SECONDARY_POWER_ICON_BASE .. "dk_runes_frost.png",
             [UNHOLY_SPEC_ID] = SECONDARY_POWER_ICON_BASE .. "dk_runes_unholy.png",
         },
+        barColorBySpecID = {
+            [BLOOD_SPEC_ID] = { 0.78, 0.18, 0.22, 0.95 },
+            [FROST_DK_SPEC_ID] = { 0.32, 0.72, 0.97, 0.95 },
+            [UNHOLY_SPEC_ID] = { 0.42, 0.83, 0.35, 0.95 },
+        },
         usesRuneCooldownAPI = true,
     },
     ROGUE = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
         maxIcons = 8,
         texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
+        barColor = { 0.98, 0.73, 0.18, 0.95 },
     },
     DRUID = {
         powerType = resolvePowerTypeConstant("ComboPoints", "SPELL_POWER_COMBO_POINTS", 4),
         maxIcons = 8,
         texture = SECONDARY_POWER_ICON_BASE .. "rogue_combo_points.png",
+        barColor = { 0.98, 0.73, 0.18, 0.95 },
         -- Only Feral displays combo points as a secondary resource bar.
         allowedSpecIDs = {
             [FERAL_SPEC_ID] = true,
@@ -401,27 +414,32 @@ local SECONDARY_POWER_BY_CLASS = {
         powerType = resolvePowerTypeConstant("HolyPower", "SPELL_POWER_HOLY_POWER", 9),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "paladin_holy_power.png",
+        barColor = { 0.96, 0.82, 0.31, 0.95 },
     },
     WARLOCK = {
         powerType = resolvePowerTypeConstant("SoulShards", "SPELL_POWER_SOUL_SHARDS", 7),
         maxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "warlock_soul_shards.png",
+        barColor = { 0.58, 0.44, 0.86, 0.95 },
     },
     EVOKER = {
         powerType = resolvePowerTypeConstant("Essence", "SPELL_POWER_ESSENCE", 19),
         maxIcons = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "evoker_essence.png",
+        barColor = { 0.22, 0.82, 0.82, 0.95 },
     },
     MAGE = {
         powerType = resolvePowerTypeConstant("ArcaneCharges", "SPELL_POWER_ARCANE_CHARGES", 16),
         maxIcons = 4,
         texture = SECONDARY_POWER_ICON_BASE .. "mage_arcane_charges.png",
+        barColor = { 0.47, 0.67, 0.98, 0.95 },
     },
     DEMONHUNTER = {
         powerType = resolvePowerTypeConstant("SoulFragments", "SPELL_POWER_SOUL_FRAGMENTS", 17),
         maxIcons = 6,
         powerCap = 6,
         texture = SECONDARY_POWER_ICON_BASE .. "dh_soul_fragments.png",
+        barColor = { 0.52, 0.89, 0.49, 0.95 },
         usesSpellCastCountAPI = true,
         spellCastCountSpellID = DEMON_HUNTER_SOUL_FRAGMENTS_SPELL_ID,
         usesPolling = true,
@@ -438,6 +456,8 @@ local SECONDARY_POWER_BY_CLASS = {
         displayMaxIcons = 5,
         texture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_blue.png",
         overflowTexture = SECONDARY_POWER_ICON_BASE .. "shaman_maelstrom_weapon_red.png",
+        barColor = { 0.24, 0.70, 1.00, 0.95 },
+        overflowBarColor = { 0.96, 0.30, 0.26, 0.95 },
         -- Only Enhancement displays Maelstrom Weapon stacks as a resource bar.
         allowedSpecIDs = {
             [ENHANCEMENT_SPEC_ID] = true,
@@ -964,6 +984,42 @@ local function getSecondaryPowerTexturePath(resource, specID)
     end
 
     return DEFAULT_AURA_TEXTURE
+end
+
+local function getSecondaryPowerDisplayMode(displayMode)
+    local resolved = type(displayMode) == "table" and displayMode.displayMode or displayMode
+    if resolved == SECONDARY_POWER_DISPLAY_MODE_BAR then
+        return SECONDARY_POWER_DISPLAY_MODE_BAR
+    end
+    return SECONDARY_POWER_DISPLAY_MODE_ICONS
+end
+
+local function getSecondaryPowerBarColor(resource, specID, segmentIndex, displayMaxPower)
+    if type(resource) ~= "table" then
+        return 1, 1, 1, 0.95
+    end
+
+    local color = nil
+    local colorBySpecID = resource.barColorBySpecID
+    if type(colorBySpecID) == "table" and type(specID) == "number" then
+        color = colorBySpecID[specID]
+    end
+    if type(color) ~= "table" then
+        color = resource.barColor
+    end
+    if type(resource.overflowBarColor) == "table"
+        and type(displayMaxPower) == "number"
+        and displayMaxPower > 0
+        and type(segmentIndex) == "number"
+        and segmentIndex > displayMaxPower
+    then
+        color = resource.overflowBarColor
+    end
+    if type(color) ~= "table" then
+        return 1, 1, 1, 0.95
+    end
+
+    return color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 0.95
 end
 
 -- Return whether player secondary power should refresh from aura updates.
@@ -2474,12 +2530,15 @@ local function hidePrimaryPowerBar(bar)
     bar:Hide()
 end
 
--- Hide all secondary-power icons and the parent bar.
+-- Hide all secondary-power renderers and the parent bar.
 local function hideSecondaryPowerBar(bar)
     if not bar then
         return
     end
 
+    if bar.EditModeSelection then
+        bar.EditModeSelection:Hide()
+    end
     if type(bar.SecretFillBars) == "table" then
         for i = 1, #bar.SecretFillBars do
             local fillBar = bar.SecretFillBars[i]
@@ -2496,6 +2555,14 @@ local function hideSecondaryPowerBar(bar)
     if bar.Icons then
         for i = 1, #bar.Icons do
             bar.Icons[i]:Hide()
+        end
+    end
+    if bar.Segments then
+        for i = 1, #bar.Segments do
+            local segment = bar.Segments[i]
+            if segment then
+                segment:Hide()
+            end
         end
     end
     bar:Hide()
@@ -2537,6 +2604,205 @@ local function hideSecondaryPowerSecretFillBars(bar)
             fillBar:Hide()
         end
     end
+end
+
+local function hideSecondaryPowerSegments(bar)
+    if not bar or type(bar.Segments) ~= "table" then
+        return
+    end
+
+    for i = 1, #bar.Segments do
+        local segment = bar.Segments[i]
+        if segment then
+            segment:Hide()
+        end
+    end
+end
+
+local function renderSecondaryPowerIcons(bar, resource, specID, current, displayCurrent, displayMaxPower, overflowCount, secretCurrent)
+    if not bar then
+        return
+    end
+
+    hideSecondaryPowerSegments(bar)
+
+    local availableWidth = math.max(1, bar:GetWidth() or 1)
+    local availableHeight = math.max(1, bar:GetHeight() or 1)
+    local spacing = (Style and type(Style.GetPixelSize) == "function" and Style:GetPixelSize()) or 1
+    if not Style or type(Style.IsPixelPerfectEnabled) ~= "function" or not Style:IsPixelPerfectEnabled() then
+        spacing = 2
+    end
+
+    local iconSize = math.floor(
+        math.min(availableHeight, (availableWidth - (spacing * math.max(0, displayMaxPower - 1))) / displayMaxPower) + 0.5
+    )
+    if iconSize < 1 then
+        iconSize = 1
+    end
+
+    local rowWidth = (iconSize * displayMaxPower) + (spacing * math.max(0, displayMaxPower - 1))
+    local startX = math.floor(((availableWidth - rowWidth) * 0.5) + 0.5)
+    if startX < 0 then
+        startX = 0
+    end
+
+    local texturePath = getSecondaryPowerTexturePath(resource, specID)
+    local overflowTexturePath = resource.overflowTexture
+    if secretCurrent then
+        for i = 1, #bar.Icons do
+            local icon = bar.Icons[i]
+            local fillBar = ensureSecondaryPowerSecretFillBar(bar, i)
+            if i <= displayMaxPower then
+                icon:SetTexture(texturePath)
+                icon:SetAlpha(SECONDARY_POWER_EMPTY_ALPHA)
+                icon:SetSize(iconSize, iconSize)
+                icon:ClearAllPoints()
+                icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
+                icon:Show()
+
+                if fillBar then
+                    fillBar:ClearAllPoints()
+                    fillBar:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+                    fillBar:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+                    fillBar:SetMinMaxValues(i - 1, i)
+                    fillBar:SetValue(current)
+                    fillBar:SetStatusBarTexture(texturePath)
+                    fillBar:SetStatusBarColor(1, 1, 1, 1)
+
+                    local statusTexture = fillBar:GetStatusBarTexture()
+                    if statusTexture then
+                        statusTexture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                    end
+                    fillBar:Show()
+                end
+            else
+                icon:Hide()
+                if fillBar then
+                    fillBar:Hide()
+                end
+            end
+        end
+
+        bar:Show()
+        return
+    end
+
+    hideSecondaryPowerSecretFillBars(bar)
+    for i = 1, #bar.Icons do
+        local icon = bar.Icons[i]
+        if i <= displayMaxPower then
+            if overflowTexturePath and i <= overflowCount then
+                icon:SetTexture(overflowTexturePath)
+            else
+                icon:SetTexture(texturePath)
+            end
+            icon:SetAlpha(i <= displayCurrent and 1 or SECONDARY_POWER_EMPTY_ALPHA)
+            icon:SetSize(iconSize, iconSize)
+            icon:ClearAllPoints()
+            icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
+            icon:Show()
+        else
+            icon:Hide()
+        end
+    end
+
+    bar:Show()
+end
+
+local function renderSecondaryPowerSegments(bar, resource, specID, current, maxPower, displayMaxPower, secretCurrent)
+    if not bar or type(bar.Segments) ~= "table" then
+        return
+    end
+
+    if bar.Icons then
+        for i = 1, #bar.Icons do
+            bar.Icons[i]:Hide()
+        end
+    end
+    if not secretCurrent then
+        hideSecondaryPowerSecretFillBars(bar)
+    end
+
+    local segmentCount = Util:Clamp(maxPower, 1, SECONDARY_POWER_MAX_ICONS)
+    local pixelPerfect = Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled()
+    local layoutUnit = (pixelPerfect and Style and type(Style.GetPixelSize) == "function" and Style:GetPixelSize()) or 1
+    if type(layoutUnit) ~= "number" or layoutUnit <= 0 then
+        layoutUnit = 1
+    end
+
+    local outlineInsetUnits = 1
+    local spacingUnits = pixelPerfect and 1 or 2
+    local totalWidthUnits = math.max(1, math.floor(((bar:GetWidth() or 1) / layoutUnit) + 0.5))
+    local availableWidthUnits = math.max(1, totalWidthUnits - (outlineInsetUnits * 2))
+    local innerWidthUnits = math.max(1, availableWidthUnits - (spacingUnits * math.max(0, segmentCount - 1)))
+    local segmentWidthUnits = math.floor(innerWidthUnits / segmentCount)
+    if segmentWidthUnits < 1 then
+        segmentWidthUnits = 1
+    end
+
+    local rowWidthUnits = (segmentWidthUnits * segmentCount) + (spacingUnits * math.max(0, segmentCount - 1))
+    local startUnits = outlineInsetUnits + math.floor((availableWidthUnits - rowWidthUnits) * 0.5)
+    if startUnits < outlineInsetUnits then
+        startUnits = outlineInsetUnits
+    end
+
+    local outlineInset = outlineInsetUnits * layoutUnit
+    local stepX = (segmentWidthUnits + spacingUnits) * layoutUnit
+    local segmentWidth = segmentWidthUnits * layoutUnit
+
+    for i = 1, #bar.Segments do
+        local segment = bar.Segments[i]
+        local fillBar = nil
+        if secretCurrent then
+            fillBar = ensureSecondaryPowerSecretFillBar(bar, i)
+        elseif type(bar.SecretFillBars) == "table" then
+            fillBar = bar.SecretFillBars[i]
+        end
+
+        if i <= segmentCount then
+            local red, green, blue, alpha = getSecondaryPowerBarColor(resource, specID, i, displayMaxPower)
+            segment:ClearAllPoints()
+            segment:SetPoint("TOPLEFT", bar, "TOPLEFT", (startUnits * layoutUnit) + ((i - 1) * stepX), -outlineInset)
+            segment:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", (startUnits * layoutUnit) + ((i - 1) * stepX), outlineInset)
+            segment:SetWidth(segmentWidth)
+            segment:SetStatusBarColor(red, green, blue, alpha)
+
+            if secretCurrent then
+                setStatusBarValueSafe(segment, 0, 1)
+                if fillBar then
+                    fillBar:ClearAllPoints()
+                    fillBar:SetPoint("TOPLEFT", segment, "TOPLEFT", 0, 0)
+                    fillBar:SetPoint("BOTTOMRIGHT", segment, "BOTTOMRIGHT", 0, 0)
+                    fillBar:SetMinMaxValues(i - 1, i)
+                    fillBar:SetValue(current)
+                    if Style and type(Style.ApplyStatusBarTexture) == "function" then
+                        Style:ApplyStatusBarTexture(fillBar)
+                    end
+                    fillBar:SetStatusBarColor(red, green, blue, alpha)
+
+                    local statusTexture = fillBar:GetStatusBarTexture()
+                    if statusTexture then
+                        statusTexture:SetTexCoord(0, 1, 0, 1)
+                    end
+                    fillBar:Show()
+                end
+            else
+                if fillBar then
+                    fillBar:Hide()
+                end
+                setStatusBarValueSafe(segment, Util:Clamp(current - (i - 1), 0, 1), 1)
+            end
+
+            segment:Show()
+        else
+            segment:Hide()
+            if fillBar then
+                fillBar:Hide()
+            end
+        end
+    end
+
+    bar:Show()
 end
 
 -- Start or stop the lightweight poll needed by secret-value secondary resources.
@@ -3200,88 +3466,13 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     if not secretCurrent and resource.overflowTexture and current > displayMaxPower then
         overflowCount = Util:Clamp(current - displayMaxPower, 0, displayMaxPower)
     end
-
-    local availableWidth = math.max(1, bar:GetWidth() or 1)
-    local availableHeight = math.max(1, bar:GetHeight() or 1)
-    local spacing = (Style and type(Style.GetPixelSize) == "function" and Style:GetPixelSize()) or 1
-    if not Style or type(Style.IsPixelPerfectEnabled) ~= "function" or not Style:IsPixelPerfectEnabled() then
-        spacing = 2
-    end
-
-    local iconSize = math.floor(
-        math.min(availableHeight, (availableWidth - (spacing * math.max(0, displayMaxPower - 1))) / displayMaxPower) + 0.5
-    )
-    if iconSize < 1 then
-        iconSize = 1
-    end
-
-    local rowWidth = (iconSize * displayMaxPower) + (spacing * math.max(0, displayMaxPower - 1))
-    local startX = math.floor(((availableWidth - rowWidth) * 0.5) + 0.5)
-    if startX < 0 then
-        startX = 0
-    end
-
-    local texturePath = getSecondaryPowerTexturePath(resource, specID)
-    local overflowTexturePath = resource.overflowTexture
-    if secretCurrent then
-        for i = 1, #bar.Icons do
-            local icon = bar.Icons[i]
-            local fillBar = ensureSecondaryPowerSecretFillBar(bar, i)
-            if i <= displayMaxPower then
-                icon:SetTexture(texturePath)
-                icon:SetAlpha(SECONDARY_POWER_EMPTY_ALPHA)
-                icon:SetSize(iconSize, iconSize)
-                icon:ClearAllPoints()
-                icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
-                icon:Show()
-
-                if fillBar then
-                    fillBar:ClearAllPoints()
-                    fillBar:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
-                    fillBar:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
-                    fillBar:SetMinMaxValues(i - 1, i)
-                    fillBar:SetValue(current)
-                    fillBar:SetStatusBarTexture(texturePath)
-                    fillBar:SetStatusBarColor(1, 1, 1, 1)
-
-                    local statusTexture = fillBar:GetStatusBarTexture()
-                    if statusTexture then
-                        statusTexture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-                    end
-                    fillBar:Show()
-                end
-            else
-                icon:Hide()
-                if fillBar then
-                    fillBar:Hide()
-                end
-            end
-        end
-
-        bar:Show()
+    local displayMode = getSecondaryPowerDisplayMode(bar._displayMode)
+    if displayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
+        renderSecondaryPowerSegments(bar, resource, specID, current, maxPower, displayMaxPower, secretCurrent)
         return
     end
 
-    hideSecondaryPowerSecretFillBars(bar)
-    for i = 1, #bar.Icons do
-        local icon = bar.Icons[i]
-        if i <= displayMaxPower then
-            if overflowTexturePath and i <= overflowCount then
-                icon:SetTexture(overflowTexturePath)
-            else
-                icon:SetTexture(texturePath)
-            end
-            icon:SetAlpha(i <= displayCurrent and 1 or SECONDARY_POWER_EMPTY_ALPHA)
-            icon:SetSize(iconSize, iconSize)
-            icon:ClearAllPoints()
-            icon:SetPoint("LEFT", bar, "LEFT", startX + ((i - 1) * (iconSize + spacing)), 0)
-            icon:Show()
-        else
-            icon:Hide()
-        end
-    end
-
-    bar:Show()
+    renderSecondaryPowerIcons(bar, resource, specID, current, displayCurrent, displayMaxPower, overflowCount, secretCurrent)
 end
 
 -- Refresh tertiary power bar.
