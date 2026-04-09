@@ -1,7 +1,7 @@
 -- ============================================================================
 -- UNIT FRAMES MODULE
 -- ============================================================================
--- Handles player/pet/target/focus style frames: event routing, visibility,
+-- Handles player/pet/target/focus/boss style frames: event routing, visibility,
 -- status/cast updates, and detached power element positioning.
 
 local _, ns = ...
@@ -12,7 +12,7 @@ local Style = ns.Style
 local Util = ns.Util
 local AuraSafety = ns.AuraSafety
 
--- Runtime owner for player, pet, target, and focus style frames.
+-- Runtime owner for player, pet, target, focus, and boss style frames.
 local UnitFrames = ns.Object:Extend()
 
 ---@class mummuEditModeSelection : Frame
@@ -40,6 +40,15 @@ local UnitFrames = ns.Object:Extend()
 ---@field barColorBySpecID table<number, number[]>?
 ---@field overflowBarColor number[]?
 
+local BOSS_CONFIG_UNIT = "boss"
+local BOSS_UNIT_TOKENS = {
+    "boss1",
+    "boss2",
+    "boss3",
+    "boss4",
+    "boss5",
+}
+
 -- Fixed display order for unit-frame creation and refresh.
 local FRAME_ORDER = {
     "player",
@@ -48,6 +57,11 @@ local FRAME_ORDER = {
     "targettarget",
     "focus",
     "focustarget",
+    "boss1",
+    "boss2",
+    "boss3",
+    "boss4",
+    "boss5",
 }
 -- Dynamic units use secure visibility state drivers so they can appear/disappear
 -- during combat without insecure Show/Hide calls.
@@ -57,6 +71,11 @@ local DYNAMIC_VISIBILITY_DRIVERS = {
     targettarget = "[@targettarget,exists] show; hide",
     focus = "[@focus,exists] show; hide",
     focustarget = "[@focustarget,exists] show; hide",
+    boss1 = "[@boss1,exists] show; hide",
+    boss2 = "[@boss2,exists] show; hide",
+    boss3 = "[@boss3,exists] show; hide",
+    boss4 = "[@boss4,exists] show; hide",
+    boss5 = "[@boss5,exists] show; hide",
 }
 -- Global frame names used when creating custom unit frames.
 local FRAME_NAME_BY_UNIT = {
@@ -66,6 +85,11 @@ local FRAME_NAME_BY_UNIT = {
     targettarget = "mummuFramesTargetTargetFrame",
     focus = "mummuFramesFocusFrame",
     focustarget = "mummuFramesFocusTargetFrame",
+    boss1 = "mummuFramesBoss1Frame",
+    boss2 = "mummuFramesBoss2Frame",
+    boss3 = "mummuFramesBoss3Frame",
+    boss4 = "mummuFramesBoss4Frame",
+    boss5 = "mummuFramesBoss5Frame",
 }
 -- Blizzard frame globals that can be hidden or restored by unit token.
 local BLIZZARD_FRAME_NAME_BY_UNIT = {
@@ -75,6 +99,11 @@ local BLIZZARD_FRAME_NAME_BY_UNIT = {
     targettarget = "TargetFrameToT",
     focus = "FocusFrame",
     focustarget = "FocusFrameToT",
+    boss1 = "Boss1TargetFrame",
+    boss2 = "Boss2TargetFrame",
+    boss3 = "Boss3TargetFrame",
+    boss4 = "Boss4TargetFrame",
+    boss5 = "Boss5TargetFrame",
 }
 local GLOBAL_HIDE_BLIZZARD_UNITS = {
     player = true,
@@ -82,6 +111,11 @@ local GLOBAL_HIDE_BLIZZARD_UNITS = {
     targettarget = true,
     focus = true,
     focustarget = true,
+    boss1 = true,
+    boss2 = true,
+    boss3 = true,
+    boss4 = true,
+    boss5 = true,
 }
 -- Unit tokens this module knows how to build and refresh.
 local SUPPORTED_UNITS = {
@@ -91,6 +125,11 @@ local SUPPORTED_UNITS = {
     targettarget = true,
     focus = true,
     focustarget = true,
+    boss1 = true,
+    boss2 = true,
+    boss3 = true,
+    boss4 = true,
+    boss5 = true,
 }
 -- Static labels shown for units that do not exist in preview mode.
 local TEST_NAME_BY_UNIT = {
@@ -100,6 +139,11 @@ local TEST_NAME_BY_UNIT = {
     targettarget = L.UNIT_TEST_TARGETTARGET or "Target's Target",
     focus = L.UNIT_TEST_FOCUS or "Focus",
     focustarget = L.UNIT_TEST_FOCUSTARGET or "Focus Target",
+    boss1 = string.format("%s 1", L.CONFIG_TAB_BOSS or "Boss"),
+    boss2 = string.format("%s 2", L.CONFIG_TAB_BOSS or "Boss"),
+    boss3 = string.format("%s 3", L.CONFIG_TAB_BOSS or "Boss"),
+    boss4 = string.format("%s 4", L.CONFIG_TAB_BOSS or "Boss"),
+    boss5 = string.format("%s 5", L.CONFIG_TAB_BOSS or "Boss"),
 }
 local DEFAULT_AURA_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 local UNIT_AURA_BUTTON_GAP = 2
@@ -220,6 +264,52 @@ local function applyCastBarTextStyle(frame, unitConfig)
     local cbFontSize = getResolvedCastBarFontSize(unitConfig)
     Style:ApplyFont(frame.CastBar.SpellText, cbFontSize, "OUTLINE")
     Style:ApplyFont(frame.CastBar.TimeText, cbFontSize, "OUTLINE")
+end
+
+local function getBossUnitIndex(unitToken)
+    if type(unitToken) ~= "string" then
+        return nil
+    end
+
+    local matchedIndex = string.match(unitToken, "^boss([1-5])$")
+    return matchedIndex and tonumber(matchedIndex) or nil
+end
+
+local function isBossUnitToken(unitToken)
+    return getBossUnitIndex(unitToken) ~= nil
+end
+
+local function getConfigUnitToken(unitToken)
+    if isBossUnitToken(unitToken) then
+        return BOSS_CONFIG_UNIT
+    end
+    return unitToken
+end
+
+local function getUnitConfigForToken(owner, unitToken)
+    if not owner or not owner.dataHandle then
+        return nil
+    end
+    return owner.dataHandle:GetUnitConfig(getConfigUnitToken(unitToken))
+end
+
+local function getBossFrameYOffset(unitToken, unitConfig)
+    local bossIndex = getBossUnitIndex(unitToken)
+    if not bossIndex or bossIndex <= 1 then
+        return 0
+    end
+
+    local height = Util:Clamp(tonumber(unitConfig and unitConfig.height) or 32, 18, 160)
+    local spacing = Util:Clamp(tonumber(unitConfig and unitConfig.spacing) or 8, 0, 80)
+    if Style:IsPixelPerfectEnabled() then
+        height = Style:Snap(height)
+        spacing = Style:Snap(spacing)
+    else
+        height = math.floor(height + 0.5)
+        spacing = math.floor(spacing + 0.5)
+    end
+
+    return -((bossIndex - 1) * (height + spacing))
 end
 
 -- Convert an anchor point into the opposite growth direction for aura buttons.
@@ -1407,6 +1497,7 @@ function UnitFrames:OnEnable()
     self:CreateTargetTargetFrame()
     self:CreateFocusFrame()
     self:CreateFocusTargetFrame()
+    self:CreateBossFrames()
     self:RegisterEvents()
     self:RefreshVisibilityDrivers()
     self:RefreshAll(true)
@@ -1551,6 +1642,8 @@ function UnitFrames:SaveFrameAnchorFromEditMode(frame)
         return
     end
 
+    local configUnitToken = getConfigUnitToken(frame.unitToken)
+    local unitConfig = getUnitConfigForToken(self, frame.unitToken)
     local centerX, centerY = frame:GetCenter()
     local parentX, parentY = UIParent:GetCenter()
     if not centerX or not centerY or not parentX or not parentY then
@@ -1576,11 +1669,15 @@ function UnitFrames:SaveFrameAnchorFromEditMode(frame)
         offsetY = math.floor(offsetY + 0.5)
     end
 
-    self.dataHandle:SetUnitConfig(frame.unitToken, "point", "CENTER")
-    self.dataHandle:SetUnitConfig(frame.unitToken, "relativePoint", "CENTER")
-    self.dataHandle:SetUnitConfig(frame.unitToken, "x", offsetX)
-    self.dataHandle:SetUnitConfig(frame.unitToken, "y", offsetY)
-    self:RefreshFrame(frame.unitToken, true)
+    self.dataHandle:SetUnitConfig(configUnitToken, "point", "CENTER")
+    self.dataHandle:SetUnitConfig(configUnitToken, "relativePoint", "CENTER")
+    self.dataHandle:SetUnitConfig(configUnitToken, "x", offsetX)
+    self.dataHandle:SetUnitConfig(configUnitToken, "y", offsetY - getBossFrameYOffset(frame.unitToken, unitConfig))
+    if isBossUnitToken(frame.unitToken) then
+        self:RefreshBossFrames(true)
+    else
+        self:RefreshFrame(frame.unitToken, true)
+    end
 end
 
 -- Handle edit mode enter event.
@@ -1832,7 +1929,7 @@ function UnitFrames:RefreshVisibilityDrivers(forceDisable, profileOverride)
         if frame then
             local shouldUseDriver = false
             if forceDisable ~= true and self.dataHandle then
-                local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+                local unitConfig = getUnitConfigForToken(self, unitToken)
                 shouldUseDriver = self:CanUseSecureDriverVisibility(unitToken, profile, unitConfig)
             end
             self:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)
@@ -2201,7 +2298,7 @@ function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
 
     self:EnsureAuraStorage(frame)
 
-    local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+    local unitConfig = getUnitConfigForToken(self, unitToken)
     local auraConfig = unitConfig and unitConfig.aura or nil
     local buffsConfig = auraConfig and auraConfig.buffs or nil
     local debuffsConfig = auraConfig and auraConfig.debuffs or nil
@@ -2237,7 +2334,7 @@ function UnitFrames:CreateUnitFrame(unitToken)
         return self.frames[unitToken]
     end
 
-    local cfg = self.dataHandle:GetUnitConfig(unitToken)
+    local cfg = getUnitConfigForToken(self, unitToken)
     local frame = self.globalFrames:CreateUnitFrameBase(
         FRAME_NAME_BY_UNIT[unitToken],
         UIParent,
@@ -2313,6 +2410,18 @@ function UnitFrames:CreateFocusTargetFrame()
     local frame = self:CreateUnitFrame("focustarget")
     self:EnsureObservedRangeOnUpdate(frame)
     return frame
+end
+
+-- Create one boss frame from the shared boss configuration.
+function UnitFrames:CreateBossFrame(unitToken)
+    return self:CreateUnitFrame(unitToken)
+end
+
+-- Create all boss frames.
+function UnitFrames:CreateBossFrames()
+    for index = 1, #BOSS_UNIT_TOKENS do
+        self:CreateBossFrame(BOSS_UNIT_TOKENS[index])
+    end
 end
 
 -- Return blizzard unit frame.
@@ -2439,7 +2548,7 @@ function UnitFrames:ApplyBlizzardFrameVisibility()
 
     for i = 1, #FRAME_ORDER do
         local unitToken = FRAME_ORDER[i]
-        local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+        local unitConfig = getUnitConfigForToken(self, unitToken)
         local shouldHide = addonEnabled and (unitConfig.hideBlizzardFrame == true or (hideBlizzardUnitsGlobal and GLOBAL_HIDE_BLIZZARD_UNITS[unitToken] == true))
         self:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
 
@@ -3867,7 +3976,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
 
     local castBar = frame.CastBar
-    applyCastBarTextStyle(frame, self.dataHandle and self.dataHandle:GetUnitConfig(unitToken) or nil)
+    applyCastBarTextStyle(frame, getUnitConfigForToken(self, unitToken))
     if not castBar._enabled then
         stopCastBarTimer(castBar)
         return
@@ -4191,6 +4300,13 @@ function UnitFrames:RefreshAll(forceLayout)
     end
 end
 
+-- Refresh only the shared boss-frame set.
+function UnitFrames:RefreshBossFrames(forceLayout)
+    for index = 1, #BOSS_UNIT_TOKENS do
+        self:RefreshFrame(BOSS_UNIT_TOKENS[index], forceLayout)
+    end
+end
+
 -- Refresh one managed unit frame.
 function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpdateInfo)
     local frame = self.frames[unitToken]
@@ -4202,7 +4318,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
 
     local profile = self.dataHandle:GetProfile()
     local testMode = profile and profile.testMode == true
-    local unitConfig = self.dataHandle:GetUnitConfig(unitToken)
+    local unitConfig = getUnitConfigForToken(self, unitToken)
     if self:IsDriverVisibilityUnit(unitToken) then
         local shouldUseDriver = self:CanUseSecureDriverVisibility(unitToken, profile, unitConfig)
         self:ApplyVisibilityDriver(frame, unitToken, shouldUseDriver)

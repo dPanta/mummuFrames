@@ -43,9 +43,11 @@ local MINIMAP_BACKGROUND_TEXTURE = "Interface\\Minimap\\UI-Minimap-Background"
 -- ============================================================================
 
 -- Fixed ordering for frame units shown in the Frames hub.
+local BOSS_CONFIG_UNIT = "boss"
 local UNIT_TAB_ORDER = {
     "party",
     "raid",
+    BOSS_CONFIG_UNIT,
     "player",
     "pet",
     "target",
@@ -58,6 +60,7 @@ local UNIT_TAB_ORDER = {
 local UNIT_TAB_LABELS = {
     party = L.CONFIG_TAB_PARTY or "Party",
     raid = L.CONFIG_TAB_RAID or "Raid",
+    boss = L.CONFIG_TAB_BOSS or "Boss",
     player = L.CONFIG_TAB_PLAYER or "Player",
     pet = L.CONFIG_TAB_PET or "Pet",
     target = L.CONFIG_TAB_TARGET or "Target",
@@ -77,6 +80,10 @@ local FRAME_SELECTOR_GROUPS = {
         units = { "party", "raid" },
     },
     {
+        label = L.CONFIG_FRAMES_GROUP_ENCOUNTER or "Encounter",
+        units = { BOSS_CONFIG_UNIT },
+    },
+    {
         label = L.CONFIG_FRAMES_GROUP_PERSONAL or "Personal",
         units = { "player", "pet" },
     },
@@ -88,6 +95,7 @@ local FRAME_SELECTOR_GROUPS = {
 local FRAME_UNIT_DESCRIPTION = {
     party = L.CONFIG_FRAME_DESC_PARTY or "Tune party spacing, role indicators, and curated Midnight alerts.",
     raid = L.CONFIG_FRAME_DESC_RAID or "Configure raid sizing, sorting, and group layout for larger rosters.",
+    boss = L.CONFIG_FRAME_DESC_BOSS or "Configure a stacked boss-frame set with shared sizing, spacing, and primary power display.",
     player = L.CONFIG_FRAME_DESC_PLAYER or "Shape your player frame, cast bar, and class resource layout.",
     pet = L.CONFIG_FRAME_DESC_PET or "Keep the pet frame compact and aligned with your primary layout.",
     target = L.CONFIG_FRAME_DESC_TARGET or "Adjust target readability, cast visibility, and aura placement.",
@@ -95,6 +103,10 @@ local FRAME_UNIT_DESCRIPTION = {
     focus = L.CONFIG_FRAME_DESC_FOCUS or "Set up a focus frame that mirrors your target priorities.",
     focustarget = L.CONFIG_FRAME_DESC_FOCUSTARGET or "Tune the compact focus-target frame to stay readable alongside your main targets.",
 }
+
+local function isBossConfigUnit(unitToken)
+    return unitToken == BOSS_CONFIG_UNIT
+end
 
 -- Named anchor presets for buff placement.
 local BUFF_POSITION_PRESETS = {
@@ -1964,6 +1976,15 @@ function Configuration:_RefreshUnitScope(unitFrames, partyFrames, raidFrames, un
         return
     end
 
+    if isBossConfigUnit(unitToken) then
+        if unitFrames and type(unitFrames.RefreshBossFrames) == "function" then
+            unitFrames:RefreshBossFrames(forceLayout == true)
+        elseif unitFrames and type(unitFrames.RefreshAll) == "function" then
+            unitFrames:RefreshAll(forceLayout == true)
+        end
+        return
+    end
+
     if unitFrames and type(unitFrames.RefreshFrame) == "function" then
         unitFrames:RefreshFrame(unitToken, forceLayout == true)
     elseif unitFrames and type(unitFrames.RefreshAll) == "function" then
@@ -2011,6 +2032,12 @@ function Configuration:_ApplyQueuedRefreshRequest(request)
                 elseif unitToken == "raid" then
                     if raidFrames and type(raidFrames.RefreshAll) == "function" then
                         raidFrames:RefreshAll(false)
+                    end
+                elseif isBossConfigUnit(unitToken) then
+                    if unitFrames and type(unitFrames.RefreshBossFrames) == "function" then
+                        unitFrames:RefreshBossFrames(normalizedIntent == REFRESH_INTENT_APPEARANCE)
+                    elseif unitFrames and type(unitFrames.RefreshAll) == "function" then
+                        unitFrames:RefreshAll(normalizedIntent == REFRESH_INTENT_APPEARANCE)
                     end
                 elseif unitFrames and type(unitFrames.RefreshFrame) == "function" then
                     unitFrames:RefreshFrame(unitToken, normalizedIntent == REFRESH_INTENT_APPEARANCE)
@@ -4317,6 +4344,8 @@ function Configuration:BuildUnitPage(page, unitToken)
         hideBlizzardLabel = L.CONFIG_PARTY_HIDE_BLIZZARD or hideBlizzardLabel
     elseif unitToken == "raid" then
         hideBlizzardLabel = L.CONFIG_RAID_HIDE_BLIZZARD or "Hide Blizzard raid frames"
+    elseif isBossConfigUnit(unitToken) then
+        hideBlizzardLabel = L.CONFIG_BOSS_HIDE_BLIZZARD or "Hide Blizzard boss frames"
     end
 
     local cursor = createSection(
@@ -4405,6 +4434,20 @@ function Configuration:BuildUnitPage(page, unitToken)
             self:RegisterDropdownWidget(widgetRegistry, partyLayoutDropdown, false)
         end
         layoutAnchor = partyLayoutDropdown or spacing.slider
+    elseif isBossConfigUnit(unitToken) then
+        local spacing = registerNumeric(
+            "Spacing",
+            L.CONFIG_BOSS_SPACING or "Gap between boss frames",
+            0,
+            80,
+            1,
+            height.slider,
+            "spacing",
+            REFRESH_INTENT_LAYOUT,
+            numericValue("spacing", 8),
+            function(value) return math.floor((tonumber(value) or 0) + 0.5) end
+        )
+        layoutAnchor = spacing.slider
     elseif unitToken == "raid" then
         local spacingX = registerNumeric(
             "SpacingX",

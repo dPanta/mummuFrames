@@ -31,6 +31,42 @@ local RESTING_ICON_TEXCOORD = { 0.25390625, 0.66796875, 0.138671875, 0.913085937
 local LEADER_ICON_TEXCOORD = { 0.25390625, 0.67578125, 0.138671875, 0.9130859375 } -- 260,692,142,935
 local RESTING_ICON_ASPECT = 424 / 793
 local LEADER_ICON_ASPECT = 432 / 793
+local BOSS_CONFIG_UNIT = "boss"
+
+local function getBossUnitIndex(unitToken)
+    if type(unitToken) ~= "string" then
+        return nil
+    end
+
+    local matchedIndex = string.match(unitToken, "^boss([1-5])$")
+    return matchedIndex and tonumber(matchedIndex) or nil
+end
+
+local function getConfigUnitToken(unitToken)
+    if getBossUnitIndex(unitToken) then
+        return BOSS_CONFIG_UNIT
+    end
+    return unitToken
+end
+
+local function getBossFrameYOffset(unitToken, unitConfig, pixelPerfect)
+    local bossIndex = getBossUnitIndex(unitToken)
+    if not bossIndex or bossIndex <= 1 then
+        return 0
+    end
+
+    local height = Util:Clamp(tonumber(unitConfig and unitConfig.height) or 32, 18, 160)
+    local spacing = Util:Clamp(tonumber(unitConfig and unitConfig.spacing) or 8, 0, 80)
+    if pixelPerfect then
+        height = Style:Snap(height)
+        spacing = Style:Snap(spacing)
+    else
+        height = math.floor(height + 0.5)
+        spacing = math.floor(spacing + 0.5)
+    end
+
+    return -((bossIndex - 1) * (height + spacing))
+end
 
 -- Resolve a reliable unit token for tooltip/click-cast context.
 local function getTooltipUnit(frame)
@@ -926,7 +962,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         return
     end
 
-    local unitConfig = dataHandle:GetUnitConfig(unitToken)
+    local unitConfig = dataHandle:GetUnitConfig(getConfigUnitToken(unitToken))
     if type(unitConfig) ~= "table" then
         return
     end
@@ -976,7 +1012,7 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
             UIParent,
             unitConfig.relativePoint or "CENTER",
             x,
-            y
+            y + getBossFrameYOffset(unitToken, unitConfig, pixelPerfect)
         )
     end
 

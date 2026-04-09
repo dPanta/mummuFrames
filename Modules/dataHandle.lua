@@ -109,6 +109,7 @@ local NAME_TEXT_UNITS = {
     targettarget = true,
     focus = true,
     focustarget = true,
+    boss = true,
 }
 
 -- New unit defaults.
@@ -199,6 +200,17 @@ local function newUnitDefaults(point, relativePoint, x, y, width, height)
     }
 end
 
+-- Shared defaults for the stacked boss-frame group.
+local function newBossDefaults()
+    local defaults = newUnitDefaults("RIGHT", "RIGHT", -220, 120, 180, 32)
+    defaults.powerHeight = 8
+    defaults.fontSize = 11
+    defaults.spacing = 8
+    defaults.aura.buffs.enabled = false
+    defaults.aura.debuffs.enabled = false
+    return defaults
+end
+
 local DEFAULT_PROFILE = {
     enabled = true,
     hideBlizzardUnitFrames = false,
@@ -219,6 +231,7 @@ local DEFAULT_PROFILE = {
     },
     -- Per-unit layout defaults.
     units = {
+        boss = newBossDefaults(),
         player = newUnitDefaults("CENTER", "CENTER", -260, -220, 240, 46),
         pet = newUnitDefaults("CENTER", "CENTER", -260, -275, 170, 32),
         target = newUnitDefaults("CENTER", "CENTER", 260, -220, 240, 46),
@@ -847,7 +860,7 @@ local function getDefaultUnitTemplate(unitToken, defaultFontPath)
     local units = type(defaults.units) == "table" and defaults.units or DEFAULT_PROFILE.units
     local defaultUnit = units[unitToken]
     if type(defaultUnit) ~= "table" then
-        defaultUnit = units.player or DEFAULT_PROFILE.units.player
+        defaultUnit = DEFAULT_PROFILE.units[unitToken] or units.player or DEFAULT_PROFILE.units.player
     end
     return defaultUnit
 end

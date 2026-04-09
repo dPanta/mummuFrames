@@ -5,6 +5,12 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.4.0 - 2026-04-09
+- Added custom boss frames for `boss1` through `boss5`, including shared live/test refresh handling and support for hiding the Blizzard boss frames.
+- Added a dedicated `Boss` page to the Frames configuration under a new `Encounter` group, with shared controls for boss-frame size, spacing, position, text, auras, and Blizzard-frame replacement.
+- Added primary resource-bar support to the boss frame set and stacked the boss frames from one shared layout so edit-mode repositioning moves the whole group cleanly.
+- Bumped addon metadata to `3.4.0`.
+
 ## 3.3.2 - 2026-04-09
 - Fixed outlined text refreshes on unit-frame name/health text and castbar text so `target`, `targettarget`, `focus`, and `focustarget` now keep their configured outline styling.
 - Fixed appearance-only refreshes so shared font changes reapply immediately on unit frames instead of waiting for a later full layout refresh.
@@ -51,7 +57,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 
 ## 3.0.0 - 2026-03-27
 - Bumped addon metadata to `3.0.0`.
-
-## 2.6.1 - 2026-03-26
-- Fixed the post-`2.6.0` range regression so explicit group range events drive party/raid fading again without forcing observed unit frames permanently out of range.
-- Bumped addon metadata to `2.6.1`.
