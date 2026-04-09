@@ -5,6 +5,16 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## Unreleased
 - No changes yet.
 
+## 3.3.2 - 2026-04-09
+- Fixed outlined text refreshes on unit-frame name/health text and castbar text so `target`, `targettarget`, `focus`, and `focustarget` now keep their configured outline styling.
+- Fixed appearance-only refreshes so shared font changes reapply immediately on unit frames instead of waiting for a later full layout refresh.
+- Bumped addon metadata to `3.3.2`.
+
+## 3.3.1 - 2026-04-09
+- Added clockwise swipe countdowns to tracked self-cast HoT and aura indicators on party and raid frames, including both icon and corner-square displays.
+- Hardened tracked-aura cooldown rendering against Midnight secret-value wrappers by keeping timer math on the existing safe aura-number path and avoiding new taint-prone aura queries.
+- Bumped addon metadata to `3.3.1`.
+
 ## 3.3.0 - 2026-04-06
 - Added a player secondary-resource display mode switch so supported resources can render as the existing icons or as a segmented bar.
 - Added segmented secondary-bar sizing controls, attached in-frame placement for segmented mode, and detached movable/snappable secondary bars in Blizzard Edit Mode.
@@ -45,12 +55,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## 2.6.1 - 2026-03-26
 - Fixed the post-`2.6.0` range regression so explicit group range events drive party/raid fading again without forcing observed unit frames permanently out of range.
 - Bumped addon metadata to `2.6.1`.
-
-## 2.6.0 - 2026-03-26
-- Fixed group range evaluation so party and raid frames treat checkable `UnitInRange` misses as truly out of range instead of silently failing open.
-- Bumped addon metadata to `2.6.0`.
-
-## 2.5.1 - 2026-03-26
-- Fixed party and raid out-of-range fading after the event-driven range rewrite by handling `UNIT_IN_RANGE_UPDATE` refreshes even when Midnight does not provide a stable unit token payload.
-- Hardened unit-frame font fallback so outlined text stays consistent even when the preferred font path cannot be assigned directly.
-- Bumped addon metadata to `2.5.1`.

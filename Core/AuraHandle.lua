@@ -81,6 +81,9 @@ local DEFAULT_TRACKER_SIZE = (Util and type(Util.GetTrackedAuraDefaultSize) == "
 local DEFAULT_TRACKER_SQUARE_SIZE = 8
 local MIN_TRACKER_SQUARE_SIZE = 4
 local MAX_TRACKER_SQUARE_SIZE = 24
+local TRACKER_COOLDOWN_SWIPE_TEXTURE = "Interface\\Buttons\\WHITE8x8"
+local TRACKER_COOLDOWN_ICON_SWIPE_ALPHA = 0.80
+local TRACKER_COOLDOWN_SQUARE_SWIPE_ALPHA = 0.92
 local GROUP_DEBUFF_BUTTON_GAP = 2
 local GROUP_DEBUFF_MAX_BUTTONS = 8
 local CENTER_DEFENSIVE_MIN_SIZE = 16
@@ -1807,6 +1810,79 @@ end
 
 -- Returns (or creates) the tracker indicator element for slotIndex on frame.
 -- Elements display a spell icon in a small overlay frame.
+local function configureTrackerCooldown(cooldownFrame, swipeAlpha)
+    if type(cooldownFrame) ~= "table" then
+        return
+    end
+
+    if type(cooldownFrame.SetReverse) == "function" then
+        pcall(cooldownFrame.SetReverse, cooldownFrame, true)
+    end
+    if type(cooldownFrame.SetDrawSwipe) == "function" then
+        pcall(cooldownFrame.SetDrawSwipe, cooldownFrame, true)
+    end
+    if type(cooldownFrame.SetDrawEdge) == "function" then
+        pcall(cooldownFrame.SetDrawEdge, cooldownFrame, false)
+    end
+    if type(cooldownFrame.SetDrawBling) == "function" then
+        pcall(cooldownFrame.SetDrawBling, cooldownFrame, false)
+    end
+    if type(cooldownFrame.SetHideCountdownNumbers) == "function" then
+        pcall(cooldownFrame.SetHideCountdownNumbers, cooldownFrame, true)
+    end
+    if type(cooldownFrame.SetSwipeTexture) == "function" then
+        pcall(cooldownFrame.SetSwipeTexture, cooldownFrame, TRACKER_COOLDOWN_SWIPE_TEXTURE)
+    end
+    if type(cooldownFrame.SetSwipeColor) == "function" then
+        pcall(cooldownFrame.SetSwipeColor, cooldownFrame, 0, 0, 0, swipeAlpha or TRACKER_COOLDOWN_ICON_SWIPE_ALPHA)
+    end
+end
+
+local function clearTrackerCooldown(cooldownFrame)
+    if type(cooldownFrame) ~= "table" then
+        return
+    end
+
+    if type(cooldownFrame.Clear) == "function" then
+        local ok = pcall(cooldownFrame.Clear, cooldownFrame)
+        if ok then
+            if type(cooldownFrame.Hide) == "function" then
+                cooldownFrame:Hide()
+            end
+            return
+        end
+    end
+
+    if type(cooldownFrame.SetCooldown) == "function" then
+        pcall(cooldownFrame.SetCooldown, cooldownFrame, 0, 0)
+    end
+    if type(cooldownFrame.Hide) == "function" then
+        cooldownFrame:Hide()
+    end
+end
+
+local function refreshTrackerCooldown(cooldownFrame, auraData)
+    if type(cooldownFrame) ~= "table" then
+        return
+    end
+
+    local duration = getSafeAuraNumericValue(type(auraData) == "table" and auraData.duration or nil, 0) or 0
+    local expirationTime = getSafeAuraNumericValue(type(auraData) == "table" and auraData.expirationTime or nil, 0) or 0
+    if duration > 0 and expirationTime > 0 and type(cooldownFrame.SetCooldown) == "function" then
+        local startTime = expirationTime - duration
+        if startTime < 0 then
+            startTime = 0
+        end
+        pcall(cooldownFrame.SetCooldown, cooldownFrame, startTime, duration)
+        if type(cooldownFrame.Show) == "function" then
+            cooldownFrame:Show()
+        end
+        return
+    end
+
+    clearTrackerCooldown(cooldownFrame)
+end
+
 local function ensureTrackerElement(frame, slotIndex)
     frame.HealerTrackerElements = frame.HealerTrackerElements or {}
     local key      = tostring(slotIndex)
@@ -1824,6 +1900,11 @@ local function ensureTrackerElement(frame, slotIndex)
     element.Icon:SetAllPoints()
     element.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
+    element.Cooldown = CreateFrame("Cooldown", nil, element, "CooldownFrameTemplate")
+    element.Cooldown:SetAllPoints(element)
+    configureTrackerCooldown(element.Cooldown, TRACKER_COOLDOWN_ICON_SWIPE_ALPHA)
+    element.Cooldown:Hide()
+
     frame.HealerTrackerElements[key] = element
     return element
 end
@@ -1835,6 +1916,7 @@ local function hideUnusedTrackerElements(frame, usedByKey)
     end
     for key, element in pairs(frame.HealerTrackerElements) do
         if not usedByKey[key] and element then
+            clearTrackerCooldown(element.Cooldown)
             element:Hide()
         end
     end
@@ -1875,6 +1957,10 @@ local function ensureTrackerSquareElement(frame, slotKey)
 
     element.Fill = element:CreateTexture(nil, "ARTWORK")
     element.Fill:SetAllPoints()
+
+    element.Cooldown = CreateFrame("Cooldown", nil, element, "CooldownFrameTemplate")
+    configureTrackerCooldown(element.Cooldown, TRACKER_COOLDOWN_SQUARE_SWIPE_ALPHA)
+    element.Cooldown:Hide()
 
     element.BorderTop = element:CreateTexture(nil, "BORDER")
     element.BorderTop:SetPoint("TOPLEFT", element, "TOPLEFT", 0, 0)
@@ -1929,6 +2015,12 @@ local function layoutTrackerSquareElement(frame, element, slotKey, size, entry)
     else
         element:SetPoint("TOPLEFT", parent, "TOPLEFT", offset + offsetX, -offset + offsetY)
     end
+
+    if element.Cooldown then
+        element.Cooldown:ClearAllPoints()
+        element.Cooldown:SetPoint("TOPLEFT", element, "TOPLEFT", offset, -offset)
+        element.Cooldown:SetPoint("BOTTOMRIGHT", element, "BOTTOMRIGHT", -offset, offset)
+    end
 end
 
 local function setTrackerSquareColor(element, colorData)
@@ -1947,6 +2039,7 @@ local function hideUnusedTrackerSquareElements(frame, usedBySlot)
 
     for slotKey, element in pairs(frame.HealerTrackerSquareElements) do
         if usedBySlot[slotKey] ~= true and type(element) == "table" then
+            clearTrackerCooldown(element.Cooldown)
             element:Hide()
         end
     end
@@ -3716,6 +3809,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
         if not safeSetTexture(element.Icon, resolveTrackedAuraIcon(request and request.spellName or nil, request and request.trackedSpellInfo or nil, auraData)) then
             safeSetTexture(element.Icon, DEFAULT_AURA_TEXTURE)
         end
+        refreshTrackerCooldown(element.Cooldown, auraData)
         element.Icon:Show()
         element:Show()
         usedIconSlots[tostring(slotIndex)] = true
@@ -3743,6 +3837,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
                             request.entry or request
                         )
                         setTrackerSquareColor(element, request.color or (request.entry and request.entry.color) or nil)
+                        refreshTrackerCooldown(element.Cooldown, auraData)
                         element:Show()
                         usedSquareSlots[slotKey] = true
                     end

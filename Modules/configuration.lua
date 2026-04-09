@@ -1984,7 +1984,18 @@ function Configuration:_ApplyQueuedRefreshRequest(request)
     end
 
     if request.global and not isLayoutRefreshIntent(request.global) then
-        self:_RefreshAllFrameModules(unitFrames, partyFrames, raidFrames, false)
+        local globalIntent = normalizeRefreshIntent(request.global)
+        -- Unit-frame text and castbar styling live inside the shared style pass,
+        -- so appearance refreshes need the unit-frame layout path as well.
+        if unitFrames and type(unitFrames.RefreshAll) == "function" then
+            unitFrames:RefreshAll(globalIntent == REFRESH_INTENT_APPEARANCE)
+        end
+        if partyFrames and type(partyFrames.RefreshAll) == "function" then
+            partyFrames:RefreshAll(false)
+        end
+        if raidFrames and type(raidFrames.RefreshAll) == "function" then
+            raidFrames:RefreshAll(false)
+        end
     elseif not request.global then
         if request.trackedAuras then
             self:_RefreshTrackedAuraModules(partyFrames, raidFrames)
@@ -1992,7 +2003,20 @@ function Configuration:_ApplyQueuedRefreshRequest(request)
 
         for unitToken, intent in pairs(request.units or {}) do
             if not isLayoutRefreshIntent(intent) then
-                self:_RefreshUnitScope(unitFrames, partyFrames, raidFrames, unitToken, false)
+                local normalizedIntent = normalizeRefreshIntent(intent)
+                if unitToken == "party" then
+                    if partyFrames and type(partyFrames.RefreshAll) == "function" then
+                        partyFrames:RefreshAll(false)
+                    end
+                elseif unitToken == "raid" then
+                    if raidFrames and type(raidFrames.RefreshAll) == "function" then
+                        raidFrames:RefreshAll(false)
+                    end
+                elseif unitFrames and type(unitFrames.RefreshFrame) == "function" then
+                    unitFrames:RefreshFrame(unitToken, normalizedIntent == REFRESH_INTENT_APPEARANCE)
+                elseif unitFrames and type(unitFrames.RefreshAll) == "function" then
+                    unitFrames:RefreshAll(normalizedIntent == REFRESH_INTENT_APPEARANCE)
+                end
             end
         end
     end

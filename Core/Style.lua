@@ -403,6 +403,52 @@ function Style:GetPlayerClassTextColor(unitToken)
     return self:GetClassTextColor(classToken)
 end
 
+local function normalizeFontFlags(flags)
+    if type(flags) ~= "string" then
+        return ""
+    end
+    return flags
+end
+
+local function normalizeFontSize(size)
+    local resolvedSize = math.floor((tonumber(size) or 0) + 0.5)
+    if resolvedSize < 0 then
+        resolvedSize = 0
+    end
+    return resolvedSize
+end
+
+local function getFontRequestKey(fontPath, size, flags)
+    return table.concat({
+        normalizeMediaPath(fontPath) or "",
+        tostring(normalizeFontSize(size)),
+        normalizeFontFlags(flags),
+    }, "|")
+end
+
+local function storeAppliedFontState(fontString, requestKey)
+    if not fontString then
+        return
+    end
+
+    local appliedPath, appliedSize, appliedFlags = fontString:GetFont()
+    fontString._mummuFontRequestKey = requestKey
+    fontString._mummuAppliedFontPath = normalizeMediaPath(appliedPath) or ""
+    fontString._mummuAppliedFontSize = normalizeFontSize(appliedSize)
+    fontString._mummuAppliedFontFlags = normalizeFontFlags(appliedFlags)
+end
+
+local function isAppliedFontStateCurrent(fontString, requestKey)
+    if not fontString or fontString._mummuFontRequestKey ~= requestKey then
+        return false
+    end
+
+    local currentPath, currentSize, currentFlags = fontString:GetFont()
+    return (normalizeMediaPath(currentPath) or "") == (fontString._mummuAppliedFontPath or "")
+        and normalizeFontSize(currentSize) == (fontString._mummuAppliedFontSize or 0)
+        and normalizeFontFlags(currentFlags) == (fontString._mummuAppliedFontFlags or "")
+end
+
 -- Apply font with fallback paths.
 function Style:ApplyFont(fontString, size, flags)
     if not fontString then
@@ -420,6 +466,11 @@ function Style:ApplyFont(fontString, size, flags)
         defaultFlags = style.fontFlags
     end
     local resolvedFlags = (flags == nil) and defaultFlags or flags
+    local requestKey = getFontRequestKey(self:GetFontPath(), resolvedSize, resolvedFlags)
+
+    if isAppliedFontStateCurrent(fontString, requestKey) then
+        return
+    end
 
     -- Normalize font path slashes and case.
     local function normalizePath(path)
@@ -533,6 +584,8 @@ function Style:ApplyFont(fontString, size, flags)
         fontString:SetShadowColor(0, 0, 0, 0)
         fontString:SetShadowOffset(0, 0)
     end
+
+    storeAppliedFontState(fontString, requestKey)
 end
 
 -- Apply status bar texture.

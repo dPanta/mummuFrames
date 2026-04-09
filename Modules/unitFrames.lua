@@ -183,6 +183,45 @@ local collectActiveGuardianStackStates
 local getSafeNumericValue
 local startCastBarTimer
 
+local function getResolvedUnitFontSize(unitConfig, profile)
+    local styleConfig = profile and profile.style or nil
+    local configuredFontSize = tonumber(unitConfig and unitConfig.fontSize)
+        or (styleConfig and tonumber(styleConfig.fontSize))
+        or 12
+    return math.floor(Util:Clamp(configuredFontSize, 8, 26) + 0.5)
+end
+
+local function getResolvedCastBarFontSize(unitConfig)
+    local castbarConfig = unitConfig and unitConfig.castbar or {}
+    local cbHeight = Util:Clamp(tonumber(castbarConfig.height) or 20, 8, 40)
+    if Style:IsPixelPerfectEnabled() then
+        cbHeight = Style:Snap(cbHeight)
+    else
+        cbHeight = math.floor(cbHeight + 0.5)
+    end
+    return Util:Clamp(math.floor(cbHeight * 0.55 + 0.5), 8, 20)
+end
+
+local function applyUnitFrameTextStyle(frame, unitConfig, profile)
+    if not frame or not frame.NameText or not frame.HealthText then
+        return
+    end
+
+    local fontSize = getResolvedUnitFontSize(unitConfig, profile)
+    Style:ApplyFont(frame.NameText, fontSize, "OUTLINE")
+    Style:ApplyFont(frame.HealthText, fontSize, "OUTLINE")
+end
+
+local function applyCastBarTextStyle(frame, unitConfig)
+    if not frame or not frame.CastBar then
+        return
+    end
+
+    local cbFontSize = getResolvedCastBarFontSize(unitConfig)
+    Style:ApplyFont(frame.CastBar.SpellText, cbFontSize, "OUTLINE")
+    Style:ApplyFont(frame.CastBar.TimeText, cbFontSize, "OUTLINE")
+end
+
 -- Convert an anchor point into the opposite growth direction for aura buttons.
 local function getAuraAnchorGrowth(anchorPoint)
     local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPLEFT"
@@ -3828,6 +3867,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
     end
 
     local castBar = frame.CastBar
+    applyCastBarTextStyle(frame, self.dataHandle and self.dataHandle:GetUnitConfig(unitToken) or nil)
     if not castBar._enabled then
         stopCastBarTimer(castBar)
         return
@@ -4251,6 +4291,8 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             power = 100
             maxPower = 100
         end
+
+        applyUnitFrameTextStyle(frame, unitConfig, profile)
 
         local healthR, healthG, healthB = resolveHealthColor(unitToken, exists)
         local powerR, powerG, powerB
