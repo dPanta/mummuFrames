@@ -4565,7 +4565,7 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     local sectionAnchor = fontSize.slider
     local showRoleIcon
-    local spellTargetHighlight
+    local incomingCastBoard
 
     if unitToken == "party" then
         cursor = createSection(
@@ -4582,15 +4582,15 @@ function Configuration:BuildUnitPage(page, unitToken)
             boolValue("showRoleIcon", true),
             -14
         )
-        spellTargetHighlight = registerCheckbox(
-            "SpellTargetHighlight",
-            L.CONFIG_PARTY_SPELL_TARGET_HIGHLIGHT or "Show curated Midnight cast target highlight",
+        incomingCastBoard = registerCheckbox(
+            "IncomingCastBoard",
+            L.CONFIG_PARTY_INCOMING_CAST_BOARD or "Show incoming enemy cast list",
             showRoleIcon,
-            "spellTargetHighlight.enabled",
+            "incomingCastBoard.enabled",
             REFRESH_INTENT_APPEARANCE,
-            boolValue("spellTargetHighlight.enabled", true)
+            boolValue("incomingCastBoard.enabled", true)
         )
-        sectionAnchor = spellTargetHighlight
+        sectionAnchor = incomingCastBoard
     end
 
     local buffsEnabled

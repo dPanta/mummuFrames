@@ -245,7 +245,7 @@ local DEFAULT_PROFILE = {
             showPlayer = true,
             showSelfWithoutGroup = true,
             showRoleIcon = true,
-            spellTargetHighlight = {
+            incomingCastBoard = {
                 enabled = true,
             },
             orientation = "vertical",

@@ -41,6 +41,53 @@ local DISPEL_ICON_SPELL_ID_BY_TYPE = {
     Poison = 213644,  -- Cleanse Toxins
     Disease = 213634, -- Purify Disease
 }
+-- Retail/Midnight dispel capability is spec/talent aware. Mirror it by
+-- checking the player's currently known dispel spells/passives instead of
+-- assuming a whole class can always remove every type.
+-- Sources used while auditing this table:
+--   * BigWigs retail dispel tables (BossPrototype.lua)
+--   * Warcraft Wiki pages for Improved Purify / Improved Cleanse /
+--     Improved Nature's Cure / Improved Detox
+--   * Evoker dispel spell data from local Midnight-era addon datasets
+local PLAYER_DISPEL_SPELLS_BY_TYPE = {
+    Magic = {
+        { spellID = 527 },     -- Purify (Priest)
+        { spellID = 77130 },   -- Purify Spirit (Shaman)
+        { spellID = 115450 },  -- Detox (Mistweaver Monk)
+        { spellID = 4987 },    -- Cleanse (Holy Paladin)
+        { spellID = 88423 },   -- Nature's Cure (Restoration Druid)
+        { spellID = 360823 },  -- Naturalize (Preservation Evoker)
+        { spellID = 89808, pet = true }, -- Singe Magic (Imp)
+    },
+    Curse = {
+        { spellID = 392378 },  -- Improved Nature's Cure (Restoration Druid)
+        { spellID = 2782 },    -- Remove Corruption (Druid)
+        { spellID = 383016 },  -- Improved Purify Spirit (Restoration Shaman)
+        { spellID = 51886 },   -- Cleanse Spirit (Elemental/Enhancement Shaman)
+        { spellID = 475 },     -- Remove Curse (Mage)
+        { spellID = 374251 },  -- Cauterizing Flame (Evoker)
+    },
+    Poison = {
+        { spellID = 392378 },  -- Improved Nature's Cure (Restoration Druid)
+        { spellID = 2782 },    -- Remove Corruption (Druid)
+        { spellID = 388874 },  -- Improved Detox (Mistweaver Monk)
+        { spellID = 218164 },  -- Detox (Brewmaster/Windwalker Monk)
+        { spellID = 393024 },  -- Improved Cleanse (Holy Paladin)
+        { spellID = 213644 },  -- Cleanse Toxins (Protection/Retribution Paladin)
+        { spellID = 360823 },  -- Naturalize (Preservation Evoker)
+        { spellID = 365585 },  -- Expunge (Devastation/Augmentation Evoker)
+        { spellID = 374251 },  -- Cauterizing Flame (Evoker)
+    },
+    Disease = {
+        { spellID = 390632 },  -- Improved Purify (Discipline/Holy Priest)
+        { spellID = 213634 },  -- Purify Disease (Shadow Priest)
+        { spellID = 388874 },  -- Improved Detox (Mistweaver Monk)
+        { spellID = 218164 },  -- Detox (Brewmaster/Windwalker Monk)
+        { spellID = 393024 },  -- Improved Cleanse (Holy Paladin)
+        { spellID = 213644 },  -- Cleanse Toxins (Protection/Retribution Paladin)
+        { spellID = 374251 },  -- Cauterizing Flame (Evoker)
+    },
+}
 local DISPEL_ICON_TEXTURE_BY_TYPE = {}
 local GROUP_AURA_SLOT_BATCH_SIZE = 16
 local GROUP_AURA_SLOT_SCAN_GUARD = 8
@@ -336,6 +383,7 @@ local clearGroupDebuffState
 local _spellIconCache = {}
 local _trackerSpellInfoCache = {}
 local _groupDispelColorCurve = nil
+local _playerDispelTypeSetCache = nil
 
 -- ---------------------------------------------------------------------------
 -- Pure helper functions
@@ -823,45 +871,6 @@ local function inferOwnerForUnit(unitToken)
     return nil
 end
 
--- Returns the set of debuff types the player can dispel, keyed by type string.
--- Unknown classes receive the full set as a safe fallback.
-local function getPlayerDispelTypeSet()
-    local _, classToken = UnitClass("player")
-    local set = {}
-
-    if classToken == "PRIEST" then
-        set.Magic   = true
-        set.Disease = true
-    elseif classToken == "PALADIN" then
-        set.Poison  = true
-        set.Disease = true
-        set.Magic   = true
-    elseif classToken == "SHAMAN" then
-        set.Curse = true
-        set.Magic = true
-    elseif classToken == "DRUID" then
-        set.Curse  = true
-        set.Poison = true
-        set.Magic  = true
-    elseif classToken == "MONK" then
-        set.Poison  = true
-        set.Disease = true
-        set.Magic   = true
-    elseif classToken == "MAGE" then
-        set.Curse = true
-    elseif classToken == "EVOKER" then
-        set.Poison = true
-    else
-        -- Unknown class: grant the full set so indicators still display.
-        set.Magic   = true
-        set.Curse   = true
-        set.Poison  = true
-        set.Disease = true
-    end
-
-    return set
-end
-
 -- Returns a canonical dispel type literal ("Magic", "Curse", "Poison", "Disease")
 -- or nil. Compares in pcall so secret values never escape as table keys.
 local function normalizeDispelType(value)
@@ -913,6 +922,50 @@ local function safeValueEquals(leftValue, rightValue)
         return leftValue == rightValue
     end)
     return ok and resolved == true
+end
+
+-- Read a stable, non-secret unit GUID for map bookkeeping.
+local function getUnitGUIDSafe(unitToken)
+    if Util and type(Util.GetUnitGUIDSafe) == "function" then
+        return Util:GetUnitGUIDSafe(unitToken)
+    end
+
+    if type(unitToken) ~= "string" or unitToken == "" or type(UnitGUID) ~= "function" then
+        return nil
+    end
+
+    local okGUID, guid = pcall(UnitGUID, unitToken)
+    if not okGUID or guid == nil or isSecretAuraValue(guid) or type(guid) ~= "string" then
+        return nil
+    end
+
+    local okNonEmpty, isNonEmpty = pcall(function()
+        return guid ~= ""
+    end)
+    if okNonEmpty and isNonEmpty then
+        return guid
+    end
+
+    return nil
+end
+
+-- Compare two unit tokens without letting secret GUID aliases explode.
+local function safeUnitTokensMatch(leftUnitToken, rightUnitToken)
+    if type(leftUnitToken) ~= "string" or leftUnitToken == "" then
+        return false
+    end
+    if type(rightUnitToken) ~= "string" or rightUnitToken == "" then
+        return false
+    end
+    if leftUnitToken == rightUnitToken then
+        return true
+    end
+    if type(UnitIsUnit) ~= "function" then
+        return false
+    end
+
+    local okMatch, isMatch = pcall(UnitIsUnit, leftUnitToken, rightUnitToken)
+    return okMatch and isMatch == true
 end
 
 -- Read a dispel type from a Blizzard compact-frame debuff widget, if present.
@@ -2045,6 +2098,46 @@ local function hideUnusedTrackerSquareElements(frame, usedBySlot)
     end
 end
 
+local function clearRenderedTrackedAuraState(frame)
+    if type(frame) ~= "table" then
+        return
+    end
+
+    frame._mummuRenderedTrackedAuraInstanceIDs = nil
+end
+
+local function rememberRenderedTrackedAura(frame, auraData)
+    if type(frame) ~= "table" or type(auraData) ~= "table" then
+        return
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(auraData.auraInstanceID)
+    if not auraInstanceID then
+        return
+    end
+
+    local rendered = frame._mummuRenderedTrackedAuraInstanceIDs
+    if type(rendered) ~= "table" then
+        rendered = {}
+        frame._mummuRenderedTrackedAuraInstanceIDs = rendered
+    end
+    rendered[auraInstanceID] = true
+end
+
+local function isTrackedAuraAlreadyRendered(frame, auraData)
+    if type(frame) ~= "table" or type(auraData) ~= "table" then
+        return false
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(auraData.auraInstanceID)
+    if not auraInstanceID then
+        return false
+    end
+
+    local rendered = frame._mummuRenderedTrackedAuraInstanceIDs
+    return type(rendered) == "table" and rendered[auraInstanceID] == true
+end
+
 local function getAuraAnchorGrowth(anchorPoint)
     local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPRIGHT"
     if string.find(resolvedAnchor, "RIGHT", 1, true) then
@@ -3024,6 +3117,199 @@ function AuraHandle:ResetPerfCounters()
     self._perfCounters = {}
 end
 
+function AuraHandle:InvalidatePlayerDispelTypeSetCache()
+    _playerDispelTypeSetCache = nil
+end
+
+-- Probe several spellbook APIs so dispel detection survives Retail API drift.
+function AuraHandle:IsDispelSpellKnown(spellID, usePetSpellBook)
+    if type(spellID) ~= "number" or spellID <= 0 then
+        return false
+    end
+
+    if usePetSpellBook == true then
+        if C_SpellBook and type(C_SpellBook.IsSpellKnownOrInSpellBook) == "function"
+            and Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Pet
+        then
+            local okPetBook, isKnownInPetBook = pcall(
+                C_SpellBook.IsSpellKnownOrInSpellBook,
+                spellID,
+                Enum.SpellBookSpellBank.Pet
+            )
+            if okPetBook and isKnownInPetBook == true then
+                return true
+            end
+        end
+
+        if type(IsSpellKnown) == "function" then
+            local okPetKnown, isPetKnown = pcall(IsSpellKnown, spellID, true)
+            if okPetKnown and isPetKnown == true then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    if type(IsPlayerSpell) == "function" then
+        local okPlayerSpell, isPlayerKnown = pcall(IsPlayerSpell, spellID)
+        if okPlayerSpell and isPlayerKnown == true then
+            return true
+        end
+    end
+
+    if type(IsSpellKnownOrOverridesKnown) == "function" then
+        local okKnown, isKnown = pcall(IsSpellKnownOrOverridesKnown, spellID)
+        if okKnown and isKnown == true then
+            return true
+        end
+    end
+
+    if C_SpellBook and type(C_SpellBook.IsSpellKnown) == "function" then
+        local okBook, isKnownInBook = pcall(C_SpellBook.IsSpellKnown, spellID)
+        if okBook and isKnownInBook == true then
+            return true
+        end
+    end
+
+    if C_SpellBook and type(C_SpellBook.IsSpellKnownOrInSpellBook) == "function" then
+        local okBook, isKnownInBook = pcall(C_SpellBook.IsSpellKnownOrInSpellBook, spellID)
+        if okBook and isKnownInBook == true then
+            return true
+        end
+    end
+
+    if type(IsSpellKnown) == "function" then
+        local okKnown, isKnown = pcall(IsSpellKnown, spellID)
+        if okKnown and isKnown == true then
+            return true
+        end
+    end
+
+    return false
+end
+
+-- Returns the set of debuff types the current player can actually dispel,
+-- keyed by type string. This is driven by known spells/passives instead of a
+-- coarse class table so healer/talent-specific fallbacks stay accurate.
+function AuraHandle:GetPlayerDispelTypeSet()
+    if type(_playerDispelTypeSetCache) == "table" then
+        return _playerDispelTypeSetCache
+    end
+
+    local set = {}
+    for dispelType, spellEntries in pairs(PLAYER_DISPEL_SPELLS_BY_TYPE) do
+        if type(spellEntries) == "table" then
+            for index = 1, #spellEntries do
+                local entry = spellEntries[index]
+                if type(entry) == "table" and self:IsDispelSpellKnown(entry.spellID, entry.pet == true) then
+                    set[dispelType] = true
+                    break
+                end
+            end
+        end
+    end
+
+    _playerDispelTypeSetCache = set
+    return set
+end
+
+function AuraHandle:ResolveDispelTypeForAura(state, auraData)
+    local dispelType = normalizeDispelType(type(auraData) == "table" and auraData.dispelName or nil)
+    if dispelType then
+        return dispelType
+    end
+
+    local auraInstanceID = normalizeAuraInstanceID(type(auraData) == "table" and auraData.auraInstanceID or nil)
+    if not auraInstanceID or type(state) ~= "table" then
+        return nil
+    end
+
+    local dispellableBucket = state.dispellable
+    if type(dispellableBucket) == "table" and type(dispellableBucket.dispelTypeByAuraID) == "table" then
+        dispelType = normalizeDispelType(dispellableBucket.dispelTypeByAuraID[auraInstanceID])
+        if dispelType then
+            return dispelType
+        end
+    end
+
+    local harmfulBucket = state.harmful
+    if type(harmfulBucket) == "table" and type(harmfulBucket.dispelTypeByAuraID) == "table" then
+        dispelType = normalizeDispelType(harmfulBucket.dispelTypeByAuraID[auraInstanceID])
+        if dispelType then
+            return dispelType
+        end
+    end
+
+    return nil
+end
+
+function AuraHandle:GetFirstTypedDispellableDebuffType(unitToken, state, allowedTypeSet)
+    if type(state) ~= "table" then
+        return nil
+    end
+
+    local dispellableBucket = state.dispellable
+    if type(dispellableBucket) == "table" and type(dispellableBucket.order) == "table" and type(dispellableBucket.auras) == "table" then
+        compactGroupDebuffBucket(dispellableBucket)
+        for index = 1, #dispellableBucket.order do
+            local auraInstanceID = dispellableBucket.order[index]
+            local auraData = auraInstanceID and dispellableBucket.auras[auraInstanceID] or nil
+            if type(auraData) == "table" then
+                local dispelType = self:ResolveDispelTypeForAura(state, auraData)
+                if dispelType and (type(allowedTypeSet) ~= "table" or allowedTypeSet[dispelType] == true) then
+                    return dispelType
+                end
+            end
+        end
+    end
+
+    local harmfulBucket = state.harmful
+    if type(harmfulBucket) ~= "table" or type(harmfulBucket.order) ~= "table" or type(harmfulBucket.auras) ~= "table" then
+        return nil
+    end
+
+    compactGroupDebuffBucket(harmfulBucket)
+
+    for index = 1, #harmfulBucket.order do
+        local auraInstanceID = harmfulBucket.order[index]
+        local auraData = auraInstanceID and harmfulBucket.auras[auraInstanceID] or nil
+        if type(auraData) == "table" then
+            local harmfulDispelType = self:ResolveDispelTypeForAura(state, auraData)
+            if harmfulDispelType and (type(allowedTypeSet) ~= "table" or allowedTypeSet[harmfulDispelType] == true) then
+                if isGroupAuraFilteredIn(unitToken, auraInstanceID, GROUP_DISPELLABLE_FILTER, GROUP_DISPELLABLE_FALLBACK_FILTER, auraData)
+                    or safeTruthy(auraData.canActivePlayerDispel)
+                then
+                    return harmfulDispelType
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+function AuraHandle:RefreshAllGroupFramesForDispelState(sourceTag)
+    local frames = getAllMummuGroupFrames()
+    for index = 1, #frames do
+        local frame = frames[index]
+        local unitToken = getFrameUnitToken(frame)
+        if type(frame) == "table" and type(unitToken) == "string" and unitToken ~= "" then
+            self:RefreshGroupFrameAuras(frame, unitToken, nil, unitToken)
+        elseif type(frame) == "table" then
+            self:ClearFrameAuraIndicators(frame)
+        end
+    end
+
+    if self._diagnosticsEnabled then
+        print(string.format(
+            "[mummuFrames:AuraHandle] dispel capability refresh source=%s frames=%d",
+            tostring(sourceTag or "unknown"),
+            #frames
+        ))
+    end
+end
+
 -- ---------------------------------------------------------------------------
 -- Bootstrap / initialisation
 -- ---------------------------------------------------------------------------
@@ -3041,6 +3327,9 @@ function AuraHandle:EnsureBootstrapFrame()
     frame:RegisterEvent("GROUP_ROSTER_UPDATE")
     frame:RegisterEvent("PLAYER_REGEN_DISABLED")
     frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    frame:RegisterEvent("PLAYER_TALENT_UPDATE")
+    frame:RegisterEvent("SPELLS_CHANGED")
     frame:RegisterEvent("ADDON_LOADED")
 
     frame:SetScript("OnEvent", function(_, eventName, arg1)
@@ -3050,6 +3339,11 @@ function AuraHandle:EnsureBootstrapFrame()
             if arg1 == "Blizzard_CompactRaidFrames" or arg1 == "mummuFrames" then
                 selfRef:OnWorldOrRosterChanged()
             end
+            return
+        end
+        if eventName == "PLAYER_SPECIALIZATION_CHANGED" or eventName == "PLAYER_TALENT_UPDATE" or eventName == "SPELLS_CHANGED" then
+            selfRef:InvalidatePlayerDispelTypeSetCache()
+            selfRef:RefreshAllGroupFramesForDispelState(eventName)
             return
         end
         if eventName == "PLAYER_REGEN_DISABLED" or eventName == "PLAYER_REGEN_ENABLED" then
@@ -3105,6 +3399,7 @@ end
 
 -- Handles PLAYER_ENTERING_WORLD, GROUP_ROSTER_UPDATE, and ADDON_LOADED events.
 function AuraHandle:OnWorldOrRosterChanged()
+    self:InvalidatePlayerDispelTypeSetCache()
     self:InitializeAurasDefaults()
     self:RebuildSharedUnitFrameMap(InCombatLockdown(), "world_or_roster")
     self:ScheduleBlizzardCacheBootstrap()
@@ -3465,7 +3760,7 @@ local function setSharedMapEntry(unitToken, frame, ownerKey)
     sharedUnitFrameMap[unitToken] = frame
     sharedUnitOwnerMap[unitToken] = ownerKey
 
-    local guid = UnitGUID(unitToken)
+    local guid = getUnitGUIDSafe(unitToken)
     if guid then
         sharedDisplayedUnitByGUID[guid] = unitToken
     end
@@ -3492,7 +3787,6 @@ function AuraHandle:RebuildSharedUnitFrameMap(allowHidden, source)
     wipeTable(sharedUnitOwnerMap)
     wipeTable(sharedDisplayedUnitByGUID)
 
-    local playerGUID = UnitGUID("player")
     local allFrames  = getAllMummuGroupFrames()
 
     for i = 1, #allFrames do
@@ -3513,20 +3807,16 @@ function AuraHandle:RebuildSharedUnitFrameMap(allowHidden, source)
                     -- Cross-register player↔partyN aliases so that the map works
                     -- regardless of whether the player is shown as "player" or
                     -- as a party slot.
-                    if playerGUID then
-                        if unitToken == "player" then
-                            for partyIndex = 1, 4 do
-                                local partyUnit = "party" .. tostring(partyIndex)
-                                local partyGUID = UnitGUID(partyUnit)
-                                if partyGUID and partyGUID == playerGUID then
-                                    setSharedMapEntry(partyUnit, frame, ownerKey)
-                                end
+                    if unitToken == "player" then
+                        for partyIndex = 1, 4 do
+                            local partyUnit = "party" .. tostring(partyIndex)
+                            if safeUnitTokensMatch(partyUnit, "player") then
+                                setSharedMapEntry(partyUnit, frame, ownerKey)
                             end
-                        elseif string.match(unitToken, "^party%d+$") then
-                            local unitGUID = UnitGUID(unitToken)
-                            if unitGUID and unitGUID == playerGUID then
-                                setSharedMapEntry("player", frame, ownerKey)
-                            end
+                        end
+                    elseif string.match(unitToken, "^party%d+$") then
+                        if safeUnitTokensMatch(unitToken, "player") then
+                            setSharedMapEntry("player", frame, ownerKey)
                         end
                     end
                 end
@@ -3589,7 +3879,7 @@ function AuraHandle:ResolveSharedMappedFrame(unitToken)
     end
 
     -- GUID fallback: handles cross-token aliases (e.g. "player" ↔ "party1").
-    local guid = UnitGUID(normalizedUnit)
+    local guid = getUnitGUIDSafe(normalizedUnit)
     if guid then
         local mappedUnit = sharedDisplayedUnitByGUID[guid]
         if mappedUnit then
@@ -3597,6 +3887,12 @@ function AuraHandle:ResolveSharedMappedFrame(unitToken)
             if guidFrame then
                 return guidFrame, mappedUnit, sharedUnitOwnerMap[mappedUnit] or inferOwnerForUnit(mappedUnit)
             end
+        end
+    end
+
+    for mappedUnit, mappedFrame in pairs(sharedUnitFrameMap) do
+        if safeUnitTokensMatch(mappedUnit, normalizedUnit) then
+            return mappedFrame, mappedUnit, sharedUnitOwnerMap[mappedUnit] or inferOwnerForUnit(mappedUnit)
         end
     end
 
@@ -3785,6 +4081,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
         return
     end
     if frame._mummuIsPartyFrame ~= true and frame._mummuIsRaidFrame ~= true then
+        clearRenderedTrackedAuraState(frame)
         return
     end
 
@@ -3792,8 +4089,11 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
     if not config or config.enabled == false then
         hideUnusedTrackerElements(frame, {})
         hideUnusedTrackerSquareElements(frame, {})
+        clearRenderedTrackedAuraState(frame)
         return
     end
+
+    clearRenderedTrackedAuraState(frame)
 
     local usedIconSlots = {}
     local usedSquareSlots = {}
@@ -3813,6 +4113,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
         element.Icon:Show()
         element:Show()
         usedIconSlots[tostring(slotIndex)] = true
+        rememberRenderedTrackedAura(frame, auraData)
         return true
     end
 
@@ -3840,6 +4141,7 @@ function AuraHandle:RefreshFrameTrackedAuras(frame, unitToken)
                         refreshTrackerCooldown(element.Cooldown, auraData)
                         element:Show()
                         usedSquareSlots[slotKey] = true
+                        rememberRenderedTrackedAura(frame, auraData)
                     end
                 else
                     local fixedSlotIndex = request.slot and TRACKER_ICON_SLOT_INDEX[request.slot] or nil
@@ -3913,6 +4215,10 @@ function AuraHandle:RefreshFrameCenterDefensiveIndicator(frame, unitToken)
         hideCenterDefensiveIndicator(frame)
         return
     end
+    if isTrackedAuraAlreadyRendered(frame, auraData) then
+        hideCenterDefensiveIndicator(frame)
+        return
+    end
 
     local indicator = ensureCenterDefensiveIndicator(frame)
     if type(indicator) ~= "table" then
@@ -3977,11 +4283,11 @@ function AuraHandle:GetUnitDebuffType(unitToken)
     return findPriorityDebuffTypeInBucket(state.harmful)
 end
 
--- Returns the debuff type string ("Magic", "Curse", "Poison", "Disease") for
--- the first player-dispellable debuff found on unitToken, or nil.
+-- Returns the first exact dispel type ("Magic", "Curse", "Poison", "Disease")
+-- we can attribute to a player-dispellable debuff on unitToken, or nil.
 -- The dedicated dispellable bucket is preferred, but Midnight can sometimes
 -- omit dispel metadata there; in that case we fall back to typed harmful auras
--- that match the player's dispel set.
+-- that match the player's current dispel spell set.
 function AuraHandle:GetUnitDispellableDebuffType(unitToken)
     local normalizedUnit = normalizeGroupUnitToken(unitToken)
     if not normalizedUnit then
@@ -3993,31 +4299,8 @@ function AuraHandle:GetUnitDispellableDebuffType(unitToken)
         return nil
     end
 
-    local playerDispelTypeSet = getPlayerDispelTypeSet()
-    local debuffType = findPriorityDebuffTypeInBucket(state.dispellable, playerDispelTypeSet)
-    if debuffType then
-        return debuffType
-    end
-
-    debuffType = findPriorityDebuffTypeInBucket(state.harmful, playerDispelTypeSet)
-    if debuffType then
-        return debuffType
-    end
-
-    local auraData = getFirstDispellableAuraData(normalizedUnit, state, playerDispelTypeSet)
-    local auraDispelType = normalizeDispelType(auraData and auraData.dispelName)
-    if auraDispelType and playerDispelTypeSet[auraDispelType] == true then
-        return auraDispelType
-    end
-
-    -- Some Midnight payloads report a dispellable aura without exposing the
-    -- dispelName reliably. Preserve a visible overlay in that case even if the
-    -- exact type color must be resolved through GetAuraDispelTypeColor later.
-    if auraData and safeTruthy(auraData.canActivePlayerDispel) then
-        return "Magic"
-    end
-
-    return nil
+    local playerDispelTypeSet = self:GetPlayerDispelTypeSet()
+    return self:GetFirstTypedDispellableDebuffType(normalizedUnit, state, playerDispelTypeSet)
 end
 
 -- Shows or hides the healthbar overlay on frame based on debuff state.
@@ -4031,15 +4314,20 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
     local resolvedUnitToken = liveUnitToken or unitToken
     local normalizedUnit = normalizeGroupUnitToken(resolvedUnitToken)
     local state = normalizedUnit and self:EnsureFreshGroupDebuffCache(normalizedUnit, DEBUFF_CACHE_STALE_WINDOW, "render_dispel_overlay") or nil
-    local playerDispelTypeSet = getPlayerDispelTypeSet()
+    local playerDispelTypeSet = self:GetPlayerDispelTypeSet()
     local auraData = normalizedUnit and getFirstDispellableAuraData(normalizedUnit, state, playerDispelTypeSet) or nil
-    local debuffType = self:GetUnitDispellableDebuffType(resolvedUnitToken)
-    local dispelType = normalizeDispelType(auraData and auraData.dispelName) or normalizeDispelType(debuffType) or debuffType
-    local red, green, blue = resolveDispellableAuraColor(normalizedUnit or resolvedUnitToken, auraData, debuffType)
+    local exactDispelType = self:ResolveDispelTypeForAura(state, auraData)
+    local fallbackDispelType = auraData and nil or self:GetUnitDispellableDebuffType(resolvedUnitToken)
+    local dispelType = exactDispelType or fallbackDispelType
+    local red, green, blue = resolveDispellableAuraColor(
+        normalizedUnit or resolvedUnitToken,
+        auraData,
+        exactDispelType or fallbackDispelType
+    )
     local darkModeEnabled = Style and type(Style.IsDarkModeEnabled) == "function" and Style:IsDarkModeEnabled()
     local overlayAlpha = darkModeEnabled and DISPEL_OVERLAY_ALPHA_DARK or DISPEL_OVERLAY_ALPHA_LIGHT
     local borderAlpha = darkModeEnabled and DISPEL_BORDER_ALPHA_DARK or DISPEL_BORDER_ALPHA_LIGHT
-    local iconTexture = getDispelIconTexture(dispelType) or DEFAULT_AURA_TEXTURE
+    local iconTexture = dispelType and getDispelIconTexture(dispelType) or nil
 
     if red and green and blue then
         -- Keep opacity centralized here so layout refreshes do not multiply the
@@ -4052,7 +4340,7 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
             frame.DispelBorder:Show()
         end
 
-        if frame.DispelIconFrame and frame.DispelIcon and iconTexture then
+        if frame.DispelIconFrame and frame.DispelIcon and iconTexture and dispelType then
             frame.DispelIcon:SetTexture(iconTexture)
             frame.DispelIcon:SetVertexColor(1, 1, 1, 1)
             if frame.DispelIconFrame.Background then
@@ -4066,6 +4354,9 @@ function AuraHandle:RefreshFrameDispelOverlay(frame, unitToken, rawUnitToken)
             setFrameEdgeColor(frame.DispelIconFrame, red, green, blue, borderAlpha)
             frame.DispelIconFrame:Show()
         elseif frame.DispelIconFrame then
+            if frame.DispelIcon and type(frame.DispelIcon.SetTexture) == "function" then
+                frame.DispelIcon:SetTexture(nil)
+            end
             frame.DispelIconFrame:Hide()
         end
     else
@@ -4180,6 +4471,7 @@ function AuraHandle:ClearFrameAuraIndicators(frame)
     end
     hideUnusedTrackerElements(frame, {})
     hideUnusedTrackerSquareElements(frame, {})
+    clearRenderedTrackedAuraState(frame)
     hideGroupDebuffButtonPool(frame.GroupDebuffButtons)
     hideCenterDefensiveIndicator(frame)
     hideFrameDispelIndicator(frame)
@@ -4219,17 +4511,17 @@ end
 -- Linear scan fallback: finds the mummu frame for unitToken by iterating all
 -- group frames when the shared map doesn't have an entry.
 local function findMappedFrameFallback(unitToken)
-    local directGUID = UnitGUID(unitToken)
+    local directGUID = getUnitGUIDSafe(unitToken)
     local frames     = getAllMummuGroupFrames()
     for i = 1, #frames do
         local frame     = frames[i]
         local frameUnit = getFrameUnitToken(frame)
-        if frameUnit == unitToken then
+        if safeUnitTokensMatch(frameUnit, unitToken) then
             return frame, frameUnit, inferOwnerForUnit(frameUnit)
         end
         if directGUID and frameUnit then
-            local frameGUID = UnitGUID(frameUnit)
-            if frameGUID and frameGUID == directGUID then
+            local frameGUID = getUnitGUIDSafe(frameUnit)
+            if frameGUID and safeValueEquals(frameGUID, directGUID) then
                 return frame, frameUnit, inferOwnerForUnit(frameUnit)
             end
         end

@@ -3,7 +3,19 @@
 This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 
 ## Unreleased
-- No changes yet.
+
+## 3.5.0 - 2026-04-16
+- Fixed party and raid dispel overlay fallbacks to use the player’s actual known dispel spells and talents instead of a coarse class-only table.
+- Stopped the bottom-right group dispel icon from guessing `Magic` when Midnight omits an aura’s exact dispel type, so the overlay stays visible without lying about the type icon.
+- Rebuilt targeted enemy-cast tracking around a new Danders-style party cast list that watches hostile nameplate casts generically instead of relying on a curated spell whitelist.
+- Removed the old per-frame spell-target border highlight flow and replaced it with a party-attached incoming cast board that avoids exact party-member target resolution and comparison-heavy secret-value handling.
+- Cleaned out the legacy tracker module, old spell-target config/docs, and the remaining border-highlight wiring so the new list owns the full targeted-cast path end to end.
+- Bumped addon metadata to `3.5.0`.
+
+## 3.4.1 - 2026-04-11
+- Fixed Blizzard pet-frame suppression so the global hide option now also covers the default `PetFrame`.
+- Reapplied Blizzard pet-frame hiding on pet/spec updates and hardened the hide hook against later alpha resets, which fixes Beast Mastery cases where the default pet frame could reappear with two pets active.
+- Bumped addon metadata to `3.4.1`.
 
 ## 3.4.0 - 2026-04-09
 - Added custom boss frames for `boss1` through `boss5`, including shared live/test refresh handling and support for hiding the Blizzard boss frames.
@@ -47,13 +59,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 ## 3.1.1 - 2026-04-01
 - Fixed Vengeance Demon Hunter soul-fragment icons by treating fragments as the current secret-value custom resource, restoring the correct 6-pip display and live refresh behavior.
 - Bumped addon metadata to `3.1.1`.
-
-## 3.1.0 - 2026-03-31
-- Made tracked-aura configuration character-specific instead of storing it with profile snapshots, and stopped profile import/export from carrying tracked aura entries.
-- Added per-entry tracked-aura X/Y offset controls and applied those offsets to both icon-strip and square indicators.
-- Fixed the tracked-aura editor RGB sliders so they align vertically instead of drifting farther right down the form.
-- Added matching raid `Ready` and `Pull` action buttons above raid frames for leaders and assistants, including edit-mode preview and selection-bounds support.
-- Bumped addon metadata to `3.1.0`.
-
-## 3.0.0 - 2026-03-27
-- Bumped addon metadata to `3.0.0`.

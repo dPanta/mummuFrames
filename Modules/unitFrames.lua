@@ -107,6 +107,7 @@ local BLIZZARD_FRAME_NAME_BY_UNIT = {
 }
 local GLOBAL_HIDE_BLIZZARD_UNITS = {
     player = true,
+    pet = true,
     target = true,
     targettarget = true,
     focus = true,
@@ -1948,6 +1949,7 @@ function UnitFrames:OnPlayerSpecializationChanged(_, unitToken)
         return
     end
 
+    self:ApplyBlizzardFrameVisibility()
     self:RefreshFrame("player", true)
 end
 
@@ -2101,6 +2103,7 @@ end
 -- Handle unit pet event.
 function UnitFrames:OnUnitPet(_, unitToken)
     if unitToken == "player" then
+        self:ApplyBlizzardFrameVisibility()
         self:RefreshFrame("pet")
     end
 end
@@ -2457,6 +2460,13 @@ function UnitFrames:SetBlizzardUnitFrameHidden(unitToken, shouldHide)
                 if not InCombatLockdown() and type(shownFrame.EnableMouse) == "function" then
                     shownFrame:EnableMouse(false)
                 end
+            end
+        end)
+        -- Some Blizzard unit frames restore alpha during later updates rather than
+        -- only on show, so keep hidden frames suppressed while the request is active.
+        frame:HookScript("OnUpdate", function(shownFrame)
+            if shownFrame._mummuHideRequested and shownFrame:GetAlpha() ~= 0 then
+                shownFrame:SetAlpha(0)
             end
         end)
         frame._mummuHideHooked = true

@@ -2,7 +2,7 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 3.4.0
+## Version: 3.5.0
 ## IconTexture: Interface\AddOns\mummuFrames\Icons\mummuF.png
 ## SavedVariables: mummuFramesDB
 ## OptionalDeps: LibSharedMedia-3.0, SharedMedia
@@ -38,8 +38,8 @@ mummuFrames.lua
 Modules\dataHandle.lua
 Modules\globalFrames.lua
 Modules\unitFrames.lua
-Modules\spellTargetTracker.lua
 Modules\rangeHandle.lua
 Modules\partyFrames.lua
+Modules\incomingCastBoard.lua
 Modules\raidFrames.lua
 Modules\configuration.lua
