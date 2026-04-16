@@ -4,6 +4,7 @@ Unitframes addon for World of Warcraft. Minimal, core functionalities, basic cus
 # What it does:
 - All unit frames (including party and raid)
 - Buff tracking.
+- Targeted spells bars!
 - Cast bar (detachable) of Player, Target and Focus unit frame.
 - Standard onfiguration options.
 - Edit Mode compatible (with snaping)

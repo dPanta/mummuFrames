@@ -15,7 +15,8 @@
 --   1. Frames: grouped unit selector plus sectioned unit setup
 --   2. Tracked Auras: party/raid shared aura tracking settings
 --   3. Global: addon-wide behavior and shared visual defaults
---   4. Profiles: saved layout management and import/export
+--   4. Targeted Spells: enemy cast-list behavior, layout, and positioning
+--   5. Profiles: saved layout management and import/export
 --
 -- EVENTS:
 --   Configuration changes trigger:
@@ -72,6 +73,7 @@ local TOP_LEVEL_TABS = {
     { key = "frames", label = L.CONFIG_TAB_FRAMES or "Frames" },
     { key = "auras", label = L.CONFIG_TAB_AURAS or "Tracked Auras" },
     { key = "global", label = L.CONFIG_TAB_GLOBAL or "Global" },
+    { key = "targetedSpells", label = L.CONFIG_TAB_TARGETED_SPELLS or "Targeted Spells" },
     { key = "profiles", label = L.CONFIG_TAB_PROFILES or "Profiles" },
 }
 local FRAME_SELECTOR_GROUPS = {
@@ -3154,6 +3156,289 @@ function Configuration:BuildGlobalPage(page)
     }
 end
 
+function Configuration:BuildTargetedSpellsPage(page)
+    local registry = {}
+
+    local function getBoardConfig(partyConfig)
+        local boardConfig = type(partyConfig) == "table" and partyConfig.incomingCastBoard or nil
+        if type(boardConfig) ~= "table" then
+            boardConfig = {}
+        end
+        return boardConfig
+    end
+
+    local function normalizeWholeNumber(value, fallback, minValue, maxValue)
+        local numeric = tonumber(value) or fallback
+        if numeric >= 0 then
+            numeric = math.floor(numeric + 0.5)
+        else
+            numeric = math.ceil(numeric - 0.5)
+        end
+        return Util:Clamp(numeric, minValue, maxValue)
+    end
+
+    local intro = self:CreateHelpText(
+        page,
+        L.CONFIG_TARGETED_SPELLS_HELP
+            or "Track enemy casts aimed at you or your party with a Danders-style cast list. Keep it anchored to party frames or detach it into Edit Mode for a separate movable block.",
+        page,
+        0
+    )
+
+    local behaviorAnchor = self:CreateSectionHeader(
+        page,
+        L.CONFIG_TARGETED_SPELLS_SECTION_BEHAVIOR or "Behavior",
+        nil,
+        intro,
+        18
+    )
+
+    local enabled = self:CreateCheckbox(
+        "mummuFramesConfigTargetedSpellsEnabled",
+        page,
+        L.CONFIG_TARGETED_SPELLS_ENABLE or "Enable targeted spell list",
+        behaviorAnchor,
+        0,
+        -14
+    )
+    self:BindUnitCheckbox(enabled, "party", "incomingCastBoard.enabled", REFRESH_INTENT_LAYOUT)
+    self:RegisterCheckboxWidget(registry, enabled, function(partyConfig)
+        return getBoardConfig(partyConfig).enabled ~= false
+    end)
+
+    local anchorToPartyFrames = self:CreateCheckbox(
+        "mummuFramesConfigTargetedSpellsAnchorToParty",
+        page,
+        L.CONFIG_TARGETED_SPELLS_ANCHOR_TO_PARTY or "Anchor to party frames",
+        enabled,
+        0,
+        -8
+    )
+    self:BindUnitCheckbox(anchorToPartyFrames, "party", "incomingCastBoard.anchorToPartyFrames", REFRESH_INTENT_LAYOUT)
+    self:RegisterCheckboxWidget(registry, anchorToPartyFrames, function(partyConfig)
+        return getBoardConfig(partyConfig).anchorToPartyFrames ~= false
+    end)
+
+    local layoutAnchor = self:CreateSectionHeader(
+        page,
+        L.CONFIG_TARGETED_SPELLS_SECTION_LAYOUT or "Layout",
+        nil,
+        anchorToPartyFrames
+    )
+
+    local widthControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsWidth",
+        L.CONFIG_UNIT_WIDTH or "Width",
+        180,
+        420,
+        1,
+        layoutAnchor,
+        20
+    )
+    self:BindUnitNumeric(widthControl, "party", "incomingCastBoard.width", REFRESH_INTENT_LAYOUT, function(value)
+        return Util:Clamp(tonumber(value) or 248, 180, 420)
+    end)
+    self:RegisterNumericWidget(registry, widthControl, function(partyConfig)
+        return getBoardConfig(partyConfig).width or 248
+    end)
+
+    local heightControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsHeight",
+        L.CONFIG_UNIT_HEIGHT or "Height",
+        18,
+        32,
+        1,
+        widthControl.slider
+    )
+    self:BindUnitNumeric(heightControl, "party", "incomingCastBoard.height", REFRESH_INTENT_LAYOUT, function(value)
+        return Util:Clamp(tonumber(value) or 24, 18, 32)
+    end)
+    self:RegisterNumericWidget(registry, heightControl, function(partyConfig)
+        return getBoardConfig(partyConfig).height or 24
+    end)
+
+    local spacingControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsSpacing",
+        L.CONFIG_TARGETED_SPELLS_SPACING or "Gap between bars",
+        0,
+        12,
+        1,
+        heightControl.slider
+    )
+    self:BindUnitNumeric(spacingControl, "party", "incomingCastBoard.spacing", REFRESH_INTENT_LAYOUT, function(value)
+        return Util:Clamp(tonumber(value) or 4, 0, 12)
+    end)
+    self:RegisterNumericWidget(registry, spacingControl, function(partyConfig)
+        return getBoardConfig(partyConfig).spacing or 4
+    end)
+
+    local maxBarsControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsMaxBars",
+        L.CONFIG_TARGETED_SPELLS_MAX_BARS or "Maximum bars",
+        1,
+        10,
+        1,
+        spacingControl.slider
+    )
+    self:BindUnitNumeric(maxBarsControl, "party", "incomingCastBoard.maxBars", REFRESH_INTENT_LAYOUT, function(value)
+        return Util:Clamp(tonumber(value) or 6, 1, 10)
+    end)
+    self:RegisterNumericWidget(registry, maxBarsControl, function(partyConfig)
+        return getBoardConfig(partyConfig).maxBars or 6
+    end)
+
+    local fontSizeControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsFontSize",
+        L.CONFIG_FONT_SIZE or "Font size",
+        9,
+        20,
+        1,
+        maxBarsControl.slider
+    )
+    self:BindUnitNumeric(fontSizeControl, "party", "incomingCastBoard.fontSize", REFRESH_INTENT_APPEARANCE, function(value)
+        return Util:Clamp(tonumber(value) or 13, 9, 20)
+    end)
+    self:RegisterNumericWidget(registry, fontSizeControl, function(partyConfig)
+        return getBoardConfig(partyConfig).fontSize or 13
+    end)
+
+    local positionAnchor = self:CreateSectionHeader(
+        page,
+        L.CONFIG_TARGETED_SPELLS_SECTION_POSITION or "Position",
+        nil,
+        fontSizeControl.slider
+    )
+
+    local anchorXControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsAnchorX",
+        L.CONFIG_TARGETED_SPELLS_ANCHOR_X or "Anchor X offset",
+        -400,
+        400,
+        1,
+        positionAnchor,
+        20
+    )
+    self:BindUnitNumeric(anchorXControl, "party", "incomingCastBoard.anchorX", REFRESH_INTENT_LAYOUT, function(value)
+        return normalizeWholeNumber(value, 0, -400, 400)
+    end)
+    self:RegisterNumericWidget(registry, anchorXControl, function(partyConfig)
+        return getBoardConfig(partyConfig).anchorX or 0
+    end)
+
+    local anchorYControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsAnchorY",
+        L.CONFIG_TARGETED_SPELLS_ANCHOR_Y or "Anchor Y offset",
+        -400,
+        400,
+        1,
+        anchorXControl.slider
+    )
+    self:BindUnitNumeric(anchorYControl, "party", "incomingCastBoard.anchorY", REFRESH_INTENT_LAYOUT, function(value)
+        return normalizeWholeNumber(value, 0, -400, 400)
+    end)
+    self:RegisterNumericWidget(registry, anchorYControl, function(partyConfig)
+        return getBoardConfig(partyConfig).anchorY or 0
+    end)
+
+    local detachedXControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsDetachedX",
+        L.CONFIG_TARGETED_SPELLS_DETACHED_X or "Detached X offset",
+        -900,
+        900,
+        1,
+        anchorYControl.slider
+    )
+    self:BindUnitNumeric(detachedXControl, "party", "incomingCastBoard.detachedX", REFRESH_INTENT_LAYOUT, function(value)
+        return normalizeWholeNumber(value, 0, -900, 900)
+    end)
+    self:RegisterNumericWidget(registry, detachedXControl, function(partyConfig)
+        return getBoardConfig(partyConfig).detachedX or 0
+    end)
+
+    local detachedYControl = self:CreateNumericControl(
+        page,
+        "TargetedSpellsDetachedY",
+        L.CONFIG_TARGETED_SPELLS_DETACHED_Y or "Detached Y offset",
+        -900,
+        900,
+        1,
+        detachedXControl.slider
+    )
+    self:BindUnitNumeric(detachedYControl, "party", "incomingCastBoard.detachedY", REFRESH_INTENT_LAYOUT, function(value)
+        return normalizeWholeNumber(value, -140, -900, 900)
+    end)
+    self:RegisterNumericWidget(registry, detachedYControl, function(partyConfig)
+        return getBoardConfig(partyConfig).detachedY or -140
+    end)
+
+    local detachedHint = self:CreateHelpText(
+        page,
+        L.CONFIG_TARGETED_SPELLS_DETACHED_HELP
+            or "When detached, use Blizzard Edit Mode to drag the targeted spell list directly on screen. The detached X/Y offsets above will update when you move it.",
+        detachedYControl.slider,
+        10
+    )
+
+    local function refreshTargetedSpellsPageState()
+        local dataHandle = self:GetDataHandle()
+        local partyConfig = dataHandle and dataHandle:GetUnitConfig("party") or nil
+        local boardConfig = getBoardConfig(partyConfig)
+        local isEnabled = boardConfig.enabled ~= false
+        local isAnchored = boardConfig.anchorToPartyFrames ~= false
+
+        if anchorToPartyFrames then
+            anchorToPartyFrames:EnableMouse(isEnabled)
+            anchorToPartyFrames:SetAlpha(isEnabled and 1 or 0.55)
+        end
+
+        self:SetNumericControlEnabled(widthControl, isEnabled)
+        self:SetNumericControlEnabled(heightControl, isEnabled)
+        self:SetNumericControlEnabled(spacingControl, isEnabled)
+        self:SetNumericControlEnabled(maxBarsControl, isEnabled)
+        self:SetNumericControlEnabled(fontSizeControl, isEnabled)
+        self:SetNumericControlEnabled(anchorXControl, isEnabled and isAnchored)
+        self:SetNumericControlEnabled(anchorYControl, isEnabled and isAnchored)
+        self:SetNumericControlEnabled(detachedXControl, isEnabled and not isAnchored)
+        self:SetNumericControlEnabled(detachedYControl, isEnabled and not isAnchored)
+        if detachedHint then
+            detachedHint:SetAlpha((isEnabled and not isAnchored) and 1 or 0.55)
+        end
+    end
+
+    if type(enabled.HookScript) == "function" then
+        enabled:HookScript("OnClick", function() refreshTargetedSpellsPageState() end)
+    end
+    if type(anchorToPartyFrames.HookScript) == "function" then
+        anchorToPartyFrames:HookScript("OnClick", function() refreshTargetedSpellsPageState() end)
+    end
+
+    self.widgets.targetedSpells = {
+        registry = registry,
+        refreshState = refreshTargetedSpellsPageState,
+        enabled = enabled,
+        anchorToPartyFrames = anchorToPartyFrames,
+        widthControl = widthControl,
+        heightControl = heightControl,
+        spacingControl = spacingControl,
+        maxBarsControl = maxBarsControl,
+        fontSizeControl = fontSizeControl,
+        anchorXControl = anchorXControl,
+        anchorYControl = anchorYControl,
+        detachedXControl = detachedXControl,
+        detachedYControl = detachedYControl,
+        bottomAnchor = detachedHint or detachedYControl.slider,
+        bottomPadding = 30,
+    }
+end
+
 -- Build auras page.
 function Configuration:BuildAurasPage(page)
     local auraHandle = ns.AuraHandle
@@ -4565,8 +4850,6 @@ function Configuration:BuildUnitPage(page, unitToken)
 
     local sectionAnchor = fontSize.slider
     local showRoleIcon
-    local incomingCastBoard
-
     if unitToken == "party" then
         cursor = createSection(
             L.CONFIG_SECTION_INDICATORS or "Indicators",
@@ -4582,15 +4865,7 @@ function Configuration:BuildUnitPage(page, unitToken)
             boolValue("showRoleIcon", true),
             -14
         )
-        incomingCastBoard = registerCheckbox(
-            "IncomingCastBoard",
-            L.CONFIG_PARTY_INCOMING_CAST_BOARD or "Show incoming enemy cast list",
-            showRoleIcon,
-            "incomingCastBoard.enabled",
-            REFRESH_INTENT_APPEARANCE,
-            boolValue("incomingCastBoard.enabled", true)
-        )
-        sectionAnchor = incomingCastBoard
+        sectionAnchor = showRoleIcon
     end
 
     local buffsEnabled
@@ -5563,6 +5838,8 @@ function Configuration:EnsureTabPageBuilt(tabKey)
 
         if tabKey == "global" then
             self:BuildGlobalPage(content)
+        elseif tabKey == "targetedSpells" then
+            self:BuildTargetedSpellsPage(content)
         elseif tabKey == "profiles" then
             self:BuildProfilesPage(content)
         elseif tabKey == "auras" then
@@ -5632,6 +5909,7 @@ function Configuration:SelectTab(tabKey)
         self:RefreshScrollableTabHeight(tabKey)
     end
 
+    self:RefreshConfigWidgets()
     self.currentTab = tabKey
 end
 
@@ -5864,6 +6142,19 @@ function Configuration:RefreshConfigWidgets()
         self:RefreshScrollableTabHeight("auras")
     end
 
+    local targetedSpellsWidgets = self.widgets.targetedSpells
+    if targetedSpellsWidgets then
+        local dataHandle = self:GetDataHandle()
+        local partyConfig = dataHandle and dataHandle:GetUnitConfig("party") or nil
+        if targetedSpellsWidgets.registry then
+            self:SyncWidgetRegistry(targetedSpellsWidgets.registry, partyConfig)
+        end
+        if type(targetedSpellsWidgets.refreshState) == "function" then
+            targetedSpellsWidgets.refreshState()
+        end
+        self:RefreshScrollableTabHeight("targetedSpells")
+    end
+
     if self.widgets.frames then
         self:RefreshFramesPage(true)
     end
@@ -5876,7 +6167,7 @@ function Configuration:BuildTabs(subtitle)
     local tabHeight = 22
     local tabSpacingX = 6
     local tabSpacingY = 6
-    local tabsPerRow = 4
+    local tabsPerRow = 5
 
     local firstButton = nil
     local previousButton = nil

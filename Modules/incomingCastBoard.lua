@@ -23,31 +23,75 @@ local NORMAL_FADE_SECONDS = 0.25
 local INTERRUPTED_FADE_SECONDS = 1.0
 local FADE_TICK_SECONDS = 0.05
 local SAFETY_CHECK_SECONDS = 5.0
-local BOARD_MAX_ROWS = 6
-local BOARD_SPACING = 4
-local BOARD_MIN_WIDTH = 210
-local BOARD_WIDTH_PADDING = 34
+local BOARD_MIN_WIDTH = 180
+local BOARD_MAX_WIDTH = 420
+local BOARD_DEFAULT_WIDTH = 248
 local BOARD_MIN_HEIGHT = 18
-local BOARD_MAX_HEIGHT = 28
-local BOARD_HEIGHT_RATIO = 0.62
-local BOARD_VERTICAL_OFFSET_X = 14
-local BOARD_VERTICAL_OFFSET_Y = 0
-local BOARD_HORIZONTAL_OFFSET_X = 0
-local BOARD_HORIZONTAL_OFFSET_Y = -12
-local ROW_BACKGROUND_COLOR = { 0.06, 0.07, 0.08, 0.90 }
-local ROW_BACKGROUND_COLOR_DARK = { 0.17, 0.18, 0.20, 0.94 }
-local ROW_BORDER_COLOR = { 1.00, 1.00, 1.00, 0.08 }
-local ROW_BORDER_COLOR_DARK = { 1.00, 1.00, 1.00, 0.12 }
-local INTERRUPTIBLE_BAR_COLOR = { r = 1.00, g = 0.34, b = 0.22, a = 0.96 }
-local UNINTERRUPTIBLE_BAR_COLOR = { r = 0.53, g = 0.56, b = 0.60, a = 0.96 }
-local SELF_TARGET_OVERLAY_COLOR = { 1.00, 0.86, 0.18, 0.18 }
+local BOARD_MAX_HEIGHT = 32
+local BOARD_DEFAULT_HEIGHT = 24
+local BOARD_SPACING = 4
+local BOARD_MAX_SPACING = 12
+local BOARD_DEFAULT_FONT_SIZE = 13
+local BOARD_MIN_FONT_SIZE = 9
+local BOARD_MAX_FONT_SIZE = 20
+local BOARD_MAX_ROWS = 10
+local BOARD_VERTICAL_BASE_OFFSET_X = 14
+local BOARD_VERTICAL_BASE_OFFSET_Y = 0
+local BOARD_HORIZONTAL_BASE_OFFSET_X = 0
+local BOARD_HORIZONTAL_BASE_OFFSET_Y = -12
+local BOARD_DETACHED_DEFAULT_X = 0
+local BOARD_DETACHED_DEFAULT_Y = -140
+local BOARD_EDIT_MODE_PREVIEW_ROWS = 2
+local ROW_BACKGROUND_COLOR = { 0.03, 0.04, 0.05, 0.94 }
+local ROW_BACKGROUND_COLOR_DARK = { 0.10, 0.11, 0.12, 0.96 }
+local ROW_BORDER_COLOR = { 1.00, 1.00, 1.00, 0.14 }
+local ROW_BORDER_COLOR_DARK = { 1.00, 1.00, 1.00, 0.18 }
+local ICON_BACKGROUND_COLOR = { 0.02, 0.03, 0.04, 0.92 }
+local INTERRUPTIBLE_BAR_COLOR = { r = 0.98, g = 0.42, b = 0.16, a = 0.82 }
+local UNINTERRUPTIBLE_BAR_COLOR = { r = 0.52, g = 0.56, b = 0.62, a = 0.78 }
+local SELF_TARGET_OVERLAY_COLOR = { 1.00, 0.84, 0.16, 0.14 }
 local IMPORTANT_GLOW_COLOR = { 1.00, 0.84, 0.26, 0.90 }
 local INTERRUPTED_FLASH_COLOR = { r = 1.00, g = 0.96, b = 0.32, a = 1.00 }
+local EDIT_MODE_SELECTION_COLOR = { 0.98, 0.72, 0.22, 0.55 }
+local DEFAULT_CAST_ICON_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 local STATUSBAR_INTERPOLATION_IMMEDIATE = (_G.Enum and _G.Enum.StatusBarInterpolation and _G.Enum.StatusBarInterpolation.Immediate) or 0
 local STATUSBAR_TIMER_DIRECTION_ELAPSED = (_G.Enum and _G.Enum.StatusBarTimerDirection and _G.Enum.StatusBarTimerDirection.ElapsedTime) or 0
 local STATUSBAR_TIMER_DIRECTION_REMAINING = (_G.Enum and _G.Enum.StatusBarTimerDirection and _G.Enum.StatusBarTimerDirection.RemainingTime) or 1
 local CLASS_COLORS = _G.C_ClassColor
 local SPELL_API = _G.C_Spell
+
+local TEST_CAST_RECORDS = {
+    {
+        casterUnit = "__test1",
+        spellName = "Shadow Bolt",
+        spellTexture = "Interface\\Icons\\Spell_Shadow_ShadowBolt",
+        spellId = 0,
+        isChannel = false,
+        uninterruptible = false,
+        testTargetName = "Lightweaver",
+        testTargetClass = "PRIEST",
+    },
+    {
+        casterUnit = "__test2",
+        spellName = "Blast Wave",
+        spellTexture = "Interface\\Icons\\Spell_Holy_Excorcism_02",
+        spellId = 0,
+        isChannel = false,
+        uninterruptible = true,
+        testTargetName = "Ironbark",
+        testTargetClass = "WARRIOR",
+    },
+    {
+        casterUnit = "__test3",
+        spellName = "Drain Life",
+        spellTexture = "Interface\\Icons\\Spell_Shadow_LifeDrain02",
+        spellId = 0,
+        isChannel = true,
+        uninterruptible = false,
+        testTargetName = "Frostwyn",
+        testTargetClass = "MAGE",
+    },
+}
 
 local function clamp(value, minimum, maximum)
     local numericValue = tonumber(value) or minimum
@@ -106,13 +150,16 @@ local function isTrackedFriendlyTarget(casterUnit)
     if safeUnitCanAttack("player", targetUnit) then
         return false
     end
-    if UnitIsUnit(targetUnit, "player") then
-        return true
+
+    -- Match the Danders-safe post-hotfix filter shape:
+    -- in a group, require UnitInParty("nameplateXtarget");
+    -- outside a group, accept any non-hostile target rather than branching on
+    -- UnitIsUnit(..., "player"), which can return a secret boolean here.
+    if IsInGroup() and not safeUnitInParty(targetUnit) then
+        return false
     end
-    if IsInGroup() and safeUnitInParty(targetUnit) then
-        return true
-    end
-    return false
+
+    return true
 end
 
 local function getLiveCastDuration(casterUnit)
@@ -128,20 +175,115 @@ local function getLiveCastDuration(casterUnit)
     return nil
 end
 
-local function getDefaultBoardLayout(partyConfig)
-    local width = clamp((tonumber(partyConfig and partyConfig.width) or 180) + BOARD_WIDTH_PADDING, BOARD_MIN_WIDTH, 420)
-    local height = clamp((tonumber(partyConfig and partyConfig.height) or 34) * BOARD_HEIGHT_RATIO, BOARD_MIN_HEIGHT, BOARD_MAX_HEIGHT)
-    local spacing = BOARD_SPACING
-    local orientation = (partyConfig and partyConfig.orientation == "horizontal") and "horizontal" or "vertical"
+local function getLiveCastTexture(casterUnit, isChannel)
+    if isChannel == true and type(UnitChannelInfo) == "function" then
+        return select(3, UnitChannelInfo(casterUnit))
+    end
+    if type(UnitCastingInfo) == "function" then
+        local texture = select(3, UnitCastingInfo(casterUnit))
+        if texture ~= nil then
+            return texture
+        end
+    end
+    if type(UnitChannelInfo) == "function" then
+        return select(3, UnitChannelInfo(casterUnit))
+    end
+    return nil
+end
+
+local function getBoardConfig(partyConfig)
+    local boardConfig = type(partyConfig) == "table" and partyConfig.incomingCastBoard or nil
+    if type(boardConfig) ~= "table" then
+        boardConfig = {}
+    end
+    return boardConfig
+end
+
+local function getDetachedElementOffsets(element)
+    if not element or not UIParent then
+        return nil, nil
+    end
+
+    local centerX, centerY = element:GetCenter()
+    local parentX, parentY = UIParent:GetCenter()
+    if not centerX or not centerY or not parentX or not parentY then
+        return nil, nil
+    end
+
+    local offsetX = centerX - parentX
+    local offsetY = centerY - parentY
+    local pixel = (Style and type(Style.GetPixelSize) == "function" and Style:GetPixelSize()) or 1
+    local centerSnapThreshold = 10 * pixel
+
+    if math.abs(offsetX) <= centerSnapThreshold then
+        offsetX = 0
+    end
+    if math.abs(offsetY) <= centerSnapThreshold then
+        offsetY = 0
+    end
+
+    if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+        offsetX = Style:Snap(offsetX)
+        offsetY = Style:Snap(offsetY)
+    else
+        offsetX = math.floor(offsetX + 0.5)
+        offsetY = math.floor(offsetY + 0.5)
+    end
+
+    return offsetX, offsetY
+end
+
+local function getBoardLayout(partyConfig)
+    local boardConfig = getBoardConfig(partyConfig)
+    local anchoredToParty = boardConfig.anchorToPartyFrames ~= false
+    local width = clamp(boardConfig.width or BOARD_DEFAULT_WIDTH, BOARD_MIN_WIDTH, BOARD_MAX_WIDTH)
+    local height = clamp(boardConfig.height or BOARD_DEFAULT_HEIGHT, BOARD_MIN_HEIGHT, BOARD_MAX_HEIGHT)
+    local spacing = clamp(boardConfig.spacing or BOARD_SPACING, 0, BOARD_MAX_SPACING)
+    local maxRows = math.floor(clamp(boardConfig.maxBars or 6, 1, BOARD_MAX_ROWS))
+    local fontSize = clamp(boardConfig.fontSize or BOARD_DEFAULT_FONT_SIZE, BOARD_MIN_FONT_SIZE, BOARD_MAX_FONT_SIZE)
+    local orientation = anchoredToParty and ((partyConfig and partyConfig.orientation == "horizontal") and "horizontal" or "vertical") or "detached"
+    local anchorX = tonumber(boardConfig.anchorX) or 0
+    local anchorY = tonumber(boardConfig.anchorY) or 0
+    local detachedX = tonumber(boardConfig.detachedX)
+    local detachedY = tonumber(boardConfig.detachedY)
+    if detachedX == nil then
+        detachedX = BOARD_DETACHED_DEFAULT_X
+    end
+    if detachedY == nil then
+        detachedY = BOARD_DETACHED_DEFAULT_Y
+    end
 
     if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
         width = Style:Snap(width)
         height = Style:Snap(height)
         spacing = Style:Snap(spacing)
+        anchorX = Style:Snap(anchorX)
+        anchorY = Style:Snap(anchorY)
+        detachedX = Style:Snap(detachedX)
+        detachedY = Style:Snap(detachedY)
     else
         width = math.floor(width + 0.5)
         height = math.floor(height + 0.5)
         spacing = math.floor(spacing + 0.5)
+        anchorX = math.floor(anchorX + 0.5)
+        anchorY = math.floor(anchorY + 0.5)
+        detachedX = math.floor(detachedX + 0.5)
+        detachedY = math.floor(detachedY + 0.5)
+    end
+
+    if not anchoredToParty then
+        return {
+            width = width,
+            height = height,
+            spacing = spacing,
+            fontSize = fontSize,
+            maxRows = maxRows,
+            anchoredToParty = false,
+            anchorPoint = "CENTER",
+            relativePoint = "CENTER",
+            offsetX = detachedX,
+            offsetY = detachedY,
+        }
     end
 
     if orientation == "horizontal" then
@@ -149,10 +291,13 @@ local function getDefaultBoardLayout(partyConfig)
             width = width,
             height = height,
             spacing = spacing,
+            fontSize = fontSize,
+            maxRows = maxRows,
+            anchoredToParty = true,
             anchorPoint = "TOPLEFT",
             relativePoint = "BOTTOMLEFT",
-            offsetX = BOARD_HORIZONTAL_OFFSET_X,
-            offsetY = BOARD_HORIZONTAL_OFFSET_Y,
+            offsetX = BOARD_HORIZONTAL_BASE_OFFSET_X + anchorX,
+            offsetY = BOARD_HORIZONTAL_BASE_OFFSET_Y + anchorY,
         }
     end
 
@@ -160,10 +305,13 @@ local function getDefaultBoardLayout(partyConfig)
         width = width,
         height = height,
         spacing = spacing,
+        fontSize = fontSize,
+        maxRows = maxRows,
+        anchoredToParty = true,
         anchorPoint = "TOPLEFT",
         relativePoint = "TOPRIGHT",
-        offsetX = BOARD_VERTICAL_OFFSET_X,
-        offsetY = BOARD_VERTICAL_OFFSET_Y,
+        offsetX = BOARD_VERTICAL_BASE_OFFSET_X + anchorX,
+        offsetY = BOARD_VERTICAL_BASE_OFFSET_Y + anchorY,
     }
 end
 
@@ -212,6 +360,7 @@ function IncomingCastBoard:Constructor()
     self.addon = nil
     self.dataHandle = nil
     self.partyFrames = nil
+    self.unitFrames = nil
     self.root = nil
     self.activeCasts = {}
     self.rowsByCaster = {}
@@ -219,6 +368,8 @@ function IncomingCastBoard:Constructor()
     self.visibleRows = {}
     self.sortScratch = {}
     self.fadeTicker = nil
+    self.editModeCallbacksRegistered = false
+    self.editModeActive = false
 end
 
 function IncomingCastBoard:OnInitialize(addonRef)
@@ -228,17 +379,28 @@ end
 function IncomingCastBoard:OnEnable()
     self.dataHandle = self.addon and self.addon:GetModule("dataHandle") or nil
     self.partyFrames = self.addon and self.addon:GetModule("partyFrames") or nil
+    self.unitFrames = self.addon and self.addon:GetModule("unitFrames") or nil
+    self:RegisterEditModeCallbacks()
+    self.editModeActive = (EditModeManagerFrame and EditModeManagerFrame.editModeActive == true) and true or false
     self:RegisterEvents()
     self:RefreshLayout()
 end
 
 function IncomingCastBoard:OnDisable()
     ns.EventRouter:UnregisterOwner(self)
+    self:UnregisterEditModeCallbacks()
     self:StopFadeTicker()
     self:ResetBoardState()
     if self.root then
+        self.root:StopMovingOrSizing()
+        self.root._editModeMoving = false
+        if self.root.EditModeSelection then
+            self.root.EditModeSelection:Hide()
+        end
         self.root:Hide()
     end
+    self.editModeActive = false
+    self.unitFrames = nil
     self.partyFrames = nil
     self.dataHandle = nil
 end
@@ -262,6 +424,30 @@ function IncomingCastBoard:RegisterEvents()
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_DELAYED", self.OnCastUpdated)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_CHANNEL_UPDATE", self.OnCastUpdated)
     ns.EventRouter:Register(self, "UNIT_SPELLCAST_EMPOWER_UPDATE", self.OnCastUpdated)
+end
+
+function IncomingCastBoard:RegisterEditModeCallbacks()
+    if self.editModeCallbacksRegistered then
+        return
+    end
+    if not EventRegistry or type(EventRegistry.RegisterCallback) ~= "function" then
+        return
+    end
+
+    EventRegistry:RegisterCallback("EditMode.Enter", self.OnEditModeEnter, self)
+    EventRegistry:RegisterCallback("EditMode.Exit", self.OnEditModeExit, self)
+    self.editModeCallbacksRegistered = true
+end
+
+function IncomingCastBoard:UnregisterEditModeCallbacks()
+    if not self.editModeCallbacksRegistered then
+        return
+    end
+    if EventRegistry and type(EventRegistry.UnregisterCallback) == "function" then
+        EventRegistry:UnregisterCallback("EditMode.Enter", self)
+        EventRegistry:UnregisterCallback("EditMode.Exit", self)
+    end
+    self.editModeCallbacksRegistered = false
 end
 
 function IncomingCastBoard:GetRuntimeState(runtimeState)
@@ -295,37 +481,110 @@ function IncomingCastBoard:IsBoardEnabled(runtimeState)
     if not state or not state.partyConfig then
         return false, nil
     end
-    if state.previewMode == true then
-        return false, state
-    end
-    if state.addonEnabled ~= true or state.partyConfig.enabled == false then
+
+    local boardConfig = getBoardConfig(state.partyConfig)
+    if state.addonEnabled ~= true or boardConfig.enabled == false then
         return false, state
     end
 
-    local boardConfig = state.partyConfig.incomingCastBoard
-    if type(boardConfig) == "table" and boardConfig.enabled == false then
+    if state.testMode == true then
+        return true, state
+    end
+
+    if state.previewMode == true and not (self.editModeActive == true and boardConfig.anchorToPartyFrames == false) then
+        return false, state
+    end
+
+    if boardConfig.anchorToPartyFrames ~= false and state.partyConfig.enabled == false then
         return false, state
     end
 
     return true, state
 end
 
-function IncomingCastBoard:EnsureRootFrame()
+function IncomingCastBoard:ShouldShowDetachedEditModePlaceholder(runtimeState)
+    local state = self:GetRuntimeState(runtimeState)
+    if not state or state.addonEnabled ~= true then
+        return false
+    end
+
+    local boardConfig = getBoardConfig(state.partyConfig)
+    return self.editModeActive == true
+        and boardConfig.enabled ~= false
+        and boardConfig.anchorToPartyFrames == false
+end
+
+function IncomingCastBoard:EnsureDetachedEditModeSelection()
+    if not self.root or not self.unitFrames then
+        return
+    end
+
+    if type(self.unitFrames.EnsureDetachedElementEditModeSelection) == "function" then
+        self.unitFrames:EnsureDetachedElementEditModeSelection(
+            self.root,
+            (ns.L and ns.L.CONFIG_TAB_TARGETED_SPELLS) or "Targeted Spells",
+            EDIT_MODE_SELECTION_COLOR,
+            function() self:SaveDetachedAnchorFromEditMode() end
+        )
+    end
+
+    local selection = self.root.EditModeSelection
+    if selection and selection.Label and selection.Label.SetText then
+        selection.Label:SetText((ns.L and ns.L.CONFIG_TAB_TARGETED_SPELLS) or "Targeted Spells")
+    end
+end
+
+function IncomingCastBoard:SaveDetachedAnchorFromEditMode()
+    if not self.root or not self.dataHandle then
+        return
+    end
+
+    local offsetX, offsetY = getDetachedElementOffsets(self.root)
+    if offsetX == nil or offsetY == nil then
+        return
+    end
+
+    self.dataHandle:SetUnitConfig("party", "incomingCastBoard.detachedX", offsetX)
+    self.dataHandle:SetUnitConfig("party", "incomingCastBoard.detachedY", offsetY)
+    self:RefreshLayout()
+end
+
+function IncomingCastBoard:EnsureRootFrame(runtimeState)
+    local state = self:GetRuntimeState(runtimeState)
+    if not state or not state.partyConfig then
+        return nil
+    end
+
     self.partyFrames = self.partyFrames or (self.addon and self.addon:GetModule("partyFrames")) or nil
-    local parent = self.partyFrames and type(self.partyFrames.GetContainerFrame) == "function" and self.partyFrames:GetContainerFrame() or nil
+    local boardConfig = getBoardConfig(state.partyConfig)
+    local parent = nil
+    if boardConfig.anchorToPartyFrames == false then
+        parent = UIParent
+    else
+        parent = self.partyFrames and type(self.partyFrames.GetContainerFrame) == "function" and self.partyFrames:GetContainerFrame() or nil
+    end
     if not parent then
         return nil
     end
 
     if not self.root then
         self.root = CreateFrame("Frame", nil, parent)
-        self.root:SetFrameStrata("MEDIUM")
+        self.root:SetFrameStrata(boardConfig.anchorToPartyFrames == false and "HIGH" or "MEDIUM")
         self.root:Hide()
     elseif self.root:GetParent() ~= parent then
         self.root:SetParent(parent)
     end
 
+    self.root:SetFrameStrata(boardConfig.anchorToPartyFrames == false and "HIGH" or "MEDIUM")
     self.root:SetFrameLevel(parent:GetFrameLevel() + 80)
+    self.root:SetClampedToScreen(true)
+
+    if boardConfig.anchorToPartyFrames == false then
+        self:EnsureDetachedEditModeSelection()
+    elseif self.root.EditModeSelection then
+        self.root.EditModeSelection:Hide()
+    end
+
     return self.root
 end
 
@@ -346,34 +605,49 @@ function IncomingCastBoard:CreateRow()
     row.Progress:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
     row.Progress:SetMinMaxValues(0, 1)
     row.Progress:SetValue(1)
-    row.Progress.Background = row.Progress:CreateTexture(nil, "BACKGROUND")
-    row.Progress.Background:SetAllPoints()
+    row.Progress:SetFrameLevel(row:GetFrameLevel())
 
     row.PlayerTint = CreateFrame("Frame", nil, row)
     row.PlayerTint:SetAllPoints()
+    row.PlayerTint:SetFrameLevel(row.Progress:GetFrameLevel() + 1)
     row.PlayerTint:Hide()
     row.PlayerTint.Texture = row.PlayerTint:CreateTexture(nil, "OVERLAY")
     row.PlayerTint.Texture:SetAllPoints()
 
     row.Highlight = CreateFrame("Frame", nil, row)
     row.Highlight:SetAllPoints()
+    row.Highlight:SetFrameLevel(row.Progress:GetFrameLevel() + 4)
     row.Highlight:Hide()
 
-    row.Icon = row:CreateTexture(nil, "ARTWORK")
+    row.Content = CreateFrame("Frame", nil, row)
+    row.Content:SetAllPoints()
+    row.Content:SetFrameLevel(row.Progress:GetFrameLevel() + 3)
+
+    row.IconSlot = CreateFrame("Frame", nil, row.Content)
+    row.IconSlot:SetFrameLevel(row.Content:GetFrameLevel() + 1)
+    row.IconSlot.Background = row.IconSlot:CreateTexture(nil, "BACKGROUND")
+    row.IconSlot.Background:SetAllPoints()
+
+    row.TextPanel = row.Content:CreateTexture(nil, "BACKGROUND")
+    row.TargetPanel = row.Content:CreateTexture(nil, "BACKGROUND")
+
+    row.Icon = row.IconSlot:CreateTexture(nil, "ARTWORK")
+    row.Icon:SetAllPoints()
     row.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    row.Icon:SetDrawLayer("ARTWORK", 1)
 
-    row.IconBorder = CreateFrame("Frame", nil, row)
-    row.IconBorder:SetFrameLevel(row:GetFrameLevel() + 4)
+    row.IconBorder = CreateFrame("Frame", nil, row.Content)
+    row.IconBorder:SetFrameLevel(row.Content:GetFrameLevel() + 1)
 
-    row.SpellText = row:CreateFontString(nil, "OVERLAY")
+    row.SpellText = row.Content:CreateFontString(nil, "OVERLAY")
     row.SpellText:SetJustifyH("LEFT")
     row.SpellText:SetWordWrap(false)
 
-    row.TargetText = row:CreateFontString(nil, "OVERLAY")
+    row.TargetText = row.Content:CreateFontString(nil, "OVERLAY")
     row.TargetText:SetJustifyH("RIGHT")
     row.TargetText:SetWordWrap(false)
 
-    row.InterruptText = row:CreateFontString(nil, "OVERLAY")
+    row.InterruptText = row.Content:CreateFontString(nil, "OVERLAY")
     row.InterruptText:SetJustifyH("CENTER")
     row.InterruptText:SetWordWrap(false)
     row.InterruptText:Hide()
@@ -460,12 +734,13 @@ function IncomingCastBoard:ApplyRowAppearance(row, runtimeState)
     end
 
     local partyConfig = runtimeState and runtimeState.partyConfig or nil
-    local layout = getDefaultBoardLayout(partyConfig)
+    local layout = getBoardLayout(partyConfig)
     local pixelPerfect = Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled()
     local border = pixelPerfect and Style:GetPixelSize() or 1
-    local textInset = pixelPerfect and Style:Snap(6) or 6
-    local iconSize = math.max(layout.height - (border * 2), 12)
-    local fontSize = clamp(math.min(tonumber(partyConfig and partyConfig.fontSize) or 11, layout.height - 6), 9, 16)
+    local textInset = pixelPerfect and Style:Snap(8) or 8
+    local iconInset = pixelPerfect and Style:Snap(2) or 2
+    local iconSize = math.max(layout.height - (border * 2) - (iconInset * 2), 16)
+    local fontSize = layout.fontSize or BOARD_DEFAULT_FONT_SIZE
     local backgroundColor = Style:IsDarkModeEnabled() and ROW_BACKGROUND_COLOR_DARK or ROW_BACKGROUND_COLOR
     local borderColor = Style:IsDarkModeEnabled() and ROW_BORDER_COLOR_DARK or ROW_BORDER_COLOR
 
@@ -475,10 +750,9 @@ function IncomingCastBoard:ApplyRowAppearance(row, runtimeState)
     if Style and type(Style.ApplyStatusBarTexture) == "function" then
         Style:ApplyStatusBarTexture(row.Progress)
     end
-    row.Progress.Background:SetColorTexture(0, 0, 0, 0.36)
 
     applyBorder(row, border, borderColor)
-    row.IconBorder:SetAllPoints(row.Icon)
+    row.IconBorder:SetAllPoints(row.IconSlot)
     applyBorder(row.IconBorder, border, borderColor)
     row.Highlight:SetAllPoints(row)
     applyBorder(row.Highlight, border, IMPORTANT_GLOW_COLOR)
@@ -489,31 +763,49 @@ function IncomingCastBoard:ApplyRowAppearance(row, runtimeState)
         SELF_TARGET_OVERLAY_COLOR[4]
     )
 
+    row.IconSlot:ClearAllPoints()
+    row.IconSlot:SetPoint("TOPLEFT", row.Content, "TOPLEFT", border + iconInset, -(border + iconInset))
+    row.IconSlot:SetPoint("BOTTOMLEFT", row.Content, "BOTTOMLEFT", border + iconInset, border + iconInset)
+    row.IconSlot:SetWidth(iconSize)
+    row.IconSlot.Background:SetColorTexture(
+        ICON_BACKGROUND_COLOR[1],
+        ICON_BACKGROUND_COLOR[2],
+        ICON_BACKGROUND_COLOR[3],
+        ICON_BACKGROUND_COLOR[4]
+    )
     row.Icon:ClearAllPoints()
-    row.Icon:SetPoint("TOPLEFT", row, "TOPLEFT", border, -border)
-    row.Icon:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", border, border)
-    row.Icon:SetWidth(iconSize)
+    row.Icon:SetPoint("TOPLEFT", row.IconSlot, "TOPLEFT", border, -border)
+    row.Icon:SetPoint("BOTTOMRIGHT", row.IconSlot, "BOTTOMRIGHT", -border, border)
+
+    row.TextPanel:Hide()
+    row.TargetPanel:Hide()
 
     row.SpellText:ClearAllPoints()
-    row.SpellText:SetPoint("LEFT", row.Icon, "RIGHT", textInset, 0)
+    row.SpellText:SetPoint("LEFT", row.IconSlot, "RIGHT", textInset, 0)
     row.SpellText:SetPoint("RIGHT", row.TargetText, "LEFT", -textInset, 0)
 
     row.TargetText:ClearAllPoints()
-    row.TargetText:SetPoint("RIGHT", row, "RIGHT", -textInset, 0)
-    row.TargetText:SetWidth(math.max(math.floor(layout.width * 0.38), 68))
+    row.TargetText:SetPoint("RIGHT", row.TextPanel, "RIGHT", -textInset, 0)
+    row.TargetText:SetWidth(math.max(math.floor(layout.width * 0.24), 60))
 
     row.InterruptText:ClearAllPoints()
-    row.InterruptText:SetPoint("LEFT", row.Icon, "RIGHT", textInset, 0)
+    row.InterruptText:SetPoint("LEFT", row.IconSlot, "RIGHT", textInset, 0)
     row.InterruptText:SetPoint("RIGHT", row, "RIGHT", -textInset, 0)
 
     if Style and type(Style.ApplyFont) == "function" then
-        Style:ApplyFont(row.SpellText, fontSize, "OUTLINE")
-        Style:ApplyFont(row.TargetText, fontSize, "OUTLINE")
-        Style:ApplyFont(row.InterruptText, fontSize, "OUTLINE")
+        Style:ApplyFont(row.SpellText, fontSize, "THICKOUTLINE")
+        Style:ApplyFont(row.TargetText, math.max(fontSize - 1, BOARD_MIN_FONT_SIZE), "OUTLINE")
+        Style:ApplyFont(row.InterruptText, fontSize, "THICKOUTLINE")
     end
 
-    row.SpellText:SetTextColor(1, 1, 1, 1)
-    row.TargetText:SetTextColor(1, 1, 1, 1)
+    row.SpellText:SetShadowColor(0, 0, 0, 0.9)
+    row.SpellText:SetShadowOffset(1, -1)
+    row.TargetText:SetShadowColor(0, 0, 0, 0.85)
+    row.TargetText:SetShadowOffset(1, -1)
+    row.InterruptText:SetShadowColor(0, 0, 0, 0.9)
+    row.InterruptText:SetShadowOffset(1, -1)
+    row.SpellText:SetTextColor(1, 0.98, 0.96, 1)
+    row.TargetText:SetTextColor(0.96, 0.97, 1.0, 1)
     row.InterruptText:SetTextColor(1, 1, 1, 1)
 end
 
@@ -528,43 +820,39 @@ function IncomingCastBoard:ApplyRowContent(row, record, runtimeState)
     local casterUnit = record.casterUnit
     row.casterUnit = casterUnit
 
-    if SPELL_API and type(SPELL_API.GetSpellName) == "function" then
+    if type(record.spellName) == "string" and record.spellName ~= "" then
+        row.SpellText:SetText(record.spellName)
+    elseif SPELL_API and type(SPELL_API.GetSpellName) == "function" then
         row.SpellText:SetText(SPELL_API.GetSpellName(spellId) or "")
     else
         row.SpellText:SetText("")
     end
 
-    if SPELL_API and type(SPELL_API.GetSpellTexture) == "function" then
-        row.Icon:SetTexture(SPELL_API.GetSpellTexture(spellId))
-    else
-        row.Icon:SetTexture(nil)
+    local iconTexture = record.spellTexture
+    if iconTexture == nil and SPELL_API and type(SPELL_API.GetSpellTexture) == "function" then
+        iconTexture = SPELL_API.GetSpellTexture(spellId)
     end
+    row.Icon:SetTexture(iconTexture or DEFAULT_CAST_ICON_TEXTURE)
 
-    if type(UnitSpellTargetName) == "function" then
-        local targetName = UnitSpellTargetName(casterUnit)
-        if targetName then
-            row.TargetText:SetText(targetName)
+    local targetName = record.testTargetName
+    local targetClass = record.testTargetClass
+    if not targetName and type(UnitSpellTargetName) == "function" then
+        targetName = UnitSpellTargetName(casterUnit)
+    end
+    if not targetClass and type(UnitSpellTargetClass) == "function" then
+        targetClass = UnitSpellTargetClass(casterUnit)
+    end
+    row.TargetText:SetText(targetName or "")
+
+    if targetClass and CLASS_COLORS and type(CLASS_COLORS.GetClassColor) == "function" then
+        local color = CLASS_COLORS.GetClassColor(targetClass)
+        if color then
+            row.TargetText:SetTextColor(color.r, color.g, color.b, 1)
         else
-            row.TargetText:SetText("")
+            row.TargetText:SetTextColor(0.96, 0.97, 1.0, 1)
         end
     else
-        row.TargetText:SetText("")
-    end
-
-    if CLASS_COLORS and type(CLASS_COLORS.GetClassColor) == "function" and type(UnitSpellTargetClass) == "function" then
-        local targetClass = UnitSpellTargetClass(casterUnit)
-        if targetClass then
-            local color = CLASS_COLORS.GetClassColor(targetClass)
-            if color then
-                row.TargetText:SetTextColor(color.r, color.g, color.b, 1)
-            else
-                row.TargetText:SetTextColor(1, 1, 1, 1)
-            end
-        else
-            row.TargetText:SetTextColor(1, 1, 1, 1)
-        end
-    else
-        row.TargetText:SetTextColor(1, 1, 1, 1)
+        row.TargetText:SetTextColor(0.96, 0.97, 1.0, 1)
     end
 
     if not record.fadingStartedAt then
@@ -583,11 +871,12 @@ function IncomingCastBoard:ApplyRowContent(row, record, runtimeState)
         if texture and type(texture.SetVertexColorFromBoolean) == "function" then
             texture:SetVertexColorFromBoolean(record.uninterruptible, UNINTERRUPTIBLE_BAR_COLOR, INTERRUPTIBLE_BAR_COLOR)
         else
+            local color = record.uninterruptible and UNINTERRUPTIBLE_BAR_COLOR or INTERRUPTIBLE_BAR_COLOR
             row.Progress:SetStatusBarColor(
-                INTERRUPTIBLE_BAR_COLOR.r,
-                INTERRUPTIBLE_BAR_COLOR.g,
-                INTERRUPTIBLE_BAR_COLOR.b,
-                INTERRUPTIBLE_BAR_COLOR.a
+                color.r,
+                color.g,
+                color.b,
+                color.a
             )
         end
     else
@@ -606,9 +895,7 @@ function IncomingCastBoard:ApplyRowContent(row, record, runtimeState)
         row.Highlight:Hide()
     end
 
-    if row.PlayerTint and type(row.PlayerTint.SetShownFromBoolean) == "function" then
-        row.PlayerTint:SetShownFromBoolean(UnitIsUnit(casterUnit .. "target", "player"), true, false)
-    else
+    if row.PlayerTint then
         row.PlayerTint:Hide()
     end
 
@@ -625,12 +912,15 @@ function IncomingCastBoard:LayoutVisibleRows(runtimeState)
     end
 
     local partyConfig = runtimeState and runtimeState.partyConfig or nil
-    local layout = getDefaultBoardLayout(partyConfig)
+    local layout = getBoardLayout(partyConfig)
     local visibleCount = #self.visibleRows
+    local showingDetachedPlaceholder = self:ShouldShowDetachedEditModePlaceholder(runtimeState) and visibleCount == 0
     local totalHeight = 0
 
     if visibleCount > 0 then
         totalHeight = (layout.height * visibleCount) + (layout.spacing * math.max(0, visibleCount - 1))
+    elseif showingDetachedPlaceholder then
+        totalHeight = (layout.height * BOARD_EDIT_MODE_PREVIEW_ROWS) + (layout.spacing * math.max(0, BOARD_EDIT_MODE_PREVIEW_ROWS - 1))
     end
 
     root:ClearAllPoints()
@@ -657,23 +947,65 @@ function IncomingCastBoard:LayoutVisibleRows(runtimeState)
         end
     end
 
-    if visibleCount > 0 then
+    if visibleCount > 0 or showingDetachedPlaceholder then
         root:Show()
     else
         root:Hide()
+    end
+
+    if root.EditModeSelection then
+        root.EditModeSelection:SetShown(self.editModeActive == true and layout.anchoredToParty == false)
+    end
+end
+
+function IncomingCastBoard:PopulateTestCasts()
+    clearTable(self.activeCasts)
+    local now = GetTime()
+    for index, template in ipairs(TEST_CAST_RECORDS) do
+        local key = template.casterUnit
+        self.activeCasts[key] = {
+            casterUnit = key,
+            spellId = template.spellId,
+            spellName = template.spellName,
+            spellTexture = template.spellTexture,
+            isChannel = template.isChannel,
+            uninterruptible = template.uninterruptible,
+            startTime = now - (index * 0.4),
+            duration = nil,
+            fadingStartedAt = nil,
+            fadingDuration = nil,
+            wasInterrupted = nil,
+            testTargetName = template.testTargetName,
+            testTargetClass = template.testTargetClass,
+        }
     end
 end
 
 function IncomingCastBoard:RenderBoard(runtimeState)
     local enabled, state = self:IsBoardEnabled(runtimeState)
-    if not enabled then
+    if not enabled and not self:ShouldShowDetachedEditModePlaceholder(state) then
         self:StopFadeTicker()
         self:ResetBoardState()
         return
     end
 
-    if not self:EnsureRootFrame() then
+    if not self:EnsureRootFrame(state) then
         return
+    end
+
+    if state and state.testMode == true then
+        self:PopulateTestCasts()
+    else
+        for casterUnit in pairs(self.activeCasts) do
+            if string.find(casterUnit, "^__test") then
+                local row = self.rowsByCaster[casterUnit]
+                if row then
+                    self.rowsByCaster[casterUnit] = nil
+                    self:ReleaseRow(row)
+                end
+                self.activeCasts[casterUnit] = nil
+            end
+        end
     end
 
     local now = GetTime()
@@ -711,6 +1043,7 @@ function IncomingCastBoard:RenderBoard(runtimeState)
         self.sortScratch[#self.sortScratch + 1] = record
     end
     table.sort(self.sortScratch, sortByNewestStart)
+    local layout = getBoardLayout(state and state.partyConfig or nil)
 
     clearTable(self.visibleRows)
     local visibleCount = 0
@@ -718,7 +1051,7 @@ function IncomingCastBoard:RenderBoard(runtimeState)
         local record = self.sortScratch[index]
         local row = record and self.rowsByCaster[record.casterUnit] or nil
         if row then
-            if visibleCount < BOARD_MAX_ROWS then
+            if visibleCount < (layout.maxRows or 6) then
                 visibleCount = visibleCount + 1
                 self.visibleRows[visibleCount] = row
             else
@@ -759,18 +1092,18 @@ function IncomingCastBoard:RenderBoard(runtimeState)
 end
 
 function IncomingCastBoard:RefreshLayout(runtimeState)
-    local enabled = self:IsBoardEnabled(runtimeState)
-    if not enabled then
+    local enabled, state = self:IsBoardEnabled(runtimeState)
+    if not enabled and not self:ShouldShowDetachedEditModePlaceholder(state) then
         self:StopFadeTicker()
         self:ResetBoardState()
         return
     end
 
-    if not self:EnsureRootFrame() then
+    if not self:EnsureRootFrame(state) then
         return
     end
 
-    self:RenderBoard(runtimeState)
+    self:RenderBoard(state)
 end
 
 function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpellId)
@@ -804,6 +1137,7 @@ function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpel
     record.isChannel = isChannel == true
     record.startTime = GetTime()
     record.duration = getLiveCastDuration(casterUnit)
+    record.spellTexture = getLiveCastTexture(casterUnit, record.isChannel)
     record.uninterruptible = notInterruptible
     record.casterUnit = casterUnit
     record.fadingStartedAt = nil
@@ -862,6 +1196,7 @@ function IncomingCastBoard:QueuePickupFromCastStart(eventName, casterUnit, spell
         if active and not active.fadingStartedAt and active.isChannel ~= true then
             active.isChannel = true
             active.duration = type(UnitChannelDuration) == "function" and UnitChannelDuration(casterUnit) or active.duration
+            active.spellTexture = getLiveCastTexture(casterUnit, true)
             active.uninterruptible = type(UnitChannelInfo) == "function" and select(7, UnitChannelInfo(casterUnit)) or active.uninterruptible
             local row = self.rowsByCaster[casterUnit]
             if row then
@@ -927,9 +1262,11 @@ function IncomingCastBoard:HandleCastUpdate(casterUnit)
 
     if active.isChannel == true then
         active.duration = type(UnitChannelDuration) == "function" and UnitChannelDuration(casterUnit) or active.duration
+        active.spellTexture = getLiveCastTexture(casterUnit, true) or active.spellTexture
         active.uninterruptible = type(UnitChannelInfo) == "function" and select(7, UnitChannelInfo(casterUnit)) or active.uninterruptible
     else
         active.duration = type(UnitCastingDuration) == "function" and UnitCastingDuration(casterUnit) or active.duration
+        active.spellTexture = getLiveCastTexture(casterUnit, false) or active.spellTexture
         active.uninterruptible = type(UnitCastingInfo) == "function" and select(8, UnitCastingInfo(casterUnit)) or active.uninterruptible
     end
 
@@ -979,6 +1316,31 @@ function IncomingCastBoard:ValidateActiveCasts()
     if removedAny then
         self:RenderBoard()
     end
+end
+
+function IncomingCastBoard:OnEditModeEnter()
+    self.editModeActive = true
+    self:RefreshLayout()
+    if self.root then
+        self:EnsureDetachedEditModeSelection()
+        if self.root.EditModeSelection then
+            local state = self:GetRuntimeState()
+            local boardConfig = state and getBoardConfig(state.partyConfig) or {}
+            self.root.EditModeSelection:SetShown(boardConfig.anchorToPartyFrames == false)
+        end
+    end
+end
+
+function IncomingCastBoard:OnEditModeExit()
+    self.editModeActive = false
+    if self.root then
+        self.root:StopMovingOrSizing()
+        self.root._editModeMoving = false
+        if self.root.EditModeSelection then
+            self.root.EditModeSelection:Hide()
+        end
+    end
+    self:RefreshLayout()
 end
 
 function IncomingCastBoard:OnValidationEvent()

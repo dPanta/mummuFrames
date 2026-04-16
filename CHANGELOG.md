@@ -1,12 +1,20 @@
 # Changelog
 
-This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
+This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 3.5.1 - 2026-04-16
+- Fixed the dark overlay that darkened incoming-cast-board bars by removing the redundant status-bar background texture and the text/target panel layers that bled through the semi-transparent fill.
+- Fixed targeted spells configuration slider alignment so chained sliders no longer drift progressively to the right.
+- Added test-mode support for the incoming cast board, showing three sample bars with dummy spell names, target names, and class colors when test mode is active.
+- Fixed test-mode cast bars not disappearing when test mode is toggled off.
+- Fixed configuration checkboxes and controls across all lazily-built tabs not reflecting saved values after a reload by syncing widget state whenever a tab is selected.
+- Bumped addon metadata to `3.5.1`.
+
 ## 3.5.0 - 2026-04-16
-- Fixed party and raid dispel overlay fallbacks to use the player’s actual known dispel spells and talents instead of a coarse class-only table.
-- Stopped the bottom-right group dispel icon from guessing `Magic` when Midnight omits an aura’s exact dispel type, so the overlay stays visible without lying about the type icon.
+- Fixed party and raid dispel overlay fallbacks to use the player's actual known dispel spells and talents instead of a coarse class-only table.
+- Stopped the bottom-right group dispel icon from guessing `Magic` when Midnight omits an aura's exact dispel type, so the overlay stays visible without lying about the type icon.
 - Rebuilt targeted enemy-cast tracking around a new Danders-style party cast list that watches hostile nameplate casts generically instead of relying on a curated spell whitelist.
 - Removed the old per-frame spell-target border highlight flow and replaced it with a party-attached incoming cast board that avoids exact party-member target resolution and comparison-heavy secret-value handling.
 - Cleaned out the legacy tracker module, old spell-target config/docs, and the remaining border-highlight wiring so the new list owns the full targeted-cast path end to end.
@@ -40,22 +48,3 @@ This changelog keeps `Unreleased` plus the 10 most recent tagged versions.
 - Fixed the player-frame configuration page crash triggered by the new secondary power style selector.
 - Refined secondary resource visuals so icon mode no longer picks up an extra border and segmented mode uses a thin outline with aligned right-edge sizing and even segment spacing.
 - Bumped addon metadata to `3.3.0`.
-
-## 3.2.1 - 2026-04-04
-- Reworked party and raid dispellable-debuff highlighting with brighter overlays, colored frame accents, and new corner icons for Magic, Curse, Poison, and Disease debuffs.
-- Fixed party and raid `Ready` and `Pull` leader actions by dispatching slash commands through registered slash handlers instead of relying on the chat edit box flow.
-- Bumped addon metadata to `3.2.1`.
-
-## 3.2.0 - 2026-04-02
-- Rebuilt party and raid out-of-range handling around a new dedicated `rangeHandle` module that owns cached range state and frame alpha application.
-- Added spell-aware friendly/dead range probing, phase/visibility/offline gating, short-lived `UNIT_IN_RANGE_UPDATE` hints, and a lightweight polling safety net for group frames.
-- Removed the old scattered group-range helpers and AuraHandle-driven range dispatch so party and raid frames now consume one centralized range pipeline.
-- Bumped addon metadata to `3.2.0`.
-
-## 3.1.2 - 2026-04-02
-- Added feral druid combo points to the secondary power bar so druids now get the same combo-point pip bar support as rogues.
-- Bumped addon metadata to `3.1.2`.
-
-## 3.1.1 - 2026-04-01
-- Fixed Vengeance Demon Hunter soul-fragment icons by treating fragments as the current secret-value custom resource, restoring the correct 6-pip display and live refresh behavior.
-- Bumped addon metadata to `3.1.1`.
