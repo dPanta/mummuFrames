@@ -191,6 +191,44 @@ local function getLiveCastTexture(casterUnit, isChannel)
     return nil
 end
 
+-- Normalize interruptibility flags so secret booleans never leak into `and/or`.
+local function resolveBooleanLikeSafe(value, fallback)
+    if Util and type(Util.NormalizeBooleanLike) == "function" then
+        local normalizedValue = Util:NormalizeBooleanLike(value)
+        if normalizedValue ~= nil then
+            return normalizedValue
+        end
+
+        local normalizedFallback = Util:NormalizeBooleanLike(fallback)
+        if normalizedFallback ~= nil then
+            return normalizedFallback
+        end
+    end
+
+    if type(value) == "boolean" then
+        return value
+    end
+    if type(fallback) == "boolean" then
+        return fallback
+    end
+
+    return fallback
+end
+
+-- Read the current cast/channel interruptibility without boolean-testing wrappers.
+local function getLiveCastUninterruptible(casterUnit, isChannel, fallback)
+    local rawValue = nil
+    if isChannel == true then
+        if type(UnitChannelInfo) == "function" then
+            rawValue = select(7, UnitChannelInfo(casterUnit))
+        end
+    elseif type(UnitCastingInfo) == "function" then
+        rawValue = select(8, UnitCastingInfo(casterUnit))
+    end
+
+    return resolveBooleanLikeSafe(rawValue, fallback)
+end
+
 local function getBoardConfig(partyConfig)
     local boardConfig = type(partyConfig) == "table" and partyConfig.incomingCastBoard or nil
     if type(boardConfig) ~= "table" then
@@ -1138,7 +1176,7 @@ function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpel
     record.startTime = GetTime()
     record.duration = getLiveCastDuration(casterUnit)
     record.spellTexture = getLiveCastTexture(casterUnit, record.isChannel)
-    record.uninterruptible = notInterruptible
+    record.uninterruptible = resolveBooleanLikeSafe(notInterruptible, record.uninterruptible)
     record.casterUnit = casterUnit
     record.fadingStartedAt = nil
     record.fadingDuration = nil
@@ -1197,7 +1235,7 @@ function IncomingCastBoard:QueuePickupFromCastStart(eventName, casterUnit, spell
             active.isChannel = true
             active.duration = type(UnitChannelDuration) == "function" and UnitChannelDuration(casterUnit) or active.duration
             active.spellTexture = getLiveCastTexture(casterUnit, true)
-            active.uninterruptible = type(UnitChannelInfo) == "function" and select(7, UnitChannelInfo(casterUnit)) or active.uninterruptible
+            active.uninterruptible = getLiveCastUninterruptible(casterUnit, true, active.uninterruptible)
             local row = self.rowsByCaster[casterUnit]
             if row then
                 self:ApplyRowContent(row, active, self:GetRuntimeState())
@@ -1263,11 +1301,11 @@ function IncomingCastBoard:HandleCastUpdate(casterUnit)
     if active.isChannel == true then
         active.duration = type(UnitChannelDuration) == "function" and UnitChannelDuration(casterUnit) or active.duration
         active.spellTexture = getLiveCastTexture(casterUnit, true) or active.spellTexture
-        active.uninterruptible = type(UnitChannelInfo) == "function" and select(7, UnitChannelInfo(casterUnit)) or active.uninterruptible
+        active.uninterruptible = getLiveCastUninterruptible(casterUnit, true, active.uninterruptible)
     else
         active.duration = type(UnitCastingDuration) == "function" and UnitCastingDuration(casterUnit) or active.duration
         active.spellTexture = getLiveCastTexture(casterUnit, false) or active.spellTexture
-        active.uninterruptible = type(UnitCastingInfo) == "function" and select(8, UnitCastingInfo(casterUnit)) or active.uninterruptible
+        active.uninterruptible = getLiveCastUninterruptible(casterUnit, false, active.uninterruptible)
     end
 
     local row = self.rowsByCaster[casterUnit]

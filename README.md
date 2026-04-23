@@ -12,6 +12,7 @@ Unitframes addon for World of Warcraft. Minimal, core functionalities, basic cus
 - libSharedMedia integration should work as well
 - Stagger bar for brewmaster monks (coloring per light/med/heavy)
 - Ironfur stacking/overlaping bars with glows and stack text
+- Ignore Pain bar for protection warriors
 - Absorb display as overlay over healthbar.
 - Party frames with extensive, customizable buff/hots/defensives tracking
     - Specify where and how to display given buff/hot (icon, colored rectangle)

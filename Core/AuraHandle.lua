@@ -965,7 +965,7 @@ local function safeUnitTokensMatch(leftUnitToken, rightUnitToken)
     end
 
     local okMatch, isMatch = pcall(UnitIsUnit, leftUnitToken, rightUnitToken)
-    return okMatch and isMatch == true
+    return okMatch and safeTruthy(isMatch)
 end
 
 -- Read a dispel type from a Blizzard compact-frame debuff widget, if present.

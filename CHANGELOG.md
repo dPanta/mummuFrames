@@ -4,6 +4,13 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 3.6.0 - 2026-04-23
+- Reworked the Protection warrior Ignore Pain tertiary bar around a simpler visual absorb flow so the combat bar follows live absorb updates without relying on protected combat percent math.
+- Removed the unreliable Ignore Pain combat text path and cleaned out the extra cast-grace, polling, and statusbar-readback fallbacks that had accumulated while debugging it.
+- Hid the temporary `IP` label so the Ignore Pain bar now renders as a visual-only absorb indicator.
+- Fixed the AuraHandle shared-unit comparison taint by routing `UnitIsUnit()` secret booleans through the existing safe truthy guard.
+- Bumped addon metadata to `3.6.0`.
+
 ## 3.5.1 - 2026-04-16
 - Fixed the dark overlay that darkened incoming-cast-board bars by removing the redundant status-bar background texture and the text/target panel layers that bled through the semi-transparent fill.
 - Fixed targeted spells configuration slider alignment so chained sliders no longer drift progressively to the right.

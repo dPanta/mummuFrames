@@ -205,12 +205,18 @@ local UNHOLY_SPEC_ID = 252
 local FERAL_SPEC_ID = 103
 local IRONFUR_SPELL_ID = 192081
 local GUARDIAN_SPEC_ID = 104
+local PROTECTION_WARRIOR_SPEC_ID = 73
 local BREWMASTER_SPEC_ID = 268
 local WINDWALKER_SPEC_ID = 269
 local ENHANCEMENT_SPEC_ID = 263
 local VENGEANCE_DH_SPEC_ID = 581
 local MAELSTROM_WEAPON_SPELL_ID = 344179
 local DEMON_HUNTER_SOUL_FRAGMENTS_SPELL_ID = 228477
+local IGNORE_PAIN_SPELL_IDS = {
+    190456,
+    1277297,
+}
+local IGNORE_PAIN_CAP_RATIO = 0.30
 local TERTIARY_STAGGER_EMPTY_ALPHA = 0.24
 local IRONFUR_BASE_DURATION = 7
 local SPELL_AURA_SCAN_MAX = 255
@@ -1038,6 +1044,20 @@ local function getAurasBySpellID(unitToken, filter, spellID)
         return fallback
     end
 
+    local auraPoints = nil
+    if type(auraData.points) == "table" then
+        auraPoints = {}
+        for pointIndex = 1, 3 do
+            local pointValue = safeNumber(auraData.points[pointIndex], nil)
+            if pointValue ~= nil then
+                auraPoints[pointIndex] = pointValue
+            end
+        end
+        if next(auraPoints) == nil then
+            auraPoints = nil
+        end
+    end
+
     local matches = {
         {
             name = auraData.name,
@@ -1046,10 +1066,32 @@ local function getAurasBySpellID(unitToken, filter, spellID)
             count = safeNumber(auraData.applications, 1) or 1,
             duration = safeNumber(auraData.duration, 0) or 0,
             expirationTime = safeNumber(auraData.expirationTime, 0) or 0,
+            points = auraPoints,
+            value = auraPoints and auraPoints[1] or nil,
             spellId = normalizedSpellID,
         },
     }
     return matches, queryRestricted == true
+end
+
+-- Return the first matching player aura across a spell-id fallback list.
+local function getFirstPlayerAuraBySpellIDs(spellIDs)
+    if type(spellIDs) ~= "table" then
+        return nil, false
+    end
+
+    local queryRestricted = false
+    for index = 1, #spellIDs do
+        local matchedAuras, auraRestricted = getAurasBySpellID("player", "HELPFUL|PLAYER", spellIDs[index])
+        if #matchedAuras > 0 then
+            return matchedAuras[1], auraRestricted == true
+        end
+        if auraRestricted == true then
+            queryRestricted = true
+        end
+    end
+
+    return nil, queryRestricted
 end
 
 -- Return player specialization id.
@@ -3193,6 +3235,57 @@ function getSafeNumericValue(value, fallback)
     return fallback
 end
 
+-- Read the unit's total damage absorb without doing Lua math on protected values.
+local function getUnitDamageAbsorbSafe(owner, unitToken)
+    local fallbackAbsorb = nil
+    if type(UnitGetTotalAbsorbs) == "function" then
+        fallbackAbsorb = UnitGetTotalAbsorbs(unitToken)
+    end
+
+    if type(owner) ~= "table"
+        or type(CreateUnitHealPredictionCalculator) ~= "function"
+        or type(UnitGetDetailedHealPrediction) ~= "function"
+    then
+        return fallbackAbsorb, getSafeNumericValue(fallbackAbsorb, nil)
+    end
+
+    if owner._healPredictionCalculatorUnsupported == true then
+        return fallbackAbsorb, getSafeNumericValue(fallbackAbsorb, nil)
+    end
+
+    local calculator = owner._healPredictionCalculator
+    if not calculator then
+        calculator = CreateUnitHealPredictionCalculator()
+        if not calculator then
+            owner._healPredictionCalculatorUnsupported = true
+            return fallbackAbsorb, getSafeNumericValue(fallbackAbsorb, nil)
+        end
+        owner._healPredictionCalculator = calculator
+    end
+
+    if calculator.SetDamageAbsorbClampMode and Enum and Enum.UnitDamageAbsorbClampMode then
+        calculator:SetDamageAbsorbClampMode(Enum.UnitDamageAbsorbClampMode.MaximumHealth)
+    end
+
+    local okPrediction = pcall(UnitGetDetailedHealPrediction, unitToken, "player", calculator)
+    if not okPrediction then
+        return fallbackAbsorb, getSafeNumericValue(fallbackAbsorb, nil)
+    end
+
+    local absorbAmount = nil
+    if calculator.GetDamageAbsorbs then
+        absorbAmount = calculator:GetDamageAbsorbs()
+    elseif calculator.GetTotalDamageAbsorbs then
+        absorbAmount = calculator:GetTotalDamageAbsorbs()
+    end
+
+    if absorbAmount == nil then
+        absorbAmount = fallbackAbsorb
+    end
+
+    return absorbAmount, getSafeNumericValue(absorbAmount, getSafeNumericValue(fallbackAbsorb, nil))
+end
+
 -- Filter guardian stack states down to entries that are still active.
 collectActiveGuardianStackStates = function(bar, now)
     local activeStates = {}
@@ -3521,6 +3614,80 @@ local function updateMonkStaggerTertiaryBar(bar, exists, previewMode)
     bar:Show()
 end
 
+-- Refresh protection-warrior tertiary-power visuals from current Ignore Pain value.
+local function updateProtectionIgnorePainTertiaryBar(bar, exists, previewMode)
+    stopTertiaryPowerBarTimer(bar)
+    hideTertiaryPowerStackOverlays(bar)
+    setGuardianRightGlow(bar, 0, 0)
+
+    local maxHealth = getSafeNumericValue(previewMode and 100000 or UnitHealthMax("player"), previewMode and 100000 or 1) or 1
+    if maxHealth <= 0 then
+        maxHealth = 1
+    end
+
+    local absorbCap = math.max(1, maxHealth * IGNORE_PAIN_CAP_RATIO)
+    local barCurrentValue = absorbCap * 0.64
+    local colorProgress = previewMode and 0.64 or nil
+
+    if not previewMode then
+        if not exists then
+            hideTertiaryPowerBar(bar)
+            return
+        end
+
+        local totalAbsorbsRaw, totalAbsorbsNumeric = getUnitDamageAbsorbSafe(bar, "player")
+        local auraData, queryRestricted = getFirstPlayerAuraBySpellIDs(IGNORE_PAIN_SPELL_IDS)
+        local hasAbsorbSignal = totalAbsorbsRaw ~= nil and (
+            isSecretValue(totalAbsorbsRaw)
+            or totalAbsorbsNumeric == nil
+            or (totalAbsorbsNumeric or 0) > 0
+        )
+        local hasVisibleIgnorePain = auraData ~= nil
+            or (queryRestricted == true and InCombatLockdown() and hasAbsorbSignal)
+        if hasVisibleIgnorePain ~= true then
+            hideTertiaryPowerBar(bar)
+            return
+        end
+
+        barCurrentValue = totalAbsorbsRaw
+        if barCurrentValue == nil then
+            barCurrentValue = auraData and auraData.value or totalAbsorbsNumeric or 0
+        end
+
+        local auraAbsorbNumeric = getSafeNumericValue(auraData and auraData.value, nil)
+        local resolvedNumericAbsorb = totalAbsorbsNumeric
+        if type(resolvedNumericAbsorb) ~= "number" or resolvedNumericAbsorb <= 0 then
+            resolvedNumericAbsorb = auraAbsorbNumeric
+        end
+        if type(resolvedNumericAbsorb) == "number" and resolvedNumericAbsorb > 0 then
+            colorProgress = Util:Clamp(resolvedNumericAbsorb / absorbCap, 0, 1)
+        end
+    end
+
+    setStatusBarValueSafe(bar.Bar, barCurrentValue, absorbCap)
+
+    local r, g, b = 0.79, 0.66, 0.31
+    if type(colorProgress) == "number" then
+        if colorProgress >= 0.7 then
+            r, g, b = 0.92, 0.77, 0.34
+        elseif colorProgress < 0.35 then
+            r, g, b = 0.56, 0.49, 0.28
+        end
+    end
+
+    bar.Bar:SetStatusBarColor(r, g, b, 0.95)
+    if bar.OverlayBar then
+        bar.OverlayBar:Hide()
+    end
+
+    if bar.ValueText then
+        bar.ValueText:SetText("")
+        bar.ValueText:Hide()
+    end
+
+    bar:Show()
+end
+
 -- Refresh secondary power bar.
 function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
     local bar = frame and frame.SecondaryPowerBar or nil
@@ -3654,6 +3821,11 @@ function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMod
 
     if classToken == "MONK" and specID == BREWMASTER_SPEC_ID then
         updateMonkStaggerTertiaryBar(bar, exists, previewMode)
+        return
+    end
+
+    if classToken == "WARRIOR" and specID == PROTECTION_WARRIOR_SPEC_ID then
+        updateProtectionIgnorePainTertiaryBar(bar, exists, previewMode)
         return
     end
 
