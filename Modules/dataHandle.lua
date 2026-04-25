@@ -279,7 +279,7 @@ local DEFAULT_PROFILE = {
                     scale = 1,
                     max = 4,
                     hidePermanent = false,
-                    hideLongDuration = false,
+                    hideLongDuration = true,
                     maxDurationSeconds = 60,
                 },
             },
@@ -458,18 +458,18 @@ local function getDefaultTrackedAuraSize()
     return 14
 end
 
--- Return copied tracked aura spell-name defaults for the current class.
+-- Return copied tracked aura spell-name defaults for bundled healer presets.
 local function getDefaultTrackedAuraNames()
     if Util and type(Util.GetTrackedAuraDefaultNames) == "function" then
-        return Util:GetTrackedAuraDefaultNames()
+        return Util:GetTrackedAuraDefaultNames("ALL_HEALERS")
     end
     return {}
 end
 
--- Return copied structured tracked aura defaults for the current class.
+-- Return copied structured tracked aura defaults for bundled healer presets.
 local function getDefaultTrackedAuraEntries()
     if Util and type(Util.GetTrackedAuraDefaultEntries) == "function" then
-        return Util:GetTrackedAuraDefaultEntries()
+        return Util:GetTrackedAuraDefaultEntries("ALL_HEALERS")
     end
     return {}
 end
@@ -591,6 +591,9 @@ local function sanitizeTrackedAuraEntry(value)
         slot = normalizeTrackedAuraSlot(display, value.slot),
         ownOnly = value.ownOnly ~= false,
     }
+    if type(value.classToken) == "string" and value.classToken ~= "" then
+        entry.classToken = value.classToken
+    end
 
     local size = tonumber(value.size)
     if type(size) == "number" then
@@ -959,6 +962,36 @@ local function getProfileCacheKey(charKey, profileName)
     return string.format("%s::%s", tostring(charKey or "UnknownCharacter"), tostring(profileName or "Default"))
 end
 
+local function applyPartyDebuffFilterDefaultMigration(profile)
+    local partyConfig = profile
+        and type(profile.units) == "table"
+        and type(profile.units.party) == "table"
+        and profile.units.party
+        or nil
+    local debuffsConfig = partyConfig
+        and type(partyConfig.aura) == "table"
+        and type(partyConfig.aura.debuffs) == "table"
+        and partyConfig.aura.debuffs
+        or nil
+    if type(debuffsConfig) ~= "table" or debuffsConfig._longDurationDefaultMigrated == true then
+        return
+    end
+
+    local maxIcons = math.floor((tonumber(debuffsConfig.max) or 4) + 0.5)
+    local iconSize = math.floor((tonumber(debuffsConfig.size) or 16) + 0.5)
+    local threshold = math.floor((tonumber(debuffsConfig.maxDurationSeconds) or 60) + 0.5)
+    local looksLikeOldDefault = debuffsConfig.hideLongDuration ~= true
+        and debuffsConfig.hidePermanent ~= true
+        and maxIcons == 4
+        and iconSize == 16
+        and threshold == 60
+
+    if looksLikeOldDefault then
+        debuffsConfig.hideLongDuration = true
+    end
+    debuffsConfig._longDurationDefaultMigrated = true
+end
+
 local function sanitizeGroupDebuffFilterConfig(unitConfig)
     if type(unitConfig) ~= "table" then
         return
@@ -1009,6 +1042,7 @@ maintainProfile = function(profile, defaultFontPath)
     end
 
     if type(profile.units) == "table" then
+        applyPartyDebuffFilterDefaultMigration(profile)
         sanitizeGroupDebuffFilterConfig(profile.units.party)
         sanitizeGroupDebuffFilterConfig(profile.units.raid)
 

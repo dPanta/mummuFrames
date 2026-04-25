@@ -4,6 +4,16 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 3.7.0 - 2026-04-25
+- Reworked the Heal/Aura tracking configuration into a preset-driven editor with all-healer defaults, per-class healer preset buttons, and a party-frame workspace preview.
+- Added draggable aura indicators in the configuration preview so square and icon positions can be adjusted directly while the size and offset controls stay visible beside the preview.
+- Expanded the bundled tracked-aura defaults for Restoration druid, Preservation evoker, Mistweaver monk, Holy paladin, Priest, and Restoration shaman support/HoT tracking.
+- Added same-corner square sibling rendering so Druid `Rejuvenation (Germination)` can anchor next to `Rejuvenation` instead of consuming a detached icon slot.
+- Added size-gated 1px borders to tracked aura icons, square indicators, and their preview counterparts when the indicator size is 10px or larger.
+- Reworked party-frame debuff rendering for Retail/Midnight by avoiding nameplate-only clutter, hiding long non-dispellable debuffs by default, and separating dispellable overlay+type-icon display from non-dispellable type-icon-only display.
+- Hardened aura/debuff access against Midnight secret-value wrappers, including safe handling for dispel flags, spell IDs, icons, durations, expiration times, and aura instance IDs.
+- Bumped addon metadata to `3.7.0` and updated the TOC interface tag to `120005`.
+
 ## 3.6.0 - 2026-04-23
 - Reworked the Protection warrior Ignore Pain tertiary bar around a simpler visual absorb flow so the combat bar follows live absorb updates without relying on protected combat percent math.
 - Removed the unreliable Ignore Pain combat text path and cleaned out the extra cast-grace, polling, and statusbar-readback fallbacks that had accumulated while debugging it.

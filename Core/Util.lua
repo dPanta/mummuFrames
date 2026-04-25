@@ -8,14 +8,45 @@ local _, ns = ...
 -- Shared utility namespace.
 local Util = {}
 local TRACKED_AURA_DEFAULT_SIZE = 14
-local function createTrackedAuraDefaultEntry(spellName, display, slot, color, size, ownOnly)
+local TRACKED_AURA_HEALER_CLASS_ORDER = {
+    "DRUID",
+    "EVOKER",
+    "MONK",
+    "PALADIN",
+    "PRIEST",
+    "SHAMAN",
+}
+local TRACKED_AURA_CLASS_LABELS = {
+    DEATHKNIGHT = "Death Knight",
+    DEMONHUNTER = "Demon Hunter",
+    DRUID = "Druid",
+    EVOKER = "Evoker",
+    HUNTER = "Hunter",
+    MAGE = "Mage",
+    MONK = "Monk",
+    PALADIN = "Paladin",
+    PRIEST = "Priest",
+    ROGUE = "Rogue",
+    SHAMAN = "Shaman",
+    WARLOCK = "Warlock",
+    WARRIOR = "Warrior",
+}
+
+local function createTrackedAuraDefaultEntry(spellName, display, slot, color, size, ownOnly, classToken, x, y)
     local entry = {
         spell = spellName,
         display = display,
         slot = slot,
         ownOnly = ownOnly ~= false,
         size = size,
+        classToken = classToken,
     }
+    if type(x) == "number" and x ~= 0 then
+        entry.x = x
+    end
+    if type(y) == "number" and y ~= 0 then
+        entry.y = y
+    end
     if type(color) == "table" then
         entry.color = {
             r = color[1] or 1,
@@ -27,51 +58,127 @@ local function createTrackedAuraDefaultEntry(spellName, display, slot, color, si
     return entry
 end
 
+local function trackedAuraEntry(spellName, display, slot, color, size, ownOnly, x, y)
+    return {
+        spellName = spellName,
+        display = display,
+        slot = slot,
+        color = color,
+        size = size,
+        ownOnly = ownOnly,
+        x = x,
+        y = y,
+    }
+end
+
+local function buildTrackedAuraDefaults(classToken, entries)
+    local defaults = {}
+    if type(entries) ~= "table" then
+        return defaults
+    end
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        if type(entry) == "table" then
+            defaults[#defaults + 1] = createTrackedAuraDefaultEntry(
+                entry.spellName,
+                entry.display,
+                entry.slot,
+                entry.color,
+                entry.size,
+                entry.ownOnly,
+                classToken,
+                entry.x,
+                entry.y
+            )
+        end
+    end
+
+    return defaults
+end
+
 local TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS = {
     DEATHKNIGHT = {},
     DEMONHUNTER = {},
-    DRUID = {
-        createTrackedAuraDefaultEntry("Rejuvenation", "square", "TOPLEFT", { 0.20, 0.90, 0.45, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Lifebloom", "square", "TOPRIGHT", { 0.34, 1.00, 0.72, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Regrowth", "square", "BOTTOMLEFT", { 0.64, 1.00, 0.36, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Wild Growth", "square", "BOTTOMRIGHT", { 0.17, 0.78, 0.51, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Cenarion Ward", "icon", nil, nil, 12),
-        createTrackedAuraDefaultEntry("Germination", "icon", nil, nil, 12),
-    },
-    EVOKER = {
-        createTrackedAuraDefaultEntry("Reversion", "square", "TOPLEFT", { 0.32, 0.86, 0.67, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Echo", "square", "TOPRIGHT", { 0.95, 0.74, 0.32, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Dream Breath", "square", "BOTTOMLEFT", { 0.24, 0.92, 0.48, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Temporal Anomaly", "icon", nil, nil, 12),
-    },
+    DRUID = buildTrackedAuraDefaults("DRUID", {
+        trackedAuraEntry("Rejuvenation", "square", "TOPLEFT", { 0.20, 0.90, 0.45, 0.95 }, 8),
+        trackedAuraEntry("Rejuvenation (Germination)", "square", "TOPLEFT", { 0.64, 0.38, 1.00, 0.95 }, 8, true, 9, 0),
+        trackedAuraEntry("Lifebloom", "square", "TOPRIGHT", { 0.34, 1.00, 0.72, 0.95 }, 8),
+        trackedAuraEntry("Regrowth", "square", "BOTTOMLEFT", { 0.64, 1.00, 0.36, 0.95 }, 8),
+        trackedAuraEntry("Wild Growth", "square", "BOTTOMRIGHT", { 0.17, 0.78, 0.51, 0.95 }, 8),
+        trackedAuraEntry("Cenarion Ward", "icon", "ICON1", nil, 12),
+        trackedAuraEntry("Ironbark", "icon", "ICON2", nil, 12, false),
+    }),
+    EVOKER = buildTrackedAuraDefaults("EVOKER", {
+        trackedAuraEntry("Reversion", "square", "TOPLEFT", { 0.32, 0.86, 0.67, 0.95 }, 8),
+        trackedAuraEntry("Echo", "square", "TOPRIGHT", { 0.95, 0.74, 0.32, 0.95 }, 8),
+        trackedAuraEntry("Dream Breath", "square", "BOTTOMLEFT", { 0.24, 0.92, 0.48, 0.95 }, 8),
+        trackedAuraEntry("Lifebind", "square", "BOTTOMRIGHT", { 0.36, 0.74, 1.00, 0.95 }, 8),
+        trackedAuraEntry("Temporal Barrier", "icon", "ICON1", nil, 12),
+        trackedAuraEntry("Time Dilation", "icon", "ICON2", nil, 12, false),
+    }),
     HUNTER = {},
     MAGE = {},
-    MONK = {
-        createTrackedAuraDefaultEntry("Renewing Mist", "square", "TOPLEFT", { 0.24, 0.94, 0.54, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Enveloping Mist", "square", "TOPRIGHT", { 0.62, 1.00, 0.74, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Life Cocoon", "icon", nil, nil, 12),
-    },
-    PALADIN = {
-        createTrackedAuraDefaultEntry("Beacon of Light", "square", "TOPLEFT", { 1.00, 0.86, 0.28, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Beacon of Faith", "square", "TOPRIGHT", { 1.00, 0.72, 0.24, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Sacred Shield", "icon", nil, nil, 12),
-        createTrackedAuraDefaultEntry("Aura Mastery", "icon", nil, nil, 12),
-    },
-    PRIEST = {
-        createTrackedAuraDefaultEntry("Renew", "square", "TOPLEFT", { 1.00, 0.96, 0.42, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Atonement", "square", "TOPRIGHT", { 1.00, 0.86, 0.30, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Power Word: Shield", "square", "BOTTOMLEFT", { 0.34, 0.74, 1.00, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Prayer of Mending", "square", "BOTTOMRIGHT", { 0.95, 0.95, 1.00, 0.95 }, 8),
-    },
+    MONK = buildTrackedAuraDefaults("MONK", {
+        trackedAuraEntry("Renewing Mist", "square", "TOPLEFT", { 0.24, 0.94, 0.54, 0.95 }, 8),
+        trackedAuraEntry("Enveloping Mist", "square", "TOPRIGHT", { 0.62, 1.00, 0.74, 0.95 }, 8),
+        trackedAuraEntry("Essence Font", "square", "BOTTOMLEFT", { 0.38, 0.82, 1.00, 0.95 }, 8),
+        trackedAuraEntry("Life Cocoon", "icon", "ICON1", nil, 12, false),
+    }),
+    PALADIN = buildTrackedAuraDefaults("PALADIN", {
+        trackedAuraEntry("Beacon of Light", "square", "TOPLEFT", { 1.00, 0.86, 0.28, 0.95 }, 8),
+        trackedAuraEntry("Beacon of Faith", "square", "TOPRIGHT", { 1.00, 0.72, 0.24, 0.95 }, 8),
+        trackedAuraEntry("Beacon of Virtue", "square", "BOTTOMLEFT", { 1.00, 0.62, 0.32, 0.95 }, 8),
+        trackedAuraEntry("Barrier of Faith", "square", "BOTTOMRIGHT", { 1.00, 0.92, 0.56, 0.95 }, 8),
+        trackedAuraEntry("Aura Mastery", "icon", "ICON1", nil, 12, false),
+        trackedAuraEntry("Blessing of Sacrifice", "icon", "ICON2", nil, 12, false),
+    }),
+    PRIEST = buildTrackedAuraDefaults("PRIEST", {
+        trackedAuraEntry("Renew", "square", "TOPLEFT", { 1.00, 0.96, 0.42, 0.95 }, 8),
+        trackedAuraEntry("Atonement", "square", "TOPRIGHT", { 1.00, 0.86, 0.30, 0.95 }, 8),
+        trackedAuraEntry("Power Word: Shield", "square", "BOTTOMLEFT", { 0.34, 0.74, 1.00, 0.95 }, 8),
+        trackedAuraEntry("Prayer of Mending", "square", "BOTTOMRIGHT", { 0.95, 0.95, 1.00, 0.95 }, 8),
+        trackedAuraEntry("Guardian Spirit", "icon", "ICON1", nil, 12, false),
+        trackedAuraEntry("Pain Suppression", "icon", "ICON2", nil, 12, false),
+    }),
     ROGUE = {},
-    SHAMAN = {
-        createTrackedAuraDefaultEntry("Riptide", "square", "TOPLEFT", { 0.28, 0.74, 1.00, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Unleash Life", "square", "TOPRIGHT", { 0.22, 1.00, 0.78, 0.95 }, 8),
-        createTrackedAuraDefaultEntry("Earthen Wall Totem", "icon", nil, nil, 12),
-    },
+    SHAMAN = buildTrackedAuraDefaults("SHAMAN", {
+        trackedAuraEntry("Riptide", "square", "TOPLEFT", { 0.28, 0.74, 1.00, 0.95 }, 8),
+        trackedAuraEntry("Earth Shield", "square", "TOPRIGHT", { 0.72, 0.54, 0.28, 0.95 }, 8),
+        trackedAuraEntry("Earthliving", "square", "BOTTOMLEFT", { 0.34, 0.86, 0.54, 0.95 }, 8),
+        trackedAuraEntry("Ancestral Vigor", "square", "BOTTOMRIGHT", { 0.22, 1.00, 0.78, 0.95 }, 8),
+        trackedAuraEntry("Spirit Link Totem", "icon", "ICON1", nil, 12, false),
+        trackedAuraEntry("Earthen Wall", "icon", "ICON2", nil, 12, false),
+    }),
     WARLOCK = {},
     WARRIOR = {},
 }
+
+local function copyTrackedAuraDefaultEntry(entry)
+    local copiedEntry = {
+        spell = entry.spell,
+        display = entry.display,
+        slot = entry.slot,
+        ownOnly = entry.ownOnly ~= false,
+        size = entry.size,
+        classToken = entry.classToken,
+    }
+    if type(entry.x) == "number" then
+        copiedEntry.x = entry.x
+    end
+    if type(entry.y) == "number" then
+        copiedEntry.y = entry.y
+    end
+    if type(entry.color) == "table" then
+        copiedEntry.color = {
+            r = entry.color.r or 1,
+            g = entry.color.g or 1,
+            b = entry.color.b or 1,
+            a = entry.color.a or 0.95,
+        }
+    end
+    return copiedEntry
+end
 
 -- Coerce numeric-like input to a number or return fallback.
 local function toNumberSafe(input, fallback)
@@ -304,38 +411,20 @@ function Util:GetTrackedAuraDefaultSize()
     return TRACKED_AURA_DEFAULT_SIZE
 end
 
--- Return a copied tracked aura whitelist for the current or provided class.
-function Util:GetTrackedAuraDefaultNames(classToken)
-    local resolvedClassToken = classToken
-    if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
-        local _, liveClassToken = UnitClass("player")
-        resolvedClassToken = liveClassToken
-    end
-
-    local defaults = TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS[resolvedClassToken]
+function Util:GetTrackedAuraHealerClassOrder()
     local copy = {}
-    if type(defaults) ~= "table" then
-        return copy
-    end
-
-    for index = 1, #defaults do
-        local entry = defaults[index]
-        if type(entry) == "table" and type(entry.spell) == "string" and entry.spell ~= "" then
-            copy[#copy + 1] = entry.spell
-        end
+    for index = 1, #TRACKED_AURA_HEALER_CLASS_ORDER do
+        copy[index] = TRACKED_AURA_HEALER_CLASS_ORDER[index]
     end
     return copy
 end
 
--- Return copied structured tracked aura defaults for the current or provided class.
-function Util:GetTrackedAuraDefaultEntries(classToken)
-    local resolvedClassToken = classToken
-    if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
-        local _, liveClassToken = UnitClass("player")
-        resolvedClassToken = liveClassToken
-    end
+function Util:GetTrackedAuraClassLabel(classToken)
+    return TRACKED_AURA_CLASS_LABELS[classToken] or tostring(classToken or "")
+end
 
-    local defaults = TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS[resolvedClassToken]
+function Util:GetTrackedAuraDefaultEntriesForClass(classToken)
+    local defaults = TRACKED_AURA_DEFAULT_ENTRIES_BY_CLASS[classToken]
     local copy = {}
     if type(defaults) ~= "table" then
         return copy
@@ -344,26 +433,64 @@ function Util:GetTrackedAuraDefaultEntries(classToken)
     for index = 1, #defaults do
         local entry = defaults[index]
         if type(entry) == "table" then
-            local copiedEntry = {
-                spell = entry.spell,
-                display = entry.display,
-                slot = entry.slot,
-                ownOnly = entry.ownOnly ~= false,
-                size = entry.size,
-            }
-            if type(entry.color) == "table" then
-                copiedEntry.color = {
-                    r = entry.color.r or 1,
-                    g = entry.color.g or 1,
-                    b = entry.color.b or 1,
-                    a = entry.color.a or 0.95,
-                }
-            end
-            copy[#copy + 1] = copiedEntry
+            copy[#copy + 1] = copyTrackedAuraDefaultEntry(entry)
         end
     end
-
     return copy
+end
+
+function Util:GetTrackedAuraAllHealerDefaultEntries()
+    local entries = {}
+    for index = 1, #TRACKED_AURA_HEALER_CLASS_ORDER do
+        local classEntries = self:GetTrackedAuraDefaultEntriesForClass(TRACKED_AURA_HEALER_CLASS_ORDER[index])
+        for entryIndex = 1, #classEntries do
+            entries[#entries + 1] = classEntries[entryIndex]
+        end
+    end
+    return entries
+end
+
+-- Return a copied tracked aura whitelist for a class or the bundled healer set.
+function Util:GetTrackedAuraDefaultNames(classToken)
+    local entries
+    if classToken == "ALL_HEALERS" then
+        entries = self:GetTrackedAuraAllHealerDefaultEntries()
+    else
+        local resolvedClassToken = classToken
+        if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
+            local _, liveClassToken = UnitClass("player")
+            resolvedClassToken = liveClassToken
+        end
+        entries = self:GetTrackedAuraDefaultEntriesForClass(resolvedClassToken)
+    end
+
+    local copy = {}
+    if type(entries) ~= "table" then
+        return copy
+    end
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        if type(entry) == "table" and type(entry.spell) == "string" and entry.spell ~= "" then
+            copy[#copy + 1] = entry.spell
+        end
+    end
+    return copy
+end
+
+-- Return copied structured tracked aura defaults for a class or the bundled healer set.
+function Util:GetTrackedAuraDefaultEntries(classToken)
+    if classToken == "ALL_HEALERS" then
+        return self:GetTrackedAuraAllHealerDefaultEntries()
+    end
+
+    local resolvedClassToken = classToken
+    if type(resolvedClassToken) ~= "string" or resolvedClassToken == "" then
+        local _, liveClassToken = UnitClass("player")
+        resolvedClassToken = liveClassToken
+    end
+
+    return self:GetTrackedAuraDefaultEntriesForClass(resolvedClassToken)
 end
 
 -- Run immediately when safe, or queue the callback until combat ends.
