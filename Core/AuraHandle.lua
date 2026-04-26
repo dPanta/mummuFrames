@@ -3336,6 +3336,23 @@ function AuraHandle:BuildTrackedAuraDeltaMatchSets(config)
     }
 end
 
+local function safeSetContains(set, value, expectedType)
+    if type(set) ~= "table" then
+        return false
+    end
+
+    local ok, matched = pcall(function()
+        if expectedType and type(value) ~= expectedType then
+            return false
+        end
+        if value == nil or isSecretAuraValue(value) then
+            return false
+        end
+        return set[value] == true
+    end)
+    return ok and matched == true
+end
+
 function AuraHandle:IsAuraPayloadRelevantToTrackedIndicators(auraData, matchSets)
     if type(auraData) ~= "table" or type(matchSets) ~= "table" then
         return true
@@ -3351,12 +3368,12 @@ function AuraHandle:IsAuraPayloadRelevantToTrackedIndicators(auraData, matchSets
     end
 
     local auraName = getAuraPayloadField(auraData, "name")
-    if type(auraName) == "string" and matchSets.spellNames[auraName] == true then
+    if safeSetContains(matchSets.spellNames, auraName, "string") then
         return true
     end
 
     local auraSpellID = normalizeSpellID(getAuraPayloadField(auraData, "spellId"))
-    return auraSpellID ~= nil and matchSets.spellIDs[auraSpellID] == true
+    return safeSetContains(matchSets.spellIDs, auraSpellID, "number")
 end
 
 function AuraHandle:GroupAuraPayloadListHasTrackedChange(auraList, matchSets)
