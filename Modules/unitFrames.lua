@@ -352,6 +352,20 @@ local function hideAuraButtonPool(buttons)
     end
 end
 
+local function clearRenderedAuraInstances(frame)
+    if not frame then
+        return
+    end
+
+    local rendered = frame._mummuRenderedAuraInstanceIDs
+    if type(rendered) ~= "table" then
+        rendered = {}
+        frame._mummuRenderedAuraInstanceIDs = rendered
+    end
+    rendered.buff = {}
+    rendered.debuff = {}
+end
+
 -- Safely set icon textures from aura payloads that may carry protected values.
 local function safeSetAuraTexture(textureObject, texturePath)
     if not textureObject or type(textureObject.SetTexture) ~= "function" then
@@ -394,6 +408,7 @@ local function gatherUnitAuraEntries(unitToken, filter, maxIcons)
             end
 
             entries[#entries + 1] = {
+                auraInstanceID = auraData.auraInstanceID,
                 icon = auraData.icon,
                 applications = applications,
                 expirationTime = getSafeNumericValue(auraData.expirationTime, 0) or 0,
@@ -452,8 +467,20 @@ local REFRESH_OPTIONS_FULL = {
 local REFRESH_OPTIONS_VITALS = {
     vitals = true,
     secondaryPower = true,
+    visibility = true,
+}
+local REFRESH_OPTIONS_PLAYER_VITALS_WITH_TERTIARY = {
+    vitals = true,
+    secondaryPower = true,
     tertiaryPower = true,
     visibility = true,
+}
+local REFRESH_OPTIONS_ABSORB = {
+    absorb = true,
+}
+local REFRESH_OPTIONS_PLAYER_ABSORB = {
+    absorb = true,
+    tertiaryPower = true,
 }
 local REFRESH_OPTIONS_PLAYER_VITALS_ONLY = {
     vitals = true,
@@ -487,6 +514,83 @@ local REFRESH_OPTIONS_SECONDARY_POWER = {
 local REFRESH_OPTIONS_TERTIARY_POWER = {
     tertiaryPower = true,
 }
+
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
+        return
+    end
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
 
 -- Resolve power type constant.
 local function resolvePowerTypeConstant(enumKey, globalKey, fallback)
@@ -1518,6 +1622,8 @@ function UnitFrames:Constructor()
     self.pendingDriverVisibilityRefresh = false
     self.editModeActive = false
     self.editModeCallbacksRegistered = false
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 end
 
 -- Initialize unit frames module.
@@ -2090,10 +2196,24 @@ function UnitFrames:OnMirrorTimerEvent(_, timerType)
 end
 
 -- Handle unit event.
-function UnitFrames:OnUnitEvent(_, unitToken)
-    if SUPPORTED_UNITS[unitToken] then
-        self:RefreshFrame(unitToken, false, REFRESH_OPTIONS_VITALS)
+function UnitFrames:OnUnitEvent(eventName, unitToken)
+    local perfStartedAt = startPerfCounters(self)
+    if not SUPPORTED_UNITS[unitToken] then
+        return finishPerfCounters(self, "OnUnitEvent", perfStartedAt)
     end
+
+    if eventName == "UNIT_ABSORB_AMOUNT_CHANGED" then
+        local refreshOptions = unitToken == "player" and REFRESH_OPTIONS_PLAYER_ABSORB or REFRESH_OPTIONS_ABSORB
+        self:RefreshFrame(unitToken, false, refreshOptions)
+        return finishPerfCounters(self, "OnUnitEvent", perfStartedAt)
+    end
+
+    local refreshOptions = REFRESH_OPTIONS_VITALS
+    if unitToken == "player" and eventName == "UNIT_MAXHEALTH" then
+        refreshOptions = REFRESH_OPTIONS_PLAYER_VITALS_WITH_TERTIARY
+    end
+    self:RefreshFrame(unitToken, false, refreshOptions)
+    recordPerfCounters(self, "OnUnitEvent", perfStartedAt)
 end
 
 -- Handle unit target event.
@@ -2150,8 +2270,209 @@ function UnitFrames:OnUnitPet(_, unitToken)
     end
 end
 
--- Skip player aura refresh work when AuraUtil says nothing relevant changed.
-local function shouldSkipPlayerAuraRefresh(auraUpdateInfo)
+local function getAuraPayloadField(auraData, fieldName)
+    if type(auraData) ~= "table" or type(fieldName) ~= "string" then
+        return nil
+    end
+
+    local okValue, value = pcall(function()
+        return auraData[fieldName]
+    end)
+    if not okValue or isSecretValue(value) then
+        return nil
+    end
+    return value
+end
+
+local function normalizeAuraInstanceID(value)
+    if value == nil then
+        return nil
+    end
+
+    local numeric = nil
+    if AuraSafety and type(AuraSafety.SafeNumber) == "function" then
+        numeric = AuraSafety:SafeNumber(value, nil)
+    else
+        local okNumber, coerced = pcall(tonumber, value)
+        if okNumber and type(coerced) == "number" then
+            numeric = coerced
+        end
+    end
+    if type(numeric) ~= "number" then
+        return nil
+    end
+
+    local rounded = math.floor(numeric + 0.5)
+    if rounded <= 0 then
+        return nil
+    end
+    return rounded
+end
+
+local function getAuraPayloadSpellID(auraData)
+    return normalizeSpellID(getAuraPayloadField(auraData, "spellId") or getAuraPayloadField(auraData, "spellID"))
+end
+
+local function auraPayloadSpellIDMatches(auraData, spellID)
+    return spellIDMatches(getAuraPayloadSpellID(auraData), spellID)
+end
+
+local function auraPayloadSpellIDInList(auraData, spellIDs)
+    if type(spellIDs) ~= "table" then
+        return false
+    end
+
+    local auraSpellID = getAuraPayloadSpellID(auraData)
+    if not auraSpellID then
+        return false
+    end
+    for index = 1, #spellIDs do
+        if spellIDMatches(auraSpellID, spellIDs[index]) then
+            return true
+        end
+    end
+    return false
+end
+
+local function getAuraPayloadHarmfulState(auraData)
+    local isHarmful = getAuraPayloadField(auraData, "isHarmful")
+    if type(isHarmful) == "boolean" then
+        return isHarmful
+    end
+
+    local isHelpful = getAuraPayloadField(auraData, "isHelpful")
+    if type(isHelpful) == "boolean" then
+        return not isHelpful
+    end
+
+    return nil
+end
+
+local function isAuraPayloadFromPlayerOrPet(auraData)
+    local explicit = getAuraPayloadField(auraData, "isFromPlayerOrPlayerPet")
+    if type(explicit) == "boolean" then
+        return explicit
+    end
+
+    local sourceUnit = getAuraPayloadField(auraData, "sourceUnit")
+    return sourceUnit == "player" or sourceUnit == "pet" or sourceUnit == "vehicle"
+end
+
+local function hasRenderedAuraInstance(frame, auraInstanceID)
+    local normalizedID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedID or not frame or type(frame._mummuRenderedAuraInstanceIDs) ~= "table" then
+        return false
+    end
+
+    local rendered = frame._mummuRenderedAuraInstanceIDs
+    return (type(rendered.buff) == "table" and rendered.buff[normalizedID] == true)
+        or (type(rendered.debuff) == "table" and rendered.debuff[normalizedID] == true)
+end
+
+local function hasTrackedAuraRenderState(frame)
+    return frame and type(frame._mummuRenderedAuraInstanceIDs) == "table"
+end
+
+local function playerSecondaryAuraMatches(auraData)
+    local _, classToken = UnitClass("player")
+    local resource = classToken and SECONDARY_POWER_BY_CLASS[classToken] or nil
+    if type(resource) ~= "table"
+        or resource.usesAuraStacks ~= true
+        or type(resource.auraSpellID) ~= "number"
+        or not isSecondaryResourceSupportedForSpec(resource, getPlayerSpecializationID())
+    then
+        return false
+    end
+
+    return auraPayloadSpellIDMatches(auraData, resource.auraSpellID)
+end
+
+local function playerTertiaryAuraMatches(auraData)
+    local _, classToken = UnitClass("player")
+    local specID = getPlayerSpecializationID()
+    if classToken == "WARRIOR" and specID == PROTECTION_WARRIOR_SPEC_ID then
+        return auraPayloadSpellIDInList(auraData, IGNORE_PAIN_SPELL_IDS)
+    end
+    if classToken == "DRUID" and specID == GUARDIAN_SPEC_ID then
+        return auraPayloadSpellIDMatches(auraData, IRONFUR_SPELL_ID)
+    end
+    return false
+end
+
+local function isAuraPayloadRelevantToRows(owner, unitToken, auraData)
+    local unitConfig = getUnitConfigForToken(owner, unitToken)
+    local auraConfig = unitConfig and unitConfig.aura or nil
+    if type(auraConfig) == "table" and auraConfig.enabled == false then
+        return false
+    end
+
+    local buffsConfig = auraConfig and auraConfig.buffs or nil
+    local debuffsConfig = auraConfig and auraConfig.debuffs or nil
+    local buffsEnabled = buffsConfig == nil or buffsConfig.enabled ~= false
+    local debuffsEnabled = debuffsConfig == nil or debuffsConfig.enabled ~= false
+    local harmfulState = getAuraPayloadHarmfulState(auraData)
+
+    if harmfulState == true then
+        return debuffsEnabled
+    end
+
+    if harmfulState == false then
+        if not buffsEnabled then
+            return false
+        end
+        if buffsConfig and buffsConfig.source == "self" then
+            return isAuraPayloadFromPlayerOrPet(auraData)
+        end
+        return true
+    end
+
+    if debuffsEnabled then
+        return true
+    end
+    if not buffsEnabled then
+        return false
+    end
+    if buffsConfig and buffsConfig.source == "self" then
+        return isAuraPayloadFromPlayerOrPet(auraData)
+    end
+    return true
+end
+
+local function isAuraPayloadRelevantToFrame(owner, unitToken, auraData)
+    if type(auraData) ~= "table" then
+        return true
+    end
+
+    if unitToken == "player" and (playerTertiaryAuraMatches(auraData) or playerSecondaryAuraMatches(auraData)) then
+        return true
+    end
+
+    return isAuraPayloadRelevantToRows(owner, unitToken, auraData)
+end
+
+local function shouldRefreshForAuraInstanceID(frame, unitToken, auraInstanceID)
+    local normalizedID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedID then
+        return true
+    end
+    if hasRenderedAuraInstance(frame, normalizedID) then
+        return true
+    end
+    if unitToken == "player" then
+        local tertiaryBar = frame and frame.TertiaryPowerBar or nil
+        if normalizeAuraInstanceID(tertiaryBar and tertiaryBar._mummuTertiaryAuraInstanceID) == normalizedID then
+            return true
+        end
+
+        local secondaryBar = frame and frame.SecondaryPowerBar or nil
+        if normalizeAuraInstanceID(secondaryBar and secondaryBar._mummuSecondaryAuraInstanceID) == normalizedID then
+            return true
+        end
+    end
+    return false
+end
+
+local function shouldSkipEmptyAuraRefresh(auraUpdateInfo)
     if type(auraUpdateInfo) ~= "table" then
         return false
     end
@@ -2188,6 +2509,67 @@ local function shouldSkipPlayerAuraRefresh(auraUpdateInfo)
     return false
 end
 
+-- Skip UNIT_AURA work when Blizzard's delta payload cannot affect visible unit-frame state.
+local function shouldSkipUnitAuraRefresh(owner, unitToken, auraUpdateInfo)
+    if type(auraUpdateInfo) ~= "table" then
+        return false
+    end
+    if auraUpdateInfo.isFullUpdate == true then
+        return false
+    end
+
+    local frame = owner and owner.frames and owner.frames[unitToken] or nil
+    if not hasTrackedAuraRenderState(frame) then
+        return shouldSkipEmptyAuraRefresh(auraUpdateInfo)
+    end
+
+    local sawDelta = false
+
+    local function checkAuraPayloadList(auraList)
+        if type(auraList) ~= "table" then
+            return false
+        end
+        sawDelta = true
+        for _, auraData in pairs(auraList) do
+            if type(auraData) == "table" then
+                if isAuraPayloadRelevantToFrame(owner, unitToken, auraData) then
+                    return true
+                end
+            elseif shouldRefreshForAuraInstanceID(frame, unitToken, auraData) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function checkAuraInstanceIDList(auraInstanceIDs)
+        if type(auraInstanceIDs) ~= "table" then
+            return false
+        end
+        sawDelta = true
+        for _, auraInstanceID in pairs(auraInstanceIDs) do
+            if shouldRefreshForAuraInstanceID(frame, unitToken, auraInstanceID) then
+                return true
+            end
+        end
+        return false
+    end
+
+    if checkAuraPayloadList(auraUpdateInfo.addedAuras)
+        or checkAuraPayloadList(auraUpdateInfo.updatedAuras)
+        or checkAuraInstanceIDList(auraUpdateInfo.updatedAuraInstanceIDs)
+        or checkAuraInstanceIDList(auraUpdateInfo.removedAuraInstanceIDs)
+    then
+        return false
+    end
+
+    if sawDelta then
+        return true
+    end
+
+    return shouldSkipEmptyAuraRefresh(auraUpdateInfo)
+end
+
 -- Handle unit aura event.
 function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     if not SUPPORTED_UNITS[unitToken] then
@@ -2195,10 +2577,10 @@ function UnitFrames:OnUnitAura(_, unitToken, auraUpdateInfo)
     end
 
     local refreshOptions = REFRESH_OPTIONS_AURAS_ONLY
+    if shouldSkipUnitAuraRefresh(self, unitToken, auraUpdateInfo) then
+        return
+    end
     if unitToken == "player" then
-        if shouldSkipPlayerAuraRefresh(auraUpdateInfo) then
-            return
-        end
         refreshOptions = playerSecondaryPowerUsesAuraStacks() and REFRESH_OPTIONS_AURAS_AND_SECONDARY or REFRESH_OPTIONS_AURAS
     end
     self:RefreshFrame(unitToken, false, refreshOptions, auraUpdateInfo)
@@ -2262,8 +2644,10 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
 
     local buttons = auraType == "debuff" and frame.DebuffButtons or frame.BuffButtons
     buttons = buttons or {}
+    frame._mummuRenderedAuraInstanceIDs = frame._mummuRenderedAuraInstanceIDs or {}
     local enabled = config and config.enabled ~= false
     if enabled ~= true or type(entries) ~= "table" or #entries == 0 then
+        frame._mummuRenderedAuraInstanceIDs[auraType] = {}
         hideAuraButtonPool(buttons)
         return
     end
@@ -2287,10 +2671,15 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
     end
 
     local previousPoint, gap = getAuraAnchorGrowth(anchorPoint)
+    local renderedAuraInstanceIDs = {}
     for index = 1, #entries do
         local entry = entries[index]
         local button = self:EnsureAuraButton(frame, auraType, index)
         local previousButton = buttons[index - 1]
+        local auraInstanceID = normalizeAuraInstanceID(entry.auraInstanceID)
+        if auraInstanceID then
+            renderedAuraInstanceIDs[auraInstanceID] = true
+        end
         button:SetSize(iconSize, iconSize)
         button:ClearAllPoints()
         if previousButton then
@@ -2333,12 +2722,14 @@ function UnitFrames:RefreshAuraStrip(frame, auraType, entries, config)
     for index = #entries + 1, #buttons do
         hideAuraButton(buttons[index])
     end
+    frame._mummuRenderedAuraInstanceIDs[auraType] = renderedAuraInstanceIDs
 end
 
 -- Refresh the unit's configured buff and debuff rows.
 function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
+    local perfStartedAt = startPerfCounters(self)
     if not frame or not self.dataHandle then
-        return
+        return finishPerfCounters(self, "RefreshUnitAuras", perfStartedAt)
     end
 
     self:EnsureAuraStorage(frame)
@@ -2349,9 +2740,10 @@ function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
     local debuffsConfig = auraConfig and auraConfig.debuffs or nil
     local aurasEnabled = auraConfig == nil or auraConfig.enabled ~= false
     if not aurasEnabled then
+        clearRenderedAuraInstances(frame)
         hideAuraButtonPool(frame.BuffButtons)
         hideAuraButtonPool(frame.DebuffButtons)
-        return
+        return finishPerfCounters(self, "RefreshUnitAuras", perfStartedAt)
     end
 
     local buffEntries = {}
@@ -2371,6 +2763,7 @@ function UnitFrames:RefreshUnitAuras(frame, unitToken, exists, previewMode)
 
     self:RefreshAuraStrip(frame, "buff", buffEntries, buffsConfig)
     self:RefreshAuraStrip(frame, "debuff", debuffEntries, debuffsConfig)
+    recordPerfCounters(self, "RefreshUnitAuras", perfStartedAt)
 end
 
 -- Create unit frame.
@@ -2628,11 +3021,13 @@ function UnitFrames:HideAll()
                 stopCastBarTimer(frame.CastBar)
             end
             if frame.SecondaryPowerBar then
+                frame.SecondaryPowerBar._mummuSecondaryAuraInstanceID = nil
                 frame.SecondaryPowerBar:Hide()
             end
             if frame.TertiaryPowerBar then
                 hideTertiaryPowerBar(frame.TertiaryPowerBar)
             end
+            clearRenderedAuraInstances(frame)
             hideAuraButtonPool(frame.BuffButtons)
             hideAuraButtonPool(frame.DebuffButtons)
         end
@@ -2752,6 +3147,7 @@ local function hideSecondaryPowerBar(bar)
         bar._secondaryPowerPollerActive = false
         bar._secondaryPowerPollerElapsed = 0
     end
+    bar._mummuSecondaryAuraInstanceID = nil
     if bar.Icons then
         for i = 1, #bar.Icons do
             bar.Icons[i]:Hide()
@@ -3138,6 +3534,7 @@ hideTertiaryPowerBar = function(bar)
     end
     setGuardianRightGlow(bar, 0, 0)
     bar._guardianStackStates = nil
+    bar._mummuTertiaryAuraInstanceID = nil
     bar:Hide()
 end
 
@@ -3649,6 +4046,7 @@ local function updateProtectionIgnorePainTertiaryBar(bar, exists, previewMode)
             return
         end
 
+        bar._mummuTertiaryAuraInstanceID = normalizeAuraInstanceID(auraData and auraData.auraInstanceID)
         barCurrentValue = totalAbsorbsRaw
         if barCurrentValue == nil then
             barCurrentValue = auraData and auraData.value or totalAbsorbsNumeric or 0
@@ -3690,14 +4088,15 @@ end
 
 -- Refresh secondary power bar.
 function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMode)
+    local perfStartedAt = startPerfCounters(self)
     local bar = frame and frame.SecondaryPowerBar or nil
     if not bar then
-        return
+        return finishPerfCounters(self, "RefreshSecondaryPowerBar", perfStartedAt)
     end
 
     if unitToken ~= "player" or bar._enabled == false then
         hideSecondaryPowerBar(bar)
-        return
+        return finishPerfCounters(self, "RefreshSecondaryPowerBar", perfStartedAt)
     end
 
     local _, classToken = UnitClass("player")
@@ -3705,7 +4104,7 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     local resource = classToken and SECONDARY_POWER_BY_CLASS[classToken] or nil
     if not resource or not isSecondaryResourceSupportedForSpec(resource, specID) then
         hideSecondaryPowerBar(bar)
-        return
+        return finishPerfCounters(self, "RefreshSecondaryPowerBar", perfStartedAt)
     end
 
     updateSecondaryPowerBarPoller(self, bar, exists and not previewMode and resource.usesPolling == true)
@@ -3732,6 +4131,7 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
         end
     elseif exists and resource.usesAuraStacks == true and type(resource.auraSpellID) == "number" then
         local auraStacks = 0
+        local auraStackInstanceID = nil
         local matchedAuras, queryRestricted = getAurasBySpellID("player", resource.auraFilter or "HELPFUL|PLAYER", resource.auraSpellID)
         for auraIndex = 1, #matchedAuras do
             local auraData = matchedAuras[auraIndex]
@@ -3739,11 +4139,14 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
             stacks = Util:Clamp(math.floor(stacks + 0.5), 1, powerCap)
             if stacks > auraStacks then
                 auraStacks = stacks
+                auraStackInstanceID = normalizeAuraInstanceID(auraData and auraData.auraInstanceID)
             end
         end
         if #matchedAuras == 0 and queryRestricted == true and InCombatLockdown() then
             auraStacks = getSafeNumericValue(bar._lastSecondaryPowerCurrent, 0) or 0
+            auraStackInstanceID = bar._mummuSecondaryAuraInstanceID
         end
+        bar._mummuSecondaryAuraInstanceID = auraStackInstanceID
         current = auraStacks
         maxPower = powerCap
     elseif exists then
@@ -3794,42 +4197,45 @@ function UnitFrames:RefreshSecondaryPowerBar(frame, unitToken, exists, previewMo
     local displayMode = getSecondaryPowerDisplayMode(bar._displayMode)
     if displayMode == SECONDARY_POWER_DISPLAY_MODE_BAR then
         renderSecondaryPowerSegments(bar, resource, specID, current, maxPower, displayMaxPower, secretCurrent)
-        return
+        return finishPerfCounters(self, "RefreshSecondaryPowerBar", perfStartedAt)
     end
 
     renderSecondaryPowerIcons(bar, resource, specID, current, displayCurrent, displayMaxPower, overflowCount, secretCurrent)
+    recordPerfCounters(self, "RefreshSecondaryPowerBar", perfStartedAt)
 end
 
 -- Refresh tertiary power bar.
 function UnitFrames:RefreshTertiaryPowerBar(frame, unitToken, exists, previewMode)
+    local perfStartedAt = startPerfCounters(self)
     local bar = frame and frame.TertiaryPowerBar or nil
     if not bar then
-        return
+        return finishPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
     end
 
     if unitToken ~= "player" or bar._enabled == false then
         hideTertiaryPowerBar(bar)
-        return
+        return finishPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
     end
 
     local _, classToken = UnitClass("player")
     local specID = getPlayerSpecializationID()
     if classToken == "DRUID" and specID == GUARDIAN_SPEC_ID then
         updateGuardianIronfurTertiaryBar(bar, exists, previewMode)
-        return
+        return finishPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
     end
 
     if classToken == "MONK" and specID == BREWMASTER_SPEC_ID then
         updateMonkStaggerTertiaryBar(bar, exists, previewMode)
-        return
+        return finishPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
     end
 
     if classToken == "WARRIOR" and specID == PROTECTION_WARRIOR_SPEC_ID then
         updateProtectionIgnorePainTertiaryBar(bar, exists, previewMode)
-        return
+        return finishPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
     end
 
     hideTertiaryPowerBar(bar)
+    recordPerfCounters(self, "RefreshTertiaryPowerBar", perfStartedAt)
 end
 
 local function getSafeCurrentTimeMs()
@@ -4153,20 +4559,21 @@ end
 
 -- Refresh cast bar.
 function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
+    local perfStartedAt = startPerfCounters(self)
     if not frame.CastBar then
-        return
+        return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
     end
 
     local castBar = frame.CastBar
     applyCastBarTextStyle(frame, getUnitConfigForToken(self, unitToken))
     if not castBar._enabled then
         stopCastBarTimer(castBar)
-        return
+        return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
     end
 
     if not exists and not self.editModeActive then
         stopCastBarTimer(castBar)
-        return
+        return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
     end
 
     if self.editModeActive then
@@ -4181,7 +4588,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
         castBar._timerActive = false
         resetCastBarRuntimeState(castBar)
         castBar:Show()
-        return
+        return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
     end
 
     local spellName, _, iconTexture, startTimeMs, endTimeMs, _, _, notInterruptible
@@ -4198,7 +4605,7 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
             endTimeMs = endTimeMs,
             notInterruptible = notInterruptible,
         }) then
-            return
+            return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
         end
     end
 
@@ -4220,11 +4627,12 @@ function UnitFrames:RefreshCastBar(frame, unitToken, exists, previewMode)
             notInterruptible = channelNotInterruptible,
             numEmpowerStages = empowerStageCount,
         }) then
-            return
+            return finishPerfCounters(self, "RefreshCastBar", perfStartedAt)
         end
     end
 
     stopCastBarTimer(castBar)
+    recordPerfCounters(self, "RefreshCastBar", perfStartedAt)
 end
 
 -- Ensure detached element edit mode selection.
@@ -4491,9 +4899,10 @@ end
 
 -- Refresh one managed unit frame.
 function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpdateInfo)
+    local perfStartedAt = startPerfCounters(self)
     local frame = self.frames[unitToken]
     if not frame then
-        return
+        return finishPerfCounters(self, "RefreshFrame", perfStartedAt)
     end
 
     local options = refreshOptions or REFRESH_OPTIONS_FULL
@@ -4523,13 +4932,14 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             hidePrimaryPowerBar(frame.PowerBar)
         end
         if options.auras then
+            clearRenderedAuraInstances(frame)
             hideAuraButtonPool(frame.BuffButtons)
             hideAuraButtonPool(frame.DebuffButtons)
         end
         if options.visibility then
             self:SetFrameVisibility(frame, false)
         end
-        return
+        return finishPerfCounters(self, "RefreshFrame", perfStartedAt)
     end
 
     if forceLayout then
@@ -4553,11 +4963,12 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             hidePrimaryPowerBar(frame.PowerBar)
         end
         if options.auras then
+            clearRenderedAuraInstances(frame)
             hideAuraButtonPool(frame.BuffButtons)
             hideAuraButtonPool(frame.DebuffButtons)
         end
         self:SetFrameVisibility(frame, false)
-        return
+        return finishPerfCounters(self, "RefreshFrame", perfStartedAt)
     end
 
     if options.vitals then
@@ -4659,6 +5070,10 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
         end
     end
 
+    if options.absorb and not options.vitals then
+        updateAbsorbOverlay(frame, unitToken, exists, nil, nil, previewMode)
+    end
+
     if options.statusIcons then
         self:RefreshPlayerStatusIcons(frame, unitToken, previewMode)
     end
@@ -4677,6 +5092,25 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
     if options.visibility then
         self:SetFrameVisibility(frame, true)
     end
+    recordPerfCounters(self, "RefreshFrame", perfStartedAt)
+end
+
+-- Enable or disable lightweight runtime profiling counters for unit-frame hot paths.
+function UnitFrames:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function UnitFrames:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function UnitFrames:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 addon:RegisterModule("unitFrames", UnitFrames:New())

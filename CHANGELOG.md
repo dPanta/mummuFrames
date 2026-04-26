@@ -4,6 +4,16 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 3.8.0 - 2026-04-26
+- Added an optional Mechanic integration that registers a `MechanicLib-1.0` bridge so the addon's per-module performance counters surface as profiler sub-metrics, with auto-enable when the `scriptProfile` CVar is on and a manual reset entry point.
+- Added lightweight runtime profiling counters to the unit-frame, incoming-cast-board, range, aura, and data modules, gated behind `SetPerfCountersEnabled` so they only run when Mechanic or script profiling is active.
+- Optimized personal unit-frame `UNIT_AURA` handling by tracking rendered aura instance IDs per frame and skipping refreshes when the delta payload only carries auras the frame neither renders nor tracks (including secondary/tertiary aura matches).
+- Optimized party/raid aura dispatch by skipping `RefreshGroupFrameAuras` when a `UNIT_AURA` delta does not change the debuff cache or any tracked-aura indicator state.
+- Narrowed `UNIT_ABSORB_AMOUNT_CHANGED` to an absorb-only refresh (plus tertiary on the player) instead of the full vitals path, and dropped the unnecessary tertiary refresh from non-player vitals events.
+- Cached character settings and active profile context resolution in `dataHandle` so repeated config lookups reuse the same context table instead of rebuilding it on every call.
+- Added `!Mechanic` to the TOC `OptionalDeps` so the Mechanic load-order hint applies when the host addon is installed.
+- Bumped addon metadata to `3.8.0`.
+
 ## 3.7.0 - 2026-04-25
 - Reworked the Heal/Aura tracking configuration into a preset-driven editor with all-healer defaults, per-class healer preset buttons, and a party-frame workspace preview.
 - Added draggable aura indicators in the configuration preview so square and icon positions can be adjusted directly while the size and offset controls stay visible beside the preview.

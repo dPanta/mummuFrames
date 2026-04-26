@@ -154,6 +154,83 @@ local function makeEventHintRecord(rawValue)
     }
 end
 
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
+        return
+    end
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
+
 -- Return the player's class token for spell candidate lookup.
 local function getPlayerClassToken()
     local _, classToken = UnitClass("player")
@@ -295,6 +372,8 @@ function RangeHandle:Constructor()
     self._playerSpecID = nil
     self._friendlyRangeSpellID = nil
     self._deadRangeSpellID = nil
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 end
 
 -- Store the addon reference supplied by the module loader.
@@ -625,8 +704,9 @@ end
 
 -- Refresh one token, update its cache entry, and report whether visible output likely changed.
 function RangeHandle:RefreshUnitState(unitToken, eventHintRaw, sourceTag)
+    local perfStartedAt = startPerfCounters(self)
     if not isGroupUnitToken(unitToken) then
-        return false, nil
+        return finishPerfCounters(self, "RefreshUnitState", perfStartedAt, false, nil)
     end
 
     if eventHintRaw ~= nil then
@@ -653,11 +733,12 @@ function RangeHandle:RefreshUnitState(unitToken, eventHintRaw, sourceTag)
         changed = previousState.comparableValue ~= nextState.comparableValue
     end
 
-    return changed, nextState
+    return finishPerfCounters(self, "RefreshUnitState", perfStartedAt, changed, nextState)
 end
 
 -- Refresh every tracked token, then batch owner repaints to avoid one callback per unit.
 function RangeHandle:RefreshAllTrackedUnits(sourceTag, refreshOwnersWhenUnchanged)
+    local perfStartedAt = startPerfCounters(self)
     local ownerNeedsRefresh = {
         party = refreshOwnersWhenUnchanged == true,
         raid = refreshOwnersWhenUnchanged == true,
@@ -678,11 +759,14 @@ function RangeHandle:RefreshAllTrackedUnits(sourceTag, refreshOwnersWhenUnchange
     if ownerNeedsRefresh.raid then
         self:NotifyOwnerUnitRefresh("raid", nil, true)
     end
+    recordPerfCounters(self, "RefreshAllTrackedUnits", perfStartedAt)
 end
 
 -- Periodic safety pass for silent transitions.
 function RangeHandle:OnPollTick()
+    local perfStartedAt = startPerfCounters(self)
     self:RefreshAllTrackedUnits("poll")
+    recordPerfCounters(self, "OnPollTick", perfStartedAt)
 end
 
 -- World and roster changes can invalidate both spell picks and cached unit state.
@@ -716,8 +800,9 @@ end
 
 -- Connectivity, flags, or phasing changed for one unit; repaint only the affected owner when possible.
 function RangeHandle:OnRangeRelatedUnitEvent(_, unitToken)
+    local perfStartedAt = startPerfCounters(self)
     if not isGroupUnitToken(unitToken) then
-        return
+        return finishPerfCounters(self, "OnRangeRelatedUnitEvent", perfStartedAt)
     end
 
     local changed, state = self:RefreshUnitState(unitToken, nil, "unit_context")
@@ -725,24 +810,45 @@ function RangeHandle:OnRangeRelatedUnitEvent(_, unitToken)
     if ownerKey and (changed or (state and state.signature == "secret")) then
         self:NotifyOwnerUnitRefresh(ownerKey, unitToken, false)
     end
+    recordPerfCounters(self, "OnRangeRelatedUnitEvent", perfStartedAt)
 end
 
 -- Consume UNIT_IN_RANGE_UPDATE hints immediately, or fall back to a full sweep when the payload is broad.
 function RangeHandle:OnUnitInRangeUpdate(_, unitToken, eventPayload)
+    local perfStartedAt = startPerfCounters(self)
     if not isGroupUnitToken(unitToken) then
         self:RefreshAllTrackedUnits("unit_in_range_broadcast", true)
-        return
+        return finishPerfCounters(self, "OnUnitInRangeUpdate", perfStartedAt)
     end
 
     local changed, state = self:RefreshUnitState(unitToken, eventPayload, "unit_in_range")
     local ownerKey = getOwnerKeyForUnit(unitToken)
     if not ownerKey then
-        return
+        return finishPerfCounters(self, "OnUnitInRangeUpdate", perfStartedAt)
     end
 
     if changed or (state and state.signature == "secret") then
         self:NotifyOwnerUnitRefresh(ownerKey, unitToken, false)
     end
+    recordPerfCounters(self, "OnUnitInRangeUpdate", perfStartedAt)
+end
+
+-- Enable or disable lightweight runtime profiling counters for range hot paths.
+function RangeHandle:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function RangeHandle:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function RangeHandle:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 addon:RegisterModule("rangeHandle", RangeHandle:New())

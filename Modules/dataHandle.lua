@@ -1156,8 +1156,18 @@ local function resolveCharacterSettings(self, sourceProfiles)
         return nil, nil
     end
 
-    local charKey = Util:GetCharacterKey()
+    local charKey = self._characterKey or Util:GetCharacterKey()
+    self._characterKey = charKey
     self.db.char = self.db.char or {}
+
+    local cached = self._characterSettingsCache
+    if not sourceProfiles
+        and type(cached) == "table"
+        and cached.charKey == charKey
+        and cached.charSettings == self.db.char[charKey]
+    then
+        return cached.charSettings, charKey
+    end
 
     local defaultFontPath = self._defaultFontPath or DEFAULT_FONT_PATH
     local charSettings = ensureCharacterSettings(self.db.char[charKey], sourceProfiles, defaultFontPath)
@@ -1167,6 +1177,15 @@ local function resolveCharacterSettings(self, sourceProfiles)
     charSettings = ensureCharacterTrackedAurasConfig(self.db, charSettings)
 
     self.db.char[charKey] = charSettings
+    if not sourceProfiles then
+        self._characterSettingsCache = {
+            charKey = charKey,
+            charSettings = charSettings,
+        }
+    else
+        self._characterSettingsCache = nil
+        self._activeProfileContextCache = nil
+    end
     return charSettings, charKey
 end
 
@@ -1179,19 +1198,30 @@ local function resolveActiveProfileContext(self)
 
     local profileName = charSettings.activeProfile or "Default"
     local profiles = charSettings.profiles
+    local existingProfile = type(profiles) == "table" and profiles[profileName] or nil
+    local cacheKey = getProfileCacheKey(charKey, profileName)
+    local cached = self._activeProfileContextCache
+    if type(cached) == "table"
+        and cached.cacheKey == cacheKey
+        and cached.charSettings == charSettings
+        and cached.profiles == profiles
+        and cached.profile == existingProfile
+    then
+        return cached
+    end
+
     if type(profiles[profileName]) ~= "table" then
         profiles[profileName] = {}
     end
 
     local profile = profiles[profileName]
-    local cacheKey = getProfileCacheKey(charKey, profileName)
     if not self._profileDefaultsApplied[cacheKey] then
         maintainProfile(profile, self._defaultFontPath or DEFAULT_FONT_PATH)
         self._profileDefaultsApplied[cacheKey] = true
     end
 
     self._unitDefaultsAppliedByProfile[cacheKey] = self._unitDefaultsAppliedByProfile[cacheKey] or {}
-    return {
+    local context = {
         charKey = charKey,
         charSettings = charSettings,
         profileName = profileName,
@@ -1199,6 +1229,8 @@ local function resolveActiveProfileContext(self)
         profile = profile,
         cacheKey = cacheKey,
     }
+    self._activeProfileContextCache = context
+    return context
 end
 
 -- Resolve one unit config from the active profile without re-entering profile lookup.

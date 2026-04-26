@@ -2,10 +2,10 @@
 ## Title: mummuFrames
 ## Notes: Minimalistic UnitFrames addon.
 ## Author: dPanta
-## Version: 3.7.0
+## Version: 3.8.0
 ## IconTexture: Interface\AddOns\mummuFrames\Icons\mummuF.png
 ## SavedVariables: mummuFramesDB
-## OptionalDeps: LibSharedMedia-3.0, SharedMedia
+## OptionalDeps: !Mechanic, LibSharedMedia-3.0, SharedMedia
 ## X-Wago-ID: QNlzwPKe
 
 # Libraries

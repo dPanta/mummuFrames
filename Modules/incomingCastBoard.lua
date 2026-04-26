@@ -394,6 +394,83 @@ local function sortByNewestStart(left, right)
     return (left.startTime or 0) > (right.startTime or 0)
 end
 
+local function getPerfNowMilliseconds()
+    if type(debugprofilestop) == "function" then
+        local okNow, now = pcall(debugprofilestop)
+        if okNow and type(now) == "number" then
+            return now
+        end
+    end
+    if type(GetTimePreciseSec) == "function" then
+        local okNow, now = pcall(GetTimePreciseSec)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    if type(GetTime) == "function" then
+        local okNow, now = pcall(GetTime)
+        if okNow and type(now) == "number" then
+            return now * 1000
+        end
+    end
+    return 0
+end
+
+local function startPerfCounters(owner)
+    if not owner or owner._perfCountersEnabled ~= true then
+        return nil
+    end
+    return getPerfNowMilliseconds()
+end
+
+local function recordPerfCounters(owner, label, startedAt)
+    if not owner or owner._perfCountersEnabled ~= true or type(label) ~= "string" or type(startedAt) ~= "number" then
+        return
+    end
+
+    owner._perfCounters = owner._perfCounters or {}
+    local elapsed = getPerfNowMilliseconds() - startedAt
+    if elapsed < 0 then
+        elapsed = 0
+    end
+
+    local counter = owner._perfCounters[label]
+    if type(counter) ~= "table" then
+        counter = { count = 0, totalMs = 0, maxMs = 0 }
+        owner._perfCounters[label] = counter
+    end
+
+    counter.count = counter.count + 1
+    counter.totalMs = counter.totalMs + elapsed
+    if elapsed > counter.maxMs then
+        counter.maxMs = elapsed
+    end
+end
+
+local function finishPerfCounters(owner, label, startedAt, ...)
+    recordPerfCounters(owner, label, startedAt)
+    return ...
+end
+
+local function copyPerfCounters(counters)
+    local copy = {}
+    if type(counters) ~= "table" then
+        return copy
+    end
+
+    for label, counter in pairs(counters) do
+        if type(label) == "string" and type(counter) == "table" then
+            copy[label] = {
+                count = tonumber(counter.count) or 0,
+                totalMs = tonumber(counter.totalMs) or 0,
+                maxMs = tonumber(counter.maxMs) or 0,
+            }
+        end
+    end
+
+    return copy
+end
+
 function IncomingCastBoard:Constructor()
     self.addon = nil
     self.dataHandle = nil
@@ -408,6 +485,8 @@ function IncomingCastBoard:Constructor()
     self.fadeTicker = nil
     self.editModeCallbacksRegistered = false
     self.editModeActive = false
+    self._perfCountersEnabled = false
+    self._perfCounters = {}
 end
 
 function IncomingCastBoard:OnInitialize(addonRef)
@@ -1020,15 +1099,16 @@ function IncomingCastBoard:PopulateTestCasts()
 end
 
 function IncomingCastBoard:RenderBoard(runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     local enabled, state = self:IsBoardEnabled(runtimeState)
     if not enabled and not self:ShouldShowDetachedEditModePlaceholder(state) then
         self:StopFadeTicker()
         self:ResetBoardState()
-        return
+        return finishPerfCounters(self, "RenderBoard", perfStartedAt)
     end
 
     if not self:EnsureRootFrame(state) then
-        return
+        return finishPerfCounters(self, "RenderBoard", perfStartedAt)
     end
 
     if state and state.testMode == true then
@@ -1127,36 +1207,40 @@ function IncomingCastBoard:RenderBoard(runtimeState)
     end
 
     self:LayoutVisibleRows(state)
+    recordPerfCounters(self, "RenderBoard", perfStartedAt)
 end
 
 function IncomingCastBoard:RefreshLayout(runtimeState)
+    local perfStartedAt = startPerfCounters(self)
     local enabled, state = self:IsBoardEnabled(runtimeState)
     if not enabled and not self:ShouldShowDetachedEditModePlaceholder(state) then
         self:StopFadeTicker()
         self:ResetBoardState()
-        return
+        return finishPerfCounters(self, "RefreshLayout", perfStartedAt)
     end
 
     if not self:EnsureRootFrame(state) then
-        return
+        return finishPerfCounters(self, "RefreshLayout", perfStartedAt)
     end
 
     self:RenderBoard(state)
+    recordPerfCounters(self, "RefreshLayout", perfStartedAt)
 end
 
 function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpellId)
+    local perfStartedAt = startPerfCounters(self)
     local enabled, runtimeState = self:IsBoardEnabled()
     if not enabled then
-        return
+        return finishPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
     end
     if not isRelevantCasterUnit(casterUnit) then
-        return
+        return finishPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
     end
     if not isTrackedFriendlyTarget(casterUnit) then
-        return
+        return finishPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
     end
     if eventSpellId == nil then
-        return
+        return finishPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
     end
 
     local notInterruptible = nil
@@ -1167,7 +1251,7 @@ function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpel
         isChannel = true
         notInterruptible = select(7, UnitChannelInfo(casterUnit))
     else
-        return
+        return finishPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
     end
 
     local record = self.activeCasts[casterUnit] or {}
@@ -1191,6 +1275,7 @@ function IncomingCastBoard:PickupCastAfterDelay(casterUnit, isChannel, eventSpel
 
     self:RenderBoard(runtimeState)
     self:PickupCastSafetyCheck(casterUnit)
+    recordPerfCounters(self, "PickupCastAfterDelay", perfStartedAt)
 end
 
 function IncomingCastBoard:PickupCastSafetyCheck(casterUnit)
@@ -1220,11 +1305,12 @@ function IncomingCastBoard:PickupCastSafetyCheck(casterUnit)
 end
 
 function IncomingCastBoard:QueuePickupFromCastStart(eventName, casterUnit, spellId)
+    local perfStartedAt = startPerfCounters(self)
     if not isRelevantCasterUnit(casterUnit) then
-        return
+        return finishPerfCounters(self, "QueuePickupFromCastStart", perfStartedAt)
     end
     if not C_Timer or type(C_Timer.After) ~= "function" then
-        return
+        return finishPerfCounters(self, "QueuePickupFromCastStart", perfStartedAt)
     end
 
     local isChannel = eventName == "UNIT_SPELLCAST_CHANNEL_START"
@@ -1240,27 +1326,29 @@ function IncomingCastBoard:QueuePickupFromCastStart(eventName, casterUnit, spell
             if row then
                 self:ApplyRowContent(row, active, self:GetRuntimeState())
             end
-            return
+            return finishPerfCounters(self, "QueuePickupFromCastStart", perfStartedAt)
         end
     end
 
     C_Timer.After(PICKUP_DELAY_SECONDS, function()
         self:PickupCastAfterDelay(casterUnit, isChannel, spellId)
     end)
+    recordPerfCounters(self, "QueuePickupFromCastStart", perfStartedAt)
 end
 
 function IncomingCastBoard:HandleCastStop(casterUnit, eventName)
+    local perfStartedAt = startPerfCounters(self)
     local active = self.activeCasts[casterUnit]
     if not active then
-        return
+        return finishPerfCounters(self, "HandleCastStop", perfStartedAt)
     end
 
     if eventName == "UNIT_SPELLCAST_SUCCEEDED" and type(UnitChannelInfo) == "function" and UnitChannelInfo(casterUnit) ~= nil then
-        return
+        return finishPerfCounters(self, "HandleCastStop", perfStartedAt)
     end
 
     if active.wasInterrupted == true and active.fadingStartedAt then
-        return
+        return finishPerfCounters(self, "HandleCastStop", perfStartedAt)
     end
 
     local wasInterrupted = eventName == "UNIT_SPELLCAST_INTERRUPTED"
@@ -1276,6 +1364,7 @@ function IncomingCastBoard:HandleCastStop(casterUnit, eventName)
     end
 
     self:RenderBoard()
+    recordPerfCounters(self, "HandleCastStop", perfStartedAt)
 end
 
 function IncomingCastBoard:HandleInterruptibilityChange(casterUnit, isInterruptible)
@@ -1293,9 +1382,10 @@ function IncomingCastBoard:HandleInterruptibilityChange(casterUnit, isInterrupti
 end
 
 function IncomingCastBoard:HandleCastUpdate(casterUnit)
+    local perfStartedAt = startPerfCounters(self)
     local active = self.activeCasts[casterUnit]
     if not active or active.fadingStartedAt then
-        return
+        return finishPerfCounters(self, "HandleCastUpdate", perfStartedAt)
     end
 
     if active.isChannel == true then
@@ -1312,6 +1402,7 @@ function IncomingCastBoard:HandleCastUpdate(casterUnit)
     if row then
         self:ApplyRowContent(row, active, self:GetRuntimeState())
     end
+    recordPerfCounters(self, "HandleCastUpdate", perfStartedAt)
 end
 
 function IncomingCastBoard:HandleTargetChange(casterUnit)
@@ -1405,35 +1496,61 @@ function IncomingCastBoard:OnUnitTargetChanged(_, casterUnit)
 end
 
 function IncomingCastBoard:OnCastStart(eventName, casterUnit, _, spellId)
+    local perfStartedAt = startPerfCounters(self)
     local enabled = self:IsBoardEnabled()
     if not enabled then
-        return
+        return finishPerfCounters(self, "OnCastStart", perfStartedAt)
     end
     self:QueuePickupFromCastStart(eventName, casterUnit, spellId)
+    recordPerfCounters(self, "OnCastStart", perfStartedAt)
 end
 
 function IncomingCastBoard:OnCastStop(eventName, casterUnit)
+    local perfStartedAt = startPerfCounters(self)
     local enabled = self:IsBoardEnabled()
     if not enabled then
-        return
+        return finishPerfCounters(self, "OnCastStop", perfStartedAt)
     end
     self:HandleCastStop(casterUnit, eventName)
+    recordPerfCounters(self, "OnCastStop", perfStartedAt)
 end
 
 function IncomingCastBoard:OnInterruptibilityChanged(eventName, casterUnit)
+    local perfStartedAt = startPerfCounters(self)
     local enabled = self:IsBoardEnabled()
     if not enabled then
-        return
+        return finishPerfCounters(self, "OnInterruptibilityChanged", perfStartedAt)
     end
     self:HandleInterruptibilityChange(casterUnit, eventName == "UNIT_SPELLCAST_INTERRUPTIBLE")
+    recordPerfCounters(self, "OnInterruptibilityChanged", perfStartedAt)
 end
 
 function IncomingCastBoard:OnCastUpdated(_, casterUnit)
+    local perfStartedAt = startPerfCounters(self)
     local enabled = self:IsBoardEnabled()
     if not enabled then
-        return
+        return finishPerfCounters(self, "OnCastUpdated", perfStartedAt)
     end
     self:HandleCastUpdate(casterUnit)
+    recordPerfCounters(self, "OnCastUpdated", perfStartedAt)
+end
+
+-- Enable or disable lightweight runtime profiling counters for incoming-cast hot paths.
+function IncomingCastBoard:SetPerfCountersEnabled(enabled, resetExisting)
+    self._perfCountersEnabled = enabled == true
+    if resetExisting ~= false then
+        self._perfCounters = {}
+    end
+end
+
+-- Return a snapshot of the current profiling counters.
+function IncomingCastBoard:GetPerfCounters()
+    return copyPerfCounters(self._perfCounters)
+end
+
+-- Clear recorded profiling counters.
+function IncomingCastBoard:ResetPerfCounters()
+    self._perfCounters = {}
 end
 
 addon:RegisterModule("incomingCastBoard", IncomingCastBoard:New())

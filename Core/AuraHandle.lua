@@ -2292,6 +2292,20 @@ local function isTrackedAuraAlreadyRendered(frame, auraData)
     return type(rendered) == "table" and rendered[auraInstanceID] == true
 end
 
+function AuraHandle:HasRenderedTrackedAuraInstance(frame, auraInstanceID)
+    if type(frame) ~= "table" then
+        return false
+    end
+
+    local normalizedAuraInstanceID = normalizeAuraInstanceID(auraInstanceID)
+    if not normalizedAuraInstanceID then
+        return false
+    end
+
+    local rendered = frame._mummuRenderedTrackedAuraInstanceIDs
+    return type(rendered) == "table" and rendered[normalizedAuraInstanceID] == true
+end
+
 local function getAuraAnchorGrowth(anchorPoint)
     local resolvedAnchor = type(anchorPoint) == "string" and anchorPoint or "TOPRIGHT"
     if string.find(resolvedAnchor, "RIGHT", 1, true) then
@@ -3269,6 +3283,141 @@ local function collectTrackedAuraMatches(unitToken, trackedEntries)
     )
 
     return requests
+end
+
+function AuraHandle:GetAuraPayloadHelpfulState(auraData)
+    local isHelpful = getAuraPayloadField(auraData, "isHelpful")
+    if type(isHelpful) == "boolean" then
+        return isHelpful
+    end
+
+    local isHarmful = getAuraPayloadField(auraData, "isHarmful")
+    if type(isHarmful) == "boolean" then
+        return not isHarmful
+    end
+
+    return nil
+end
+
+function AuraHandle:BuildTrackedAuraDeltaMatchSets(config)
+    local entries = getConfiguredTrackedAuraEntries(config)
+    local spellNames = {}
+    local spellIDs = {}
+
+    for index = 1, #entries do
+        local entry = entries[index]
+        local spellName = type(entry) == "table" and entry.spell or nil
+        if type(spellName) == "string" and spellName ~= "" then
+            spellNames[spellName] = true
+
+            local trackedSpellInfo = _trackerSpellInfoCache[spellName]
+            if type(trackedSpellInfo) == "table" then
+                if type(trackedSpellInfo.name) == "string" and trackedSpellInfo.name ~= "" then
+                    spellNames[trackedSpellInfo.name] = true
+                end
+
+                local trackedSpellIDs = trackedSpellInfo.spellIDs
+                if type(trackedSpellIDs) == "table" then
+                    for spellIndex = 1, #trackedSpellIDs do
+                        local spellID = normalizeSpellID(trackedSpellIDs[spellIndex])
+                        if spellID then
+                            spellIDs[spellID] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return {
+        hasConfiguredEntries = #entries > 0,
+        spellNames = spellNames,
+        spellIDs = spellIDs,
+    }
+end
+
+function AuraHandle:IsAuraPayloadRelevantToTrackedIndicators(auraData, matchSets)
+    if type(auraData) ~= "table" or type(matchSets) ~= "table" then
+        return true
+    end
+
+    local helpfulState = self:GetAuraPayloadHelpfulState(auraData)
+    if helpfulState == false then
+        return false
+    end
+
+    if matchSets.hasConfiguredEntries ~= true then
+        return isTrackerAuraOwnedByPlayer(auraData)
+    end
+
+    local auraName = getAuraPayloadField(auraData, "name")
+    if type(auraName) == "string" and matchSets.spellNames[auraName] == true then
+        return true
+    end
+
+    local auraSpellID = normalizeSpellID(getAuraPayloadField(auraData, "spellId"))
+    return auraSpellID ~= nil and matchSets.spellIDs[auraSpellID] == true
+end
+
+function AuraHandle:GroupAuraPayloadListHasTrackedChange(auraList, matchSets)
+    if type(auraList) ~= "table" then
+        return false
+    end
+
+    for _, auraData in pairs(auraList) do
+        if self:IsAuraPayloadRelevantToTrackedIndicators(auraData, matchSets) then
+            return true
+        end
+    end
+    return false
+end
+
+function AuraHandle:GroupAuraInstanceListHasRenderedTrackedChange(frame, auraInstanceIDs)
+    if type(auraInstanceIDs) ~= "table" then
+        return false
+    end
+
+    for _, auraInstanceID in pairs(auraInstanceIDs) do
+        if self:HasRenderedTrackedAuraInstance(frame, auraInstanceID) then
+            return true
+        end
+    end
+    return false
+end
+
+function AuraHandle:GetGroupDebuffStateRevision(unitToken)
+    local normalizedUnit = normalizeGroupUnitToken(unitToken)
+    local state = normalizedUnit and groupDebuffStateByUnit[normalizedUnit] or nil
+    return type(state) == "table" and (tonumber(state.revision) or 0) or 0
+end
+
+function AuraHandle:ShouldRefreshGroupAurasForUnitAuraDelta(frame, auraUpdateInfo, debuffCacheChanged)
+    if debuffCacheChanged == true then
+        return true
+    end
+    if type(auraUpdateInfo) ~= "table" or auraUpdateInfo.isFullUpdate == true then
+        return true
+    end
+
+    local config = self:GetAurasConfig()
+    if not config or config.enabled == false then
+        return false
+    end
+
+    local matchSets = self:BuildTrackedAuraDeltaMatchSets(config)
+    if self:GroupAuraPayloadListHasTrackedChange(auraUpdateInfo.addedAuras, matchSets)
+        or self:GroupAuraPayloadListHasTrackedChange(auraUpdateInfo.updatedAuras, matchSets)
+    then
+        return true
+    end
+
+    if self:GroupAuraInstanceListHasRenderedTrackedChange(frame, auraUpdateInfo.updatedAuraInstanceIDs)
+        or self:GroupAuraInstanceListHasRenderedTrackedChange(frame, auraUpdateInfo.removedAuraInstanceIDs)
+    then
+        return true
+    end
+
+    return false
 end
 
 -- ---------------------------------------------------------------------------
@@ -4806,10 +4955,27 @@ function AuraHandle:DispatchGroupUnitEvent(eventName, unitToken, eventPayload)
     end
 
     if eventName == "UNIT_AURA" then
+        local debuffRevisionBefore = self:GetGroupDebuffStateRevision(normalizedUnit)
         -- Prime the dedicated group debuff cache directly from the clean event
         -- payload. This keeps debuff icons and dispel overlays aligned with the
         -- same UNIT_AURA deltas that Midnight exposes to modern addons.
         self:RefreshDebuffCacheFromUnitAuras(unitToken, eventPayload, nil, "unit_aura_dispatch")
+        local debuffCacheChanged = self:GetGroupDebuffStateRevision(normalizedUnit) ~= debuffRevisionBefore
+
+        local frame, resolvedUnit = self:ResolveSharedMappedFrame(normalizedUnit)
+        local shouldRefresh = self:ShouldRefreshGroupAurasForUnitAuraDelta(
+            frame,
+            eventPayload,
+            debuffCacheChanged
+        )
+        if shouldRefresh ~= true then
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
+        end
+
+        if frame then
+            self:RefreshGroupFrameAuras(frame, resolvedUnit or normalizedUnit, nil, unitToken)
+            return finishPerfCounters(self, "DispatchGroupUnitEvent", perfStartedAt)
+        end
 
         -- Drive the tracker refresh directly from UNIT_AURA.
         -- RefreshFrameTrackedAuras reads C_UnitAuras directly and does not
@@ -5116,7 +5282,7 @@ end
 
 -- Refreshes aura indicators on frame for unitToken.  Clears all indicators
 -- when previewMode is true or the unit does not exist.
--- Returns the dispellable debuff type string, or nil.
+-- Returns nil; callers refresh through the rendered aura model.
 function AuraHandle:RefreshGroupAuras(frame, unitToken, exists, previewMode)
     if previewMode then
         self:ClearFrameAuraIndicators(frame)
@@ -5128,7 +5294,7 @@ function AuraHandle:RefreshGroupAuras(frame, unitToken, exists, previewMode)
         return nil
     end
     self:RefreshGroupFrameAuras(frame, unitToken)
-    return self:GetUnitDispellableDebuffType(unitToken)
+    return nil
 end
 
 -- ---------------------------------------------------------------------------
