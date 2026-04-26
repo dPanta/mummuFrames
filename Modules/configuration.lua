@@ -3458,6 +3458,7 @@ function Configuration:BuildAurasPage(page)
     }
     local listRowHeight = 30
     local previewIndicatorBorderMinSize = 10
+    local auraEntryOffsetLimit = 500
     local squareSlotOptions = {
         { value = "TOPLEFT", label = L.CONFIG_PARTY_HEALER_ANCHOR_TOPLEFT or "Top left" },
         { value = "TOPRIGHT", label = L.CONFIG_PARTY_HEALER_ANCHOR_TOPRIGHT or "Top right" },
@@ -3538,7 +3539,7 @@ function Configuration:BuildAurasPage(page)
         else
             numeric = math.ceil(numeric - 0.5)
         end
-        return Util:Clamp(numeric, -80, 80)
+        return Util:Clamp(numeric, -auraEntryOffsetLimit, auraEntryOffsetLimit)
     end
 
     local function getAuraDisplayLabel(display)
@@ -3693,8 +3694,14 @@ function Configuration:BuildAurasPage(page)
     local applyAllDefaultsButton
     local clearAllButton
     local classPresetButtons = {}
+    local previewStage
     local previewFrame
+    local previewFrameBackground
     local previewHealth
+    local previewPower
+    local previewName
+    local previewHealthText
+    local previewLayoutButtons = {}
     local previewSquareElements = {}
     local previewIconElements = {}
     local previewOverflowText
@@ -3924,6 +3931,44 @@ function Configuration:BuildAurasPage(page)
         return entry
     end
 
+    local function persistSelectedEntryFromEditor()
+        local config = getAuraEntriesConfig()
+        local selectedIndex = self._selectedAuraEntryIndex
+        if not config or type(selectedIndex) ~= "number" or not config.entries[selectedIndex] then
+            return false
+        end
+
+        local entry = buildEntryFromEditor()
+        if not entry then
+            return false
+        end
+
+        config.entries[selectedIndex] = entry
+        rebuildAllowedSpellsFromEntries(config)
+        loadEditorFromEntry(selectedIndex)
+        refreshTrackedAuraData()
+        if refreshList then
+            refreshList()
+        end
+        if refreshEditor then
+            refreshEditor()
+        end
+        return true
+    end
+
+    local function applyEditorChange()
+        if persistSelectedEntryFromEditor() then
+            self:SetAurasStatus(
+                L.CONFIG_AURAS_STATUS_SAVED or "Tracked entry saved",
+                0.3,
+                1,
+                0.45
+            )
+            return
+        end
+        refreshPreview()
+    end
+
     local function setCheckboxEnabled(control, enabled)
         if not control then
             return
@@ -4005,6 +4050,252 @@ function Configuration:BuildAurasPage(page)
         return entries
     end
 
+    local function getPreviewLayoutMode()
+        if self._aurasPreviewLayoutMode == "raid" then
+            return "raid"
+        end
+        return "party"
+    end
+
+    local function refreshPreviewLayoutButtons()
+        local selectedMode = getPreviewLayoutMode()
+        for mode, button in pairs(previewLayoutButtons) do
+            local selected = mode == selectedMode
+            if button._background then
+                button._background:SetColorTexture(selected and 0.18 or 1, selected and 0.48 or 1, selected and 0.72 or 1, selected and 0.28 or 0.06)
+            end
+            if button._label then
+                button._label:SetTextColor(selected and 1 or 0.76, selected and 1 or 0.8, selected and 1 or 0.88, 1)
+            end
+        end
+    end
+
+    local function setPreviewLayoutMode(mode)
+        self._aurasPreviewLayoutMode = mode == "raid" and "raid" or "party"
+        refreshPreviewLayoutButtons()
+        if refreshPreview then
+            refreshPreview()
+        end
+    end
+
+    local function getPreviewUnitConfig(mode)
+        local dataHandle = self:GetDataHandle()
+        if not dataHandle or type(dataHandle.GetUnitConfig) ~= "function" then
+            return {}
+        end
+        return dataHandle:GetUnitConfig(mode == "raid" and "raid" or "party") or {}
+    end
+
+    local function shouldPreviewPartyPowerBar()
+        local partyFrames = self.addon and type(self.addon.GetModule) == "function" and self.addon:GetModule("partyFrames") or nil
+        if partyFrames and type(partyFrames.ShouldShowPowerBar) == "function" then
+            local ok, shown = pcall(partyFrames.ShouldShowPowerBar, partyFrames, "player")
+            return ok and shown == true
+        end
+        return false
+    end
+
+    local function getPreviewFrameMetrics()
+        local mode = getPreviewLayoutMode()
+        local unitConfig = getPreviewUnitConfig(mode)
+        local profile = self:GetProfile()
+        local styleConfig = profile and profile.style or nil
+        local pixelPerfect = Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled()
+
+        local width
+        local height
+        local fontSize
+        local powerHeight = 0
+        local showPowerBar = false
+
+        if mode == "raid" then
+            width = Util:Clamp(tonumber(unitConfig.width) or 92, 40, 240)
+            height = Util:Clamp(tonumber(unitConfig.height) or 28, 14, 80)
+            fontSize = Util:Clamp(tonumber(unitConfig.fontSize) or (styleConfig and tonumber(styleConfig.fontSize)) or 10, 6, 26)
+        else
+            width = Util:Clamp(tonumber(unitConfig.width) or 180, 80, 500)
+            height = Util:Clamp(tonumber(unitConfig.height) or 34, 16, 120)
+            powerHeight = Util:Clamp(tonumber(unitConfig.powerHeight) or 8, 4, height - 4)
+            fontSize = Util:Clamp(tonumber(unitConfig.fontSize) or 11, 8, 22)
+            showPowerBar = shouldPreviewPartyPowerBar()
+        end
+
+        if pixelPerfect then
+            width = Style:Snap(width)
+            height = Style:Snap(height)
+            powerHeight = Style:Snap(powerHeight)
+        else
+            width = math.floor(width + 0.5)
+            height = math.floor(height + 0.5)
+            powerHeight = math.floor(powerHeight + 0.5)
+        end
+
+        return {
+            mode = mode,
+            width = width,
+            height = height,
+            fontSize = math.floor(fontSize + 0.5),
+            powerHeight = powerHeight,
+            showPowerBar = showPowerBar == true,
+            pixelPerfect = pixelPerfect == true,
+        }
+    end
+
+    local function applyPreviewStatusBarStyle(bar, role)
+        if type(bar) ~= "table" then
+            return
+        end
+        if Style and type(Style.ApplyStatusBarTexture) == "function" then
+            Style:ApplyStatusBarTexture(bar)
+        end
+        if Style and type(Style.ApplyStatusBarBacking) == "function" then
+            Style:ApplyStatusBarBacking(bar, role)
+        end
+    end
+
+    local function applyPreviewFrameStyle()
+        if type(previewFrame) ~= "table" or type(previewHealth) ~= "table" then
+            return
+        end
+
+        local metrics = getPreviewFrameMetrics()
+        local border = metrics.pixelPerfect and Style:GetPixelSize() or 1
+        local textInset = metrics.pixelPerfect and Style:Snap(metrics.mode == "raid" and 4 or 6) or (metrics.mode == "raid" and 4 or 6)
+        local darkModeEnabled = Style and type(Style.IsDarkModeEnabled) == "function" and Style:IsDarkModeEnabled()
+
+        previewFrame:SetSize(metrics.width, metrics.height)
+        if previewStage and type(previewFrame.SetScale) == "function" then
+            local availableWidth = math.max(1, (previewStage:GetWidth() or 1) - 16)
+            local availableHeight = math.max(1, (previewStage:GetHeight() or 1) - 12)
+            local scale = math.min(availableWidth / metrics.width, availableHeight / metrics.height)
+            scale = Util:Clamp(scale, 0.25, 8)
+            previewFrame:SetScale(scale)
+            previewFrame:ClearAllPoints()
+            previewFrame:SetPoint("CENTER", previewStage, "CENTER", 0, 0)
+        end
+        if previewFrameBackground then
+            previewFrameBackground:SetColorTexture(0.06, 0.06, 0.07, 0.9)
+        end
+
+        applyPreviewStatusBarStyle(previewHealth, "health")
+        previewHealth:ClearAllPoints()
+        if metrics.mode == "party" and metrics.showPowerBar and previewPower then
+            applyPreviewStatusBarStyle(previewPower, "primaryPower")
+            previewPower:ClearAllPoints()
+            previewPower:SetHeight(metrics.powerHeight)
+            previewPower:SetPoint("BOTTOMLEFT", previewFrame, "BOTTOMLEFT", border, border)
+            previewPower:SetPoint("BOTTOMRIGHT", previewFrame, "BOTTOMRIGHT", -border, border)
+            previewPower:SetMinMaxValues(0, 100)
+            previewPower:SetValue(72)
+            if darkModeEnabled then
+                previewPower:SetStatusBarColor(
+                    Style.DARK_MODE_GRANITE_COLOR[1],
+                    Style.DARK_MODE_GRANITE_COLOR[2],
+                    Style.DARK_MODE_GRANITE_COLOR[3],
+                    Style.DARK_MODE_GRANITE_COLOR[4]
+                )
+            else
+                previewPower:SetStatusBarColor(0.2, 0.45, 0.85, 1)
+            end
+            previewPower:Show()
+
+            previewHealth:SetPoint("TOPLEFT", previewFrame, "TOPLEFT", border, -border)
+            previewHealth:SetPoint("TOPRIGHT", previewFrame, "TOPRIGHT", -border, -border)
+            previewHealth:SetPoint("BOTTOMLEFT", previewPower, "TOPLEFT", 0, border)
+            previewHealth:SetPoint("BOTTOMRIGHT", previewPower, "TOPRIGHT", 0, border)
+        else
+            if previewPower then
+                previewPower:Hide()
+            end
+            previewHealth:SetPoint("TOPLEFT", previewFrame, "TOPLEFT", border, -border)
+            previewHealth:SetPoint("TOPRIGHT", previewFrame, "TOPRIGHT", -border, -border)
+            previewHealth:SetPoint("BOTTOMLEFT", previewFrame, "BOTTOMLEFT", border, border)
+            previewHealth:SetPoint("BOTTOMRIGHT", previewFrame, "BOTTOMRIGHT", -border, border)
+        end
+
+        previewHealth:SetMinMaxValues(0, 100)
+        previewHealth:SetValue(82)
+        if darkModeEnabled then
+            previewHealth:SetStatusBarColor(
+                Style.DARK_MODE_GRANITE_COLOR[1],
+                Style.DARK_MODE_GRANITE_COLOR[2],
+                Style.DARK_MODE_GRANITE_COLOR[3],
+                Style.DARK_MODE_GRANITE_COLOR[4]
+            )
+        else
+            previewHealth:SetStatusBarColor(0.2, 0.78, 0.3, 1)
+        end
+
+        if previewName then
+            previewName:ClearAllPoints()
+            previewName:SetPoint("LEFT", previewHealth, "LEFT", textInset, 0)
+            previewName:SetPoint("RIGHT", previewHealthText or previewHealth, "LEFT", -textInset, 0)
+            Style:ApplyFont(previewName, metrics.fontSize, "OUTLINE")
+            setFontStringTextSafe(
+                previewName,
+                metrics.mode == "raid"
+                    and (L.CONFIG_AURAS_PREVIEW_RAID_UNIT or "Raid frame preview")
+                    or (L.CONFIG_AURAS_PREVIEW_PARTY_UNIT or L.CONFIG_AURAS_PREVIEW_UNIT or "Party frame preview"),
+                metrics.fontSize
+            )
+            previewName:SetTextColor(1, 1, 1, 1)
+            previewName:SetShadowColor(0, 0, 0, 0)
+            previewName:SetShadowOffset(0, 0)
+        end
+
+        if previewHealthText then
+            previewHealthText:ClearAllPoints()
+            previewHealthText:SetPoint("RIGHT", previewHealth, "RIGHT", -textInset, 0)
+            Style:ApplyFont(previewHealthText, metrics.fontSize, "OUTLINE")
+            setFontStringTextSafe(previewHealthText, "82%", metrics.fontSize)
+            previewHealthText:SetTextColor(1, 1, 1, 1)
+            previewHealthText:SetShadowColor(0, 0, 0, 0)
+            previewHealthText:SetShadowOffset(0, 0)
+        end
+    end
+
+    local function getPreviewPixelOffset()
+        if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
+            return Style:GetPixelSize() or 1
+        end
+        return 1
+    end
+
+    local function getFrameSize(frame)
+        if type(frame) ~= "table" then
+            return 0, 0
+        end
+        local width = type(frame.GetWidth) == "function" and (frame:GetWidth() or 0) or 0
+        local height = type(frame.GetHeight) == "function" and (frame:GetHeight() or 0) or 0
+        return width, height
+    end
+
+    local function getPreviewIconBaseCenter(slotIndex, size)
+        local frameWidth, frameHeight = getFrameSize(previewFrame)
+        local resolvedSize = normalizeEntrySize("icon", size, 14)
+        return (frameWidth * 0.5) - (resolvedSize * 0.5) - ((slotIndex - 1) * (resolvedSize + 2)),
+            (frameHeight * 0.5) - (resolvedSize * 0.5)
+    end
+
+    local function getPreviewSquareBaseCenter(slotKey, size)
+        local width, height = getFrameSize(previewHealth)
+        local resolvedSize = normalizeEntrySize("square", size, 8)
+        local offset = getPreviewPixelOffset()
+        local leftBase = -(width * 0.5) + offset + (resolvedSize * 0.5)
+        local rightBase = (width * 0.5) - offset - (resolvedSize * 0.5)
+        local topBase = (height * 0.5) - offset - (resolvedSize * 0.5)
+        local bottomBase = -(height * 0.5) + offset + (resolvedSize * 0.5)
+
+        if slotKey == "TOPRIGHT" then
+            return rightBase, topBase
+        elseif slotKey == "BOTTOMLEFT" then
+            return leftBase, bottomBase
+        elseif slotKey == "BOTTOMRIGHT" then
+            return rightBase, bottomBase
+        end
+        return leftBase, topBase
+    end
+
     local createPreviewIndicatorBorderFrame
     local setPreviewIndicatorBorderSize
 
@@ -4021,15 +4312,8 @@ function Configuration:BuildAurasPage(page)
             setPreviewIndicatorBorderSize(element, size)
         end
         element:ClearAllPoints()
-        if slotKey == "TOPRIGHT" then
-            element:SetPoint("TOPRIGHT", previewHealth, "TOPRIGHT", -1 + offsetX, -1 + offsetY)
-        elseif slotKey == "BOTTOMLEFT" then
-            element:SetPoint("BOTTOMLEFT", previewHealth, "BOTTOMLEFT", 1 + offsetX, 1 + offsetY)
-        elseif slotKey == "BOTTOMRIGHT" then
-            element:SetPoint("BOTTOMRIGHT", previewHealth, "BOTTOMRIGHT", -1 + offsetX, 1 + offsetY)
-        else
-            element:SetPoint("TOPLEFT", previewHealth, "TOPLEFT", 1 + offsetX, -1 + offsetY)
-        end
+        local baseX, baseY = getPreviewSquareBaseCenter(slotKey, size)
+        element:SetPoint("CENTER", previewHealth, "CENTER", baseX + offsetX, baseY + offsetY)
     end
 
     local function setPreviewIconPosition(element, slotIndex, entry)
@@ -4045,7 +4329,8 @@ function Configuration:BuildAurasPage(page)
             setPreviewIndicatorBorderSize(element, size)
         end
         element:ClearAllPoints()
-        element:SetPoint("TOPRIGHT", previewFrame, "TOPRIGHT", (-(slotIndex - 1) * (size + 2)) + offsetX, offsetY)
+        local baseX, baseY = getPreviewIconBaseCenter(slotIndex, size)
+        element:SetPoint("CENTER", previewFrame, "CENTER", baseX + offsetX, baseY + offsetY)
     end
 
     createPreviewIndicatorBorderFrame = function(parent)
@@ -4155,40 +4440,19 @@ function Configuration:BuildAurasPage(page)
 
         selectPreviewEntry(previewDragContext.entry)
 
-        local left = previewHealth:GetLeft()
-        local right = previewHealth:GetRight()
-        local top = previewHealth:GetTop()
-        local bottom = previewHealth:GetBottom()
-        if not left or not right or not top or not bottom then
+        local centerX, centerY = previewHealth:GetCenter()
+        if not centerX or not centerY then
             return
         end
 
         local cursorX, cursorY = getScaledCursorPosition(previewHealth)
-        local width = right - left
-        local height = top - bottom
-        local horizontal = cursorX <= (left + width * 0.5) and "LEFT" or "RIGHT"
-        local vertical = cursorY >= (bottom + height * 0.5) and "TOP" or "BOTTOM"
+        local horizontal = cursorX <= centerX and "LEFT" or "RIGHT"
+        local vertical = cursorY >= centerY and "TOP" or "BOTTOM"
         local slot = vertical .. horizontal
         local size = normalizeEntrySize("square", editorState.size, 8)
-        local pixelOffset = 1
+        local baseX, baseY = getPreviewSquareBaseCenter(slot, size)
 
-        local offsetX
-        local offsetY
-        if slot == "TOPLEFT" then
-            offsetX = (cursorX - (size * 0.5)) - (left + pixelOffset)
-            offsetY = (cursorY + (size * 0.5)) - (top - pixelOffset)
-        elseif slot == "TOPRIGHT" then
-            offsetX = (cursorX + (size * 0.5)) - (right - pixelOffset)
-            offsetY = (cursorY + (size * 0.5)) - (top - pixelOffset)
-        elseif slot == "BOTTOMLEFT" then
-            offsetX = (cursorX - (size * 0.5)) - (left + pixelOffset)
-            offsetY = (cursorY - (size * 0.5)) - (bottom + pixelOffset)
-        else
-            offsetX = (cursorX + (size * 0.5)) - (right - pixelOffset)
-            offsetY = (cursorY - (size * 0.5)) - (bottom + pixelOffset)
-        end
-
-        syncDraggedEditorPosition("square", slot, offsetX, offsetY)
+        syncDraggedEditorPosition("square", slot, cursorX - (centerX + baseX), cursorY - (centerY + baseY))
     end
 
     local function applyPreviewIconDrag()
@@ -4198,9 +4462,8 @@ function Configuration:BuildAurasPage(page)
 
         selectPreviewEntry(previewDragContext.entry)
 
-        local right = previewFrame:GetRight()
-        local top = previewFrame:GetTop()
-        if not right or not top then
+        local centerX, centerY = previewFrame:GetCenter()
+        if not centerX or not centerY then
             return
         end
 
@@ -4209,8 +4472,8 @@ function Configuration:BuildAurasPage(page)
         local bestSlotIndex = 1
         local bestDistance
         for slotIndex = 1, 4 do
-            local centerX = right - ((slotIndex - 1) * (size + 2)) - (size * 0.5)
-            local distance = math.abs(cursorX - centerX)
+            local baseX = getPreviewIconBaseCenter(slotIndex, size)
+            local distance = math.abs(cursorX - (centerX + baseX))
             if not bestDistance or distance < bestDistance then
                 bestDistance = distance
                 bestSlotIndex = slotIndex
@@ -4218,9 +4481,8 @@ function Configuration:BuildAurasPage(page)
         end
 
         local slot = "ICON" .. tostring(bestSlotIndex)
-        local baseCenterX = right - ((bestSlotIndex - 1) * (size + 2)) - (size * 0.5)
-        local baseCenterY = top - (size * 0.5)
-        syncDraggedEditorPosition("icon", slot, cursorX - baseCenterX, cursorY - baseCenterY)
+        local baseX, baseY = getPreviewIconBaseCenter(bestSlotIndex, size)
+        syncDraggedEditorPosition("icon", slot, cursorX - (centerX + baseX), cursorY - (centerY + baseY))
     end
 
     local function applyPreviewDrag()
@@ -4238,11 +4500,14 @@ function Configuration:BuildAurasPage(page)
     local function finishPreviewDrag()
         if previewDragContext and previewDragContext.active == true then
             applyPreviewDrag()
+            local persisted = persistSelectedEntryFromEditor()
             self:SetAurasStatus(
-                L.CONFIG_AURAS_STATUS_POSITION_UPDATED or "Indicator position updated; save or add to keep it",
-                0.82,
-                0.84,
-                0.9
+                persisted
+                    and (L.CONFIG_AURAS_STATUS_POSITION_UPDATED or "Indicator position updated")
+                    or (L.CONFIG_AURAS_STATUS_POSITION_UPDATED_UNSAVED or "Indicator position updated; add entry to keep it"),
+                persisted and 0.3 or 0.82,
+                persisted and 1 or 0.84,
+                persisted and 0.45 or 0.9
             )
         elseif previewDragContext then
             selectPreviewEntry(previewDragContext.entry)
@@ -4325,6 +4590,9 @@ function Configuration:BuildAurasPage(page)
         if not previewFrame then
             return
         end
+
+        applyPreviewFrameStyle()
+        refreshPreviewLayoutButtons()
 
         local entries = buildPreviewEntries()
         local squareRenderEntries = {}
@@ -4607,28 +4875,77 @@ function Configuration:BuildAurasPage(page)
     Style:CreateBackground(previewContainer, 0.05, 0.05, 0.07, 0.9)
     previewContainer:SetScript("OnUpdate", updatePreviewDrag)
 
-    previewFrame = CreateFrame("Frame", nil, previewContainer)
-    previewFrame:SetPoint("TOPLEFT", previewContainer, "TOPLEFT", 18, -22)
+    local function createPreviewLayoutButton(mode, label, anchor)
+        local button = CreateFrame("Button", nil, previewContainer)
+        button:SetSize(72, 22)
+        if anchor then
+            button:SetPoint("LEFT", anchor, "RIGHT", 6, 0)
+        else
+            button:SetPoint("TOPLEFT", previewContainer, "TOPLEFT", 18, -16)
+        end
+
+        local background = button:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints()
+        button._background = background
+
+        local text = button:CreateFontString(nil, "ARTWORK")
+        text:SetPoint("CENTER", button, "CENTER", 0, 0)
+        Style:ApplyFont(text, 11)
+        setFontStringTextSafe(text, label, 11)
+        button._label = text
+
+        button:SetHighlightTexture("Interface\\Buttons\\WHITE8x8", "ADD")
+        if button:GetHighlightTexture() then
+            button:GetHighlightTexture():SetVertexColor(0.24, 0.46, 0.72, 0.2)
+        end
+        button:SetScript("OnClick", function()
+            setPreviewLayoutMode(mode)
+        end)
+        previewLayoutButtons[mode] = button
+        return button
+    end
+
+    local partyPreviewButton = createPreviewLayoutButton("party", L.CONFIG_TAB_PARTY or "Party")
+    createPreviewLayoutButton("raid", L.CONFIG_TAB_RAID or "Raid", partyPreviewButton)
+
+    previewStage = CreateFrame("Frame", nil, previewContainer)
+    previewStage:SetPoint("TOPLEFT", previewContainer, "TOPLEFT", 18, -48)
+    previewStage:SetPoint("TOPRIGHT", previewContainer, "TOPRIGHT", -18, -48)
+    previewStage:SetHeight(126)
+    previewStage:SetScript("OnSizeChanged", function()
+        if refreshPreview then
+            refreshPreview()
+        end
+    end)
+
+    previewFrame = CreateFrame("Frame", nil, previewStage)
+    previewFrame:SetPoint("CENTER", previewStage, "CENTER", 0, 0)
     previewFrame:SetSize(278, 62)
 
-    local previewFrameBg = previewFrame:CreateTexture(nil, "BACKGROUND")
-    previewFrameBg:SetAllPoints()
-    previewFrameBg:SetColorTexture(0.09, 0.10, 0.13, 0.92)
+    previewFrameBackground = previewFrame:CreateTexture(nil, "BACKGROUND")
+    previewFrameBackground:SetAllPoints()
+    previewFrameBackground:SetColorTexture(0.06, 0.06, 0.07, 0.9)
 
-    previewHealth = CreateFrame("Frame", nil, previewFrame)
-    previewHealth:SetPoint("TOPLEFT", previewFrame, "TOPLEFT", 8, -18)
-    previewHealth:SetPoint("BOTTOMRIGHT", previewFrame, "BOTTOMRIGHT", -8, 8)
-    local previewHealthBg = previewHealth:CreateTexture(nil, "BACKGROUND")
-    previewHealthBg:SetAllPoints()
-    previewHealthBg:SetColorTexture(0.15, 0.58, 0.34, 0.92)
+    previewHealth = CreateFrame("StatusBar", nil, previewFrame)
+    previewHealth:SetMinMaxValues(0, 100)
+    previewHealth:SetValue(82)
+    previewHealth.Background = previewHealth:CreateTexture(nil, "BACKGROUND")
+    previewHealth.Background:SetAllPoints()
 
-    local previewName = previewFrame:CreateFontString(nil, "ARTWORK")
-    previewName:SetPoint("TOPLEFT", previewFrame, "TOPLEFT", 9, -4)
-    previewName:SetPoint("RIGHT", previewFrame, "RIGHT", -80, 0)
+    previewPower = CreateFrame("StatusBar", nil, previewFrame)
+    previewPower:SetMinMaxValues(0, 100)
+    previewPower:SetValue(72)
+    previewPower.Background = previewPower:CreateTexture(nil, "BACKGROUND")
+    previewPower.Background:SetAllPoints()
+    previewPower:Hide()
+
+    previewName = previewHealth:CreateFontString(nil, "ARTWORK")
     previewName:SetJustifyH("LEFT")
-    Style:ApplyFont(previewName, 10)
-    setFontStringTextSafe(previewName, L.CONFIG_AURAS_PREVIEW_UNIT or "Party frame preview", 10)
-    previewName:SetTextColor(0.86, 0.9, 1, 0.95)
+    previewName:SetJustifyV("MIDDLE")
+
+    previewHealthText = previewHealth:CreateFontString(nil, "ARTWORK")
+    previewHealthText:SetJustifyH("RIGHT")
+    previewHealthText:SetJustifyV("MIDDLE")
 
     ensurePreviewSquareElement("TOPLEFT")
     ensurePreviewSquareElement("TOPRIGHT")
@@ -4662,12 +4979,12 @@ function Configuration:BuildAurasPage(page)
     end
 
     previewOverflowText = previewContainer:CreateFontString(nil, "ARTWORK")
-    previewOverflowText:SetPoint("TOPLEFT", previewFrame, "BOTTOMLEFT", 2, -8)
+    previewOverflowText:SetPoint("TOPLEFT", previewStage, "BOTTOMLEFT", 2, -6)
     Style:ApplyFont(previewOverflowText, 11)
     previewOverflowText:SetTextColor(0.95, 0.86, 0.38, 1)
 
     previewEntryList = CreateFrame("ScrollFrame", "mummuFramesConfigAurasPreviewList", previewContainer, "UIPanelScrollFrameTemplate")
-    previewEntryList:SetPoint("TOPLEFT", previewFrame, "BOTTOMLEFT", 0, -24)
+    previewEntryList:SetPoint("TOPLEFT", previewStage, "BOTTOMLEFT", 0, -24)
     previewEntryList:SetPoint("BOTTOMRIGHT", previewContainer, "BOTTOMRIGHT", -28, 12)
     previewEntryList:EnableMouseWheel(true)
     previewEntryList:SetScript("OnMouseWheel", function(sf, delta)
@@ -4967,11 +5284,7 @@ function Configuration:BuildAurasPage(page)
                 editorState.display = normalizeEntryDisplay(option and option.value or nil)
                 editorState.slot = normalizeEditorSlot(editorState.display, editorState.slot)
                 editorState.size = normalizeEntrySize(editorState.display, editorState.size, self:GetTrackedAurasConfig() and self:GetTrackedAurasConfig().size)
-                if self.widgets and self.widgets.auras then
-                    self.widgets.auras.refreshList()
-                    self.widgets.auras.refreshEditor()
-                end
-                refreshPreview()
+                applyEditorChange()
             end,
             CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
             nil,
@@ -5000,7 +5313,7 @@ function Configuration:BuildAurasPage(page)
             function(option)
                 editorState.slot = normalizeEditorSlot(editorState.display, option and option.value or nil)
                 self:RefreshSelectControlText(slotDropdown, true)
-                refreshPreview()
+                applyEditorChange()
             end,
             CONFIG_SELECT_POPUP_DEFAULT_WIDTH,
             nil,
@@ -5020,7 +5333,7 @@ function Configuration:BuildAurasPage(page)
     )
     ownOnly:SetScript("OnClick", function(button)
         editorState.ownOnly = button:GetChecked() == true
-        refreshPreview()
+        applyEditorChange()
     end)
 
     entrySizeControl = self:CreateNumericControl(
@@ -5035,37 +5348,37 @@ function Configuration:BuildAurasPage(page)
     )
     self:BindNumericControl(entrySizeControl, function(value)
         editorState.size = normalizeEntrySize(editorState.display, value, self:GetTrackedAurasConfig() and self:GetTrackedAurasConfig().size)
-        refreshPreview()
+        applyEditorChange()
     end)
 
     entryXControl = self:CreateNumericControl(
         page,
         "AurasEntryOffsetX",
         L.CONFIG_AURAS_ENTRY_X or "X offset",
-        -80,
-        80,
+        -auraEntryOffsetLimit,
+        auraEntryOffsetLimit,
         1,
         entrySizeControl.slider,
         0
     )
     self:BindNumericControl(entryXControl, function(value)
         editorState.x = normalizeEntryOffset(value)
-        refreshPreview()
+        applyEditorChange()
     end)
 
     entryYControl = self:CreateNumericControl(
         page,
         "AurasEntryOffsetY",
         L.CONFIG_AURAS_ENTRY_Y or "Y offset",
-        -80,
-        80,
+        -auraEntryOffsetLimit,
+        auraEntryOffsetLimit,
         1,
         entryXControl.slider,
         0
     )
     self:BindNumericControl(entryYControl, function(value)
         editorState.y = normalizeEntryOffset(value)
-        refreshPreview()
+        applyEditorChange()
     end)
 
     colorPreviewLabel = page:CreateFontString(nil, "ARTWORK")
@@ -5129,7 +5442,7 @@ function Configuration:BuildAurasPage(page)
                 0.95
             )
         end
-        refreshPreview()
+        applyEditorChange()
     end)
 
     colorGreenControl = self:CreateNumericControl(
@@ -5153,7 +5466,7 @@ function Configuration:BuildAurasPage(page)
                 0.95
             )
         end
-        refreshPreview()
+        applyEditorChange()
     end)
 
     colorBlueControl = self:CreateNumericControl(
@@ -5177,7 +5490,7 @@ function Configuration:BuildAurasPage(page)
                 0.95
             )
         end
-        refreshPreview()
+        applyEditorChange()
     end)
 
     refreshEditor = function()

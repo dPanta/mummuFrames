@@ -4,6 +4,13 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 3.9.0 - 2026-04-26
+- Reworked the tracked-aura configuration preview so it can switch between party and raid frame layouts.
+- Updated the tracked-aura preview frame to reuse the live frame dimensions, font sizing, bar texture, pixel snapping, and dark-mode colors, with uniform scaling so the frame fits the preview box while preserving its ratio.
+- Changed tracked-aura icon and square indicator placement to use center anchoring while preserving the previous default positions, and expanded offset limits so indicators can be dragged across the full frame.
+- Made selected tracked-aura entry edits apply immediately, including drag-and-drop indicator repositioning, without requiring the `Save selected` button.
+- Bumped addon metadata to `3.9.0`.
+
 ## 3.8.1 - 2026-04-26
 - Fixed a `UNIT_AURA` delta crash when Midnight returned secret aura payload values for tracked-aura names or spell IDs, by routing tracked indicator set lookups through a guarded membership check.
 - Bumped addon metadata to `3.8.1`.
@@ -42,11 +49,3 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 - Fixed test-mode cast bars not disappearing when test mode is toggled off.
 - Fixed configuration checkboxes and controls across all lazily-built tabs not reflecting saved values after a reload by syncing widget state whenever a tab is selected.
 - Bumped addon metadata to `3.5.1`.
-
-## 3.5.0 - 2026-04-16
-- Fixed party and raid dispel overlay fallbacks to use the player's actual known dispel spells and talents instead of a coarse class-only table.
-- Stopped the bottom-right group dispel icon from guessing `Magic` when Midnight omits an aura's exact dispel type, so the overlay stays visible without lying about the type icon.
-- Rebuilt targeted enemy-cast tracking around a new Danders-style party cast list that watches hostile nameplate casts generically instead of relying on a curated spell whitelist.
-- Removed the old per-frame spell-target border highlight flow and replaced it with a party-attached incoming cast board that avoids exact party-member target resolution and comparison-heavy secret-value handling.
-- Cleaned out the legacy tracker module, old spell-target config/docs, and the remaining border-highlight wiring so the new list owns the full targeted-cast path end to end.
-- Bumped addon metadata to `3.5.0`.

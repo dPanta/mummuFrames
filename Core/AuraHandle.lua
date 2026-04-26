@@ -138,6 +138,7 @@ local TRACKER_COOLDOWN_SWIPE_TEXTURE = "Interface\\Buttons\\WHITE8x8"
 local TRACKER_COOLDOWN_ICON_SWIPE_ALPHA = 0.80
 local TRACKER_COOLDOWN_SQUARE_SWIPE_ALPHA = 0.92
 local TRACKER_INDICATOR_BORDER_MIN_SIZE = 10
+local TRACKER_ENTRY_OFFSET_LIMIT = 500
 local GROUP_DEBUFF_BUTTON_GAP = 2
 local GROUP_DEBUFF_MAX_BUTTONS = 16
 local CENTER_DEFENSIVE_MIN_SIZE = 16
@@ -811,8 +812,8 @@ local function getSafeTrackedAuraColor(colorData)
 end
 
 local function getTrackedAuraEntryOffsets(entry)
-    local offsetX = Util:Clamp(tonumber(type(entry) == "table" and entry.x or nil) or 0, -80, 80)
-    local offsetY = Util:Clamp(tonumber(type(entry) == "table" and entry.y or nil) or 0, -80, 80)
+    local offsetX = Util:Clamp(tonumber(type(entry) == "table" and entry.x or nil) or 0, -TRACKER_ENTRY_OFFSET_LIMIT, TRACKER_ENTRY_OFFSET_LIMIT)
+    local offsetY = Util:Clamp(tonumber(type(entry) == "table" and entry.y or nil) or 0, -TRACKER_ENTRY_OFFSET_LIMIT, TRACKER_ENTRY_OFFSET_LIMIT)
 
     if Style and type(Style.IsPixelPerfectEnabled) == "function" and Style:IsPixelPerfectEnabled() then
         offsetX = Style:Snap(offsetX)
@@ -2161,7 +2162,11 @@ local function layoutTrackerIconElement(frame, element, slotIndex, size, entry)
 
     element:SetSize(resolvedSize, resolvedSize)
     element:ClearAllPoints()
-    element:SetPoint("TOPRIGHT", frame, "TOPRIGHT", (-(slotIndex - 1) * (resolvedSize + 2)) + offsetX, offsetY)
+    local frameWidth = type(frame.GetWidth) == "function" and (frame:GetWidth() or 0) or 0
+    local frameHeight = type(frame.GetHeight) == "function" and (frame:GetHeight() or 0) or 0
+    local baseX = (frameWidth * 0.5) - (resolvedSize * 0.5) - ((slotIndex - 1) * (resolvedSize + 2))
+    local baseY = (frameHeight * 0.5) - (resolvedSize * 0.5)
+    element:SetPoint("CENTER", frame, "CENTER", baseX + offsetX, baseY + offsetY)
     setTrackerIndicatorBorderSize(element, resolvedSize)
 end
 
@@ -2212,14 +2217,21 @@ local function layoutTrackerSquareElement(frame, element, slotKey, size, entry)
 
     element:SetSize(resolvedSize, resolvedSize)
     element:ClearAllPoints()
+    local parentWidth = type(parent.GetWidth) == "function" and (parent:GetWidth() or 0) or 0
+    local parentHeight = type(parent.GetHeight) == "function" and (parent:GetHeight() or 0) or 0
+    local leftBase = -(parentWidth * 0.5) + offset + (resolvedSize * 0.5)
+    local rightBase = (parentWidth * 0.5) - offset - (resolvedSize * 0.5)
+    local topBase = (parentHeight * 0.5) - offset - (resolvedSize * 0.5)
+    local bottomBase = -(parentHeight * 0.5) + offset + (resolvedSize * 0.5)
+
     if slotKey == "TOPRIGHT" then
-        element:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -offset + offsetX, -offset + offsetY)
+        element:SetPoint("CENTER", parent, "CENTER", rightBase + offsetX, topBase + offsetY)
     elseif slotKey == "BOTTOMLEFT" then
-        element:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", offset + offsetX, offset + offsetY)
+        element:SetPoint("CENTER", parent, "CENTER", leftBase + offsetX, bottomBase + offsetY)
     elseif slotKey == "BOTTOMRIGHT" then
-        element:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -offset + offsetX, offset + offsetY)
+        element:SetPoint("CENTER", parent, "CENTER", rightBase + offsetX, bottomBase + offsetY)
     else
-        element:SetPoint("TOPLEFT", parent, "TOPLEFT", offset + offsetX, -offset + offsetY)
+        element:SetPoint("CENTER", parent, "CENTER", leftBase + offsetX, topBase + offsetY)
     end
     setTrackerIndicatorBorderSize(element, resolvedSize)
 
