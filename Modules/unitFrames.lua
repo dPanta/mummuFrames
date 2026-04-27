@@ -1087,6 +1087,82 @@ local function updateAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testM
     frame.AbsorbOverlayBar:Show()
 end
 
+local function hideHealAbsorbOverlay(frame)
+    if not frame then
+        return
+    end
+    if frame.HealAbsorbOverlayBar then
+        frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+        frame.HealAbsorbOverlayBar:SetValue(0)
+        frame.HealAbsorbOverlayBar:Hide()
+    end
+    if frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:Hide()
+    end
+end
+
+local function updateHealAbsorbOverlay(frame, unitToken, exists, _, maxHealth, testMode)
+    if not frame or not frame.HealthBar or not frame.HealAbsorbOverlayBar or not frame.HealAbsorbOverlayFrame then
+        return
+    end
+
+    if not exists and not testMode then
+        hideHealAbsorbOverlay(frame)
+        return
+    end
+
+    local absorbMax = maxHealth or 1
+    local healAbsorbValue = 0
+
+    if exists then
+        absorbMax = UnitHealthMax(unitToken) or absorbMax
+        if type(UnitGetTotalHealAbsorbs) == "function" then
+            healAbsorbValue = getSafeNumericValue(UnitGetTotalHealAbsorbs(unitToken), 0) or 0
+        end
+    elseif testMode then
+        absorbMax = 100
+        healAbsorbValue = 18
+    end
+
+    absorbMax = getSafeNumericValue(absorbMax, 1) or 1
+    if absorbMax <= 0 then
+        hideHealAbsorbOverlay(frame)
+        return
+    end
+
+    healAbsorbValue = Util:Clamp(getSafeNumericValue(healAbsorbValue, 0) or 0, 0, absorbMax)
+    if healAbsorbValue <= 0 then
+        hideHealAbsorbOverlay(frame)
+        return
+    end
+
+    local healthBarWidth = tonumber(frame.HealthBar:GetWidth()) or 0
+    if healthBarWidth <= 0 then
+        healthBarWidth = tonumber(frame:GetWidth()) or 0
+    end
+    if healthBarWidth <= 0 then
+        hideHealAbsorbOverlay(frame)
+        return
+    end
+
+    local overlayWidth = healthBarWidth * (healAbsorbValue / absorbMax)
+    if Style:IsPixelPerfectEnabled() then
+        overlayWidth = math.max(Style:GetPixelSize() or 1, Style:Snap(overlayWidth))
+    else
+        overlayWidth = math.max(1, math.floor(overlayWidth + 0.5))
+    end
+    overlayWidth = math.min(overlayWidth, healthBarWidth)
+
+    frame.HealAbsorbOverlayFrame:ClearAllPoints()
+    frame.HealAbsorbOverlayFrame:SetPoint("TOPRIGHT", frame.HealthBar, "TOPRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetPoint("BOTTOMRIGHT", frame.HealthBar, "BOTTOMRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetWidth(overlayWidth)
+    frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.HealAbsorbOverlayBar:SetValue(1)
+    frame.HealAbsorbOverlayFrame:Show()
+    frame.HealAbsorbOverlayBar:Show()
+end
+
 -- Normalize spell IDs before using them in aura API queries.
 local function normalizeSpellID(value)
     local numeric = nil
@@ -2202,7 +2278,7 @@ function UnitFrames:OnUnitEvent(eventName, unitToken)
         return finishPerfCounters(self, "OnUnitEvent", perfStartedAt)
     end
 
-    if eventName == "UNIT_ABSORB_AMOUNT_CHANGED" then
+    if eventName == "UNIT_ABSORB_AMOUNT_CHANGED" or eventName == "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" then
         local refreshOptions = unitToken == "player" and REFRESH_OPTIONS_PLAYER_ABSORB or REFRESH_OPTIONS_ABSORB
         self:RefreshFrame(unitToken, false, refreshOptions)
         return finishPerfCounters(self, "OnUnitEvent", perfStartedAt)
@@ -5032,6 +5108,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
             self:UpdatePlayerBreathTicker(frame, exists, previewMode, breathState)
         end
         updateAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
+        updateHealAbsorbOverlay(frame, unitToken, exists, health, maxHealth, previewMode)
 
         if not frame.NameText:GetFont() and GameFontHighlightSmall then
             frame.NameText:SetFontObject(GameFontHighlightSmall)
@@ -5072,6 +5149,7 @@ function UnitFrames:RefreshFrame(unitToken, forceLayout, refreshOptions, auraUpd
 
     if options.absorb and not options.vitals then
         updateAbsorbOverlay(frame, unitToken, exists, nil, nil, previewMode)
+        updateHealAbsorbOverlay(frame, unitToken, exists, nil, nil, previewMode)
     end
 
     if options.statusIcons then

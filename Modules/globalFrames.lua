@@ -13,6 +13,7 @@ local Util = ns.Util
 -- Shared factory for reusable frame widgets and styling helpers.
 local GlobalFrames = ns.Object:Extend()
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
+local HEAL_ABSORB_OVERLAY_COLOR = { 0.95, 0.12, 0.12, 0.58 }
 local RESTING_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\catzzz.png"
 local LEADER_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\crown.png"
 local COMBAT_ICON_TEXTURE = "Interface\\AddOns\\mummuFrames\\Icons\\swords.png"
@@ -936,6 +937,27 @@ function GlobalFrames:CreateUnitFrameBase(name, parent, unitToken, width, height
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
 
+    frame.HealAbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+    frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+    frame.HealAbsorbOverlayFrame:Hide()
+
+    frame.HealAbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetAllPoints(frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+    frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.HealAbsorbOverlayBar:SetValue(0)
+    frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+    frame.HealAbsorbOverlayBar:SetStatusBarColor(
+        HEAL_ABSORB_OVERLAY_COLOR[1],
+        HEAL_ABSORB_OVERLAY_COLOR[2],
+        HEAL_ABSORB_OVERLAY_COLOR[3],
+        HEAL_ABSORB_OVERLAY_COLOR[4]
+    )
+    frame.HealAbsorbOverlayBar:Hide()
+
     if unitToken == "player" or unitToken == "target" or unitToken == "focus" then
         self:CreateCastBar(frame)
     end
@@ -1027,6 +1049,19 @@ function GlobalFrames:ApplyStyle(frame, unitToken)
         frame.AbsorbOverlayBar:SetFrameLevel(frame.AbsorbOverlayFrame:GetFrameLevel() + 1)
         frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
         frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
+    end
+    if frame.HealAbsorbOverlayBar and frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+        frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+        frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+        frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+        frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+        frame.HealAbsorbOverlayBar:SetStatusBarColor(
+            HEAL_ABSORB_OVERLAY_COLOR[1],
+            HEAL_ABSORB_OVERLAY_COLOR[2],
+            HEAL_ABSORB_OVERLAY_COLOR[3],
+            HEAL_ABSORB_OVERLAY_COLOR[4]
+        )
     end
 
     local border = pixelPerfect and Style:GetPixelSize() or 1

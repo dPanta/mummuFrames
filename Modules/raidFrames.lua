@@ -19,6 +19,7 @@ local MAX_RAID_GROUPS = 8
 local MAX_RAID_GROUP_SIZE = 5
 local MAX_RAID_TEST_FRAMES = 40
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
+local HEAL_ABSORB_OVERLAY_COLOR = { 0.95, 0.12, 0.12, 0.58 }
 local OFFLINE_HEALTH_COLOR = { r = 0.38, g = 0.38, b = 0.38 }
 local GROUP_LEADER_ICON_ATLAS = "UI-HUD-UnitFrame-Player-Group-LeaderIcon"
 local RAID_FRAME_STRATA = "MEDIUM"
@@ -269,6 +270,61 @@ local function refreshRaidAbsorbOverlay(frame, healthValue, maxHealthValue, abso
     frame.AbsorbOverlayBar:SetValue(1)
     frame.AbsorbOverlayFrame:Show()
     frame.AbsorbOverlayBar:Show()
+end
+
+local function hideRaidHealAbsorbOverlay(frame)
+    if not frame then
+        return
+    end
+    if frame.HealAbsorbOverlayBar then
+        frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+        frame.HealAbsorbOverlayBar:SetValue(0)
+        frame.HealAbsorbOverlayBar:Hide()
+    end
+    if frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:Hide()
+    end
+end
+
+local function refreshRaidHealAbsorbOverlay(frame, maxHealthValue, healAbsorbValue)
+    if not frame or not frame.HealthBar or not frame.HealAbsorbOverlayFrame or not frame.HealAbsorbOverlayBar then
+        return hideRaidHealAbsorbOverlay(frame)
+    end
+
+    local maxHealth = getSafeNumericValue(maxHealthValue, 0) or 0
+    if maxHealth <= 0 then
+        return hideRaidHealAbsorbOverlay(frame)
+    end
+
+    local healAbsorb = Util:Clamp(getSafeNumericValue(healAbsorbValue, 0) or 0, 0, maxHealth)
+    if healAbsorb <= 0 then
+        return hideRaidHealAbsorbOverlay(frame)
+    end
+
+    local healthBarWidth = tonumber(frame.HealthBar:GetWidth()) or 0
+    if healthBarWidth <= 0 then
+        healthBarWidth = tonumber(frame:GetWidth()) or 0
+    end
+    if healthBarWidth <= 0 then
+        return hideRaidHealAbsorbOverlay(frame)
+    end
+
+    local overlayWidth = healthBarWidth * (healAbsorb / maxHealth)
+    if Style:IsPixelPerfectEnabled() then
+        overlayWidth = math.max(Style:GetPixelSize() or 1, Style:Snap(overlayWidth))
+    else
+        overlayWidth = math.max(1, math.floor(overlayWidth + 0.5))
+    end
+    overlayWidth = math.min(overlayWidth, healthBarWidth)
+
+    frame.HealAbsorbOverlayFrame:ClearAllPoints()
+    frame.HealAbsorbOverlayFrame:SetPoint("TOPRIGHT", frame.HealthBar, "TOPRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetPoint("BOTTOMRIGHT", frame.HealthBar, "BOTTOMRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetWidth(overlayWidth)
+    frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.HealAbsorbOverlayBar:SetValue(1)
+    frame.HealAbsorbOverlayFrame:Show()
+    frame.HealAbsorbOverlayBar:Show()
 end
 
 -- Return a unit GUID without propagating UnitGUID failures.
@@ -1432,6 +1488,27 @@ function RaidFrames:BuildFrameVisuals(frame)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
 
+    frame.HealAbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+    frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+    frame.HealAbsorbOverlayFrame:Hide()
+
+    frame.HealAbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetAllPoints(frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+    frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.HealAbsorbOverlayBar:SetValue(0)
+    frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+    frame.HealAbsorbOverlayBar:SetStatusBarColor(
+        HEAL_ABSORB_OVERLAY_COLOR[1],
+        HEAL_ABSORB_OVERLAY_COLOR[2],
+        HEAL_ABSORB_OVERLAY_COLOR[3],
+        HEAL_ABSORB_OVERLAY_COLOR[4]
+    )
+    frame.HealAbsorbOverlayBar:Hide()
+
     if self.globalFrames and type(self.globalFrames.CreateGroupDispelIndicator) == "function" then
         self.globalFrames:CreateGroupDispelIndicator(frame, frame.HealthBar)
     else
@@ -1525,6 +1602,21 @@ function RaidFrames:ApplyMemberStyle(frame, raidConfig, runtimeState)
     frame.AbsorbOverlayBar:SetValue(0)
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
+    if frame.HealAbsorbOverlayBar and frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+        frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+        frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+        frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+        frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+        frame.HealAbsorbOverlayBar:SetValue(0)
+        frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+        frame.HealAbsorbOverlayBar:SetStatusBarColor(
+            HEAL_ABSORB_OVERLAY_COLOR[1],
+            HEAL_ABSORB_OVERLAY_COLOR[2],
+            HEAL_ABSORB_OVERLAY_COLOR[3],
+            HEAL_ABSORB_OVERLAY_COLOR[4]
+        )
+    end
     return finishPerfCounters(self, "ApplyMemberStyle", perfStartedAt, true)
 end
 
@@ -1630,6 +1722,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
     local health = 100
     local maxHealth = 100
     local absorb = 0
+    local healAbsorb = 0
 
     if previewMode then
         local numericIndex = tonumber(string.match(unitToken or "", "^raid(%d+)$")) or 1
@@ -1637,6 +1730,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         health = Util:Clamp(previewHealth, 25, 100)
         maxHealth = 100
         absorb = numericIndex % 3 == 0 and 18 or 0
+        healAbsorb = numericIndex % 4 == 0 and 16 or 0
         name = string.format("Raid %02d", numericIndex)
     elseif exists then
         if type(UnitIsConnected) == "function" then
@@ -1646,6 +1740,9 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
         maxHealth = UnitHealthMax(unitToken) or 1
         if type(UnitGetTotalAbsorbs) == "function" then
             absorb = getSafeNumericValue(UnitGetTotalAbsorbs(unitToken), 0) or 0
+        end
+        if type(UnitGetTotalHealAbsorbs) == "function" then
+            healAbsorb = getSafeNumericValue(UnitGetTotalHealAbsorbs(unitToken), 0) or 0
         end
     end
 
@@ -1675,6 +1772,7 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             health = 0
             maxHealth = 1
             absorb = 0
+            healAbsorb = 0
         end
         setStatusBarValueSafe(frame.HealthBar, health, maxHealth)
 
@@ -1684,6 +1782,12 @@ function RaidFrames:RefreshMember(frame, unitToken, raidConfig, previewMode, for
             refreshRaidAbsorbOverlay(frame, health, maxHealth, absorbForBar)
         else
             hideRaidAbsorbOverlay(frame)
+        end
+        local healAbsorbForBar = getSafeNumericValue(healAbsorb, 0) or 0
+        if (previewMode or (exists and isConnected)) and healAbsorbForBar > 0 then
+            refreshRaidHealAbsorbOverlay(frame, maxHealth, healAbsorbForBar)
+        else
+            hideRaidHealAbsorbOverlay(frame)
         end
         if frame.LeaderIcon then
             if showLeaderIcon and type(frame.LeaderIcon.SetAtlas) == "function" then

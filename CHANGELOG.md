@@ -4,6 +4,12 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 
 ## Unreleased
 
+## 4.0.0 - 2026-04-27
+- Added red heal-absorb overlays to personal, party, and raid unit frames so heal absorbs are shown separately from normal absorbs.
+- Updated party and raid preview/test frames to include sample heal absorbs.
+- Refreshed heal-absorb overlays from `UNIT_HEAL_ABSORB_AMOUNT_CHANGED` through the absorb-only update path, and allowed group vitals refreshes to process heal-absorb events.
+- Bumped addon metadata to `4.0.0`.
+
 ## 3.9.0 - 2026-04-26
 - Reworked the tracked-aura configuration preview so it can switch between party and raid frame layouts.
 - Updated the tracked-aura preview frame to reuse the live frame dimensions, font sizing, bar texture, pixel snapping, and dark-mode colors, with uniform scaling so the frame fits the preview box while preserving its ratio.
@@ -41,11 +47,3 @@ This changelog keeps `Unreleased` plus the 6 most recent tagged versions.
 - Hid the temporary `IP` label so the Ignore Pain bar now renders as a visual-only absorb indicator.
 - Fixed the AuraHandle shared-unit comparison taint by routing `UnitIsUnit()` secret booleans through the existing safe truthy guard.
 - Bumped addon metadata to `3.6.0`.
-
-## 3.5.1 - 2026-04-16
-- Fixed the dark overlay that darkened incoming-cast-board bars by removing the redundant status-bar background texture and the text/target panel layers that bled through the semi-transparent fill.
-- Fixed targeted spells configuration slider alignment so chained sliders no longer drift progressively to the right.
-- Added test-mode support for the incoming cast board, showing three sample bars with dummy spell names, target names, and class colors when test mode is active.
-- Fixed test-mode cast bars not disappearing when test mode is toggled off.
-- Fixed configuration checkboxes and controls across all lazily-built tabs not reflecting saved values after a reload by syncing widget state whenever a tab is selected.
-- Bumped addon metadata to `3.5.1`.

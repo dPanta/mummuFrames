@@ -39,6 +39,7 @@ local PartyFrames = ns.Object:Extend()
 
 -- Texture and visual constants
 local ABSORB_OVERLAY_TEXTURE = "Interface\\AddOns\\mummuFrames\\Media\\o9.tga"
+local HEAL_ABSORB_OVERLAY_COLOR = { 0.95, 0.12, 0.12, 0.58 }
 local MAX_PARTY_TEST_FRAMES = 5  -- Maximum frames in test/solo preview mode
 
 -- Test mode unit lists for frame preview
@@ -593,6 +594,61 @@ local function setStatusBarValueSafe(statusBar, currentValue, maxValue)
     end
 end
 
+local function hidePartyHealAbsorbOverlay(frame)
+    if not frame then
+        return
+    end
+    if frame.HealAbsorbOverlayBar then
+        frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+        frame.HealAbsorbOverlayBar:SetValue(0)
+        frame.HealAbsorbOverlayBar:Hide()
+    end
+    if frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:Hide()
+    end
+end
+
+local function refreshPartyHealAbsorbOverlay(frame, maxHealthValue, healAbsorbValue)
+    if not frame or not frame.HealthBar or not frame.HealAbsorbOverlayFrame or not frame.HealAbsorbOverlayBar then
+        return hidePartyHealAbsorbOverlay(frame)
+    end
+
+    local maxHealth = getSafeNumericValue(maxHealthValue, 0) or 0
+    if maxHealth <= 0 then
+        return hidePartyHealAbsorbOverlay(frame)
+    end
+
+    local healAbsorb = Util:Clamp(getSafeNumericValue(healAbsorbValue, 0) or 0, 0, maxHealth)
+    if healAbsorb <= 0 then
+        return hidePartyHealAbsorbOverlay(frame)
+    end
+
+    local healthBarWidth = tonumber(frame.HealthBar:GetWidth()) or 0
+    if healthBarWidth <= 0 then
+        healthBarWidth = tonumber(frame:GetWidth()) or 0
+    end
+    if healthBarWidth <= 0 then
+        return hidePartyHealAbsorbOverlay(frame)
+    end
+
+    local overlayWidth = healthBarWidth * (healAbsorb / maxHealth)
+    if Style:IsPixelPerfectEnabled() then
+        overlayWidth = math.max(Style:GetPixelSize() or 1, Style:Snap(overlayWidth))
+    else
+        overlayWidth = math.max(1, math.floor(overlayWidth + 0.5))
+    end
+    overlayWidth = math.min(overlayWidth, healthBarWidth)
+
+    frame.HealAbsorbOverlayFrame:ClearAllPoints()
+    frame.HealAbsorbOverlayFrame:SetPoint("TOPRIGHT", frame.HealthBar, "TOPRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetPoint("BOTTOMRIGHT", frame.HealthBar, "BOTTOMRIGHT", 0, 0)
+    frame.HealAbsorbOverlayFrame:SetWidth(overlayWidth)
+    frame.HealAbsorbOverlayBar:SetMinMaxValues(0, 1)
+    frame.HealAbsorbOverlayBar:SetValue(1)
+    frame.HealAbsorbOverlayFrame:Show()
+    frame.HealAbsorbOverlayBar:Show()
+end
+
 -- Return whether player is grouped in the requested category.
 -- Uses pcall to stay resilient across API variants.
 local function isInGroupCategory(category)
@@ -757,6 +813,7 @@ function PartyFrames:CreateStaticTestMemberState(unitToken, showPowerBar)
         power = showPowerBar and math.random(20, 100) or 0,
         maxPower = showPowerBar and 100 or 1,
         absorb = math.random(0, 35),
+        healAbsorb = math.random(0, 22),
     }
 
     return state
@@ -992,6 +1049,25 @@ function PartyFrames:BuildFrameVisuals(frame)
     frame.AbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
     frame.AbsorbOverlayBar:SetStatusBarColor(0.78, 0.92, 1, 0.72)
     frame.AbsorbOverlayBar:Hide()
+
+    frame.HealAbsorbOverlayFrame = CreateFrame("Frame", nil, frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetAllPoints(frame.HealthBar)
+    frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+    frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+    frame.HealAbsorbOverlayFrame:Hide()
+
+    frame.HealAbsorbOverlayBar = CreateFrame("StatusBar", nil, frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetAllPoints(frame.HealAbsorbOverlayFrame)
+    frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+    frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+    frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+    frame.HealAbsorbOverlayBar:SetStatusBarColor(
+        HEAL_ABSORB_OVERLAY_COLOR[1],
+        HEAL_ABSORB_OVERLAY_COLOR[2],
+        HEAL_ABSORB_OVERLAY_COLOR[3],
+        HEAL_ABSORB_OVERLAY_COLOR[4]
+    )
+    frame.HealAbsorbOverlayBar:Hide()
 
     if self.globalFrames and type(self.globalFrames.CreateGroupDispelIndicator) == "function" then
         self.globalFrames:CreateGroupDispelIndicator(frame, frame.HealthBar)
@@ -2131,6 +2207,19 @@ function PartyFrames:ApplyMemberStyle(frame, partyConfig, showPowerBar, showRole
     elseif frame.DispelOverlay then
         frame.DispelOverlay:SetAllPoints(frame.HealthBar)
     end
+    if frame.HealAbsorbOverlayBar and frame.HealAbsorbOverlayFrame then
+        frame.HealAbsorbOverlayFrame:SetFrameStrata(frame.HealthBar:GetFrameStrata())
+        frame.HealAbsorbOverlayFrame:SetFrameLevel(frame.HealthBar:GetFrameLevel() + 6)
+        frame.HealAbsorbOverlayBar:SetFrameStrata(frame.HealAbsorbOverlayFrame:GetFrameStrata())
+        frame.HealAbsorbOverlayBar:SetFrameLevel(frame.HealAbsorbOverlayFrame:GetFrameLevel() + 1)
+        frame.HealAbsorbOverlayBar:SetStatusBarTexture(ABSORB_OVERLAY_TEXTURE)
+        frame.HealAbsorbOverlayBar:SetStatusBarColor(
+            HEAL_ABSORB_OVERLAY_COLOR[1],
+            HEAL_ABSORB_OVERLAY_COLOR[2],
+            HEAL_ABSORB_OVERLAY_COLOR[3],
+            HEAL_ABSORB_OVERLAY_COLOR[4]
+        )
+    end
 
     frame.NameText:ClearAllPoints()
     frame.NameText:SetPoint("LEFT", frame.HealthBar, "LEFT", textInset, 0)
@@ -2349,6 +2438,9 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
     local absorb = math.random(0, 35)
     local absorbForBar = absorb
     local absorbMaxForBar = maxHealth
+    local healAbsorb = math.random(0, 22)
+    local healAbsorbForBar = healAbsorb
+    local healAbsorbMaxForBar = maxHealth
     local testState = nil
 
     if refreshVitals and testMode then
@@ -2363,6 +2455,8 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             maxPower = maxPowerForBar
             absorbForBar = testState.absorb or absorbForBar
             absorbMaxForBar = testState.maxHealth or absorbMaxForBar
+            healAbsorbForBar = testState.healAbsorb or healAbsorbForBar
+            healAbsorbMaxForBar = testState.maxHealth or healAbsorbMaxForBar
         end
     end
 
@@ -2381,6 +2475,8 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         maxPower = maxPowerForBar
         absorbForBar = type(UnitGetTotalAbsorbs) == "function" and (UnitGetTotalAbsorbs(unitToken) or 0) or 0
         absorbMaxForBar = UnitHealthMax(unitToken) or maxHealth
+        healAbsorbForBar = type(UnitGetTotalHealAbsorbs) == "function" and (UnitGetTotalHealAbsorbs(unitToken) or 0) or 0
+        healAbsorbMaxForBar = UnitHealthMax(unitToken) or maxHealth
     end
 
     if refreshVitals then
@@ -2424,6 +2520,7 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         end
 
         absorb = getSafeNumericValue(absorbForBar, 0) or 0
+        healAbsorb = getSafeNumericValue(healAbsorbForBar, 0) or 0
         local barFillAlpha = 1
 
         local healthColor = { r = 0.2, g = 0.78, b = 0.3 }
@@ -2453,6 +2550,8 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
             barMaxPower = 1
             absorbForBar = 0
             absorbMaxForBar = 1
+            healAbsorbForBar = 0
+            healAbsorbMaxForBar = 1
         elseif darkModeEnabled then
             powerColor = {
                 r = Style.DARK_MODE_GRANITE_COLOR[1],
@@ -2559,6 +2658,12 @@ function PartyFrames:RefreshMember(frame, unitToken, partyConfig, previewMode, t
         else
             frame.AbsorbOverlayBar:Hide()
             frame.AbsorbOverlayFrame:Hide()
+        end
+
+        if (previewMode or (exists and isConnected)) and healAbsorb > 0 then
+            refreshPartyHealAbsorbOverlay(frame, healAbsorbMaxForBar, healAbsorbForBar)
+        else
+            hidePartyHealAbsorbOverlay(frame)
         end
     end
 

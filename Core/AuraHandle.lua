@@ -292,10 +292,6 @@ local function tryRegisterFilteredGroupEvent(frame, eventName, unitTokens, unpac
 end
 
 local function shouldSkipGroupVitalsRefresh(ownerKey, eventName)
-    if eventName == "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" then
-        return true
-    end
-
     if ownerKey == "raid" and RAID_IGNORED_VITALS_EVENT_NAMES[eventName] == true then
         return true
     end
